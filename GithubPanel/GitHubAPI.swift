@@ -68,6 +68,9 @@ final class GitHubAPI {
         let path = "/repos/\(pr.repoFullName)/commits/\(pr.headSHA)/status"
         let request = makeRequest(path: path, token: token)
         let response = try await decode(StatusResponse.self, request: request)
+        if response.totalCount == 0 {
+            return .success
+        }
         return CheckState(rawValue: response.state) ?? .unknown
     }
 
@@ -153,4 +156,10 @@ private struct PullHead: Decodable {
 
 private struct StatusResponse: Decodable {
     let state: String
+    let totalCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case state
+        case totalCount = "total_count"
+    }
 }
