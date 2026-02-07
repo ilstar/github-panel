@@ -8,6 +8,7 @@ final class PRMonitor: ObservableObject {
     @Published var statusEmoji: String = ""
     @Published var isLoading: Bool = false
     @Published var hasToken: Bool = false
+    @Published var lastError: String?
 
     private let api = GitHubAPI()
     private let tokenStore = KeychainStore()
@@ -46,6 +47,7 @@ final class PRMonitor: ObservableObject {
     private func refresh() {
         guard let token = tokenStore.loadToken() else { return }
         isLoading = true
+        lastError = nil
         Task {
             do {
                 let user = try await api.fetchCurrentUser(token: token)
@@ -61,8 +63,10 @@ final class PRMonitor: ObservableObject {
                     lastPRURL = nil
                 }
             } catch {
+                activePR = nil
                 statusText = "Failed to load PR status."
                 statusEmoji = "⚠️"
+                lastError = error.localizedDescription
             }
             isLoading = false
         }

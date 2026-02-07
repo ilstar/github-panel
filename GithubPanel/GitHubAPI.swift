@@ -82,10 +82,40 @@ final class GitHubAPI {
 
     private func decode<T: Decodable>(_ type: T.Type, request: URLRequest) async throws -> T {
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+        guard let http = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }
+        guard (200...299).contains(http.statusCode) else {
+            if let apiError = try? JSONDecoder().decode(GitHubAPIError.self, from: data) {
+                throw apiError.withStatus(http.statusCode)
+            }
+            throw GitHubAPIError(message: "Unexpected response from GitHub.", documentationURL: nil, statusCode: http.statusCode)
+        }
         return try JSONDecoder().decode(T.self, from: data)
+    }
+}
+
+struct GitHubAPIError: Decodable, LocalizedError {
+    let message: String
+    let documentationURL: URL?
+    var statusCode: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case message
+        case documentationURL = "documentation_url"
+    }
+
+    func withStatus(_ status: Int) -> GitHubAPIError {
+        var copy = self
+        copy.statusCode = status
+        return copy
+    }
+
+    var errorDescription: String? {
+        if let statusCode {
+            return "GitHub API error (\(statusCode)): \(message)"
+        }
+        return "GitHub API error: \(message)"
     }
 }
 
@@ -124,4 +154,3 @@ private struct PullHead: Decodable {
 private struct StatusResponse: Decodable {
     let state: String
 }
-

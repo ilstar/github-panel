@@ -49,6 +49,15 @@ struct ContentView: View {
                 Text("Active Pull Request")
                     .font(.headline)
 
+                if let error = monitor.lastError {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                    Text("Common fixes: ensure your token has `repo` (private) or `public_repo` scopes, and authorize SSO for org repos.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 if monitor.isLoading {
                     Text("Loading...")
                         .foregroundStyle(.secondary)
@@ -69,6 +78,9 @@ struct ContentView: View {
                         .font(.subheadline)
                 } else if monitor.hasToken {
                     Text("No open pull requests found for your account.")
+                        .foregroundStyle(.secondary)
+                    Text("Only PRs authored by your GitHub user are shown.")
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
                     Text("Add a GitHub token to begin.")
