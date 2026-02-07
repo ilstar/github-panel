@@ -75,6 +75,11 @@ struct ContentView: View {
                                         Text("\(pr.repoFullName)#\(pr.number) · \(pr.status.descriptionText)")
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
+                                        if pr.isDraft {
+                                            Text("Draft")
+                                                .font(.caption)
+                                                .foregroundStyle(.orange)
+                                        }
                                     }
                                 }
                                 .padding(.vertical, 2)

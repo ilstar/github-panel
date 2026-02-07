@@ -11,6 +11,7 @@ struct PullRequestInfo: Identifiable {
     let repoFullName: String
     let htmlURL: URL
     let headSHA: String
+    let isDraft: Bool
 }
 
 struct PullRequestSummary: Identifiable {
@@ -28,6 +29,7 @@ struct PullRequestRow: Identifiable {
     let repoFullName: String
     let htmlURL: URL
     let status: CheckState
+    let isDraft: Bool
 }
 
 enum CheckState: String {
@@ -86,7 +88,8 @@ final class GitHubAPI {
                                number: pr.number,
                                repoFullName: repoFullName,
                                htmlURL: pr.htmlURL,
-                               headSHA: pr.head.sha)
+                               headSHA: pr.head.sha,
+                               isDraft: pr.draft)
     }
 
     func fetchPRCheckState(token: String, pr: PullRequestInfo) async throws -> CheckState {
@@ -170,12 +173,14 @@ private struct PullResponse: Decodable {
     let number: Int
     let htmlURL: URL
     let head: PullHead
+    let draft: Bool
 
     enum CodingKeys: String, CodingKey {
         case title
         case number
         case htmlURL = "html_url"
         case head
+        case draft
     }
 }
 

@@ -75,7 +75,8 @@ final class PRMonitor: ObservableObject {
                                           number: summary.number,
                                           repoFullName: summary.repoFullName,
                                           htmlURL: summary.htmlURL,
-                                          status: state)
+                                          status: state,
+                                          isDraft: pr.isDraft)
                 }
             }
 
