@@ -5,7 +5,7 @@ struct ContentView: View {
     @State private var tokenInput: String = ""
     @State private var isSaving = false
     @State private var now = Date()
-    private let minuteTicker = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
+    private let minuteTicker = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
