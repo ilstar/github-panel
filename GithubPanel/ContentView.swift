@@ -111,7 +111,7 @@ struct ContentView: View {
                                 .padding(.vertical, 2)
                             }
                         }
-                        .frame(height: 200)
+                        .frame(maxHeight: .infinity)
                     } else {
                         Text("No open pull requests found for your account.")
                             .foregroundStyle(.secondary)
@@ -127,7 +127,7 @@ struct ContentView: View {
 
             Spacer()
         }
-        .padding(20)
+        .padding(.horizontal, 20)
         .frame(minWidth: 420, minHeight: 300)
         .onAppear {
             monitor.start()
