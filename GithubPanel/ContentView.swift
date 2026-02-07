@@ -14,6 +14,14 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("GitHub Token")
                     .font(.headline)
+                Text("Create a personal access token in GitHub and paste it here.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Link("https://github.com/settings/tokens", destination: URL(string: "https://github.com/settings/tokens")!)
+                    .font(.caption)
+                Text("Permissions needed: `repo` for private repos, or `public_repo` for public-only.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 SecureField("ghp_...", text: $tokenInput)
                     .textFieldStyle(.roundedBorder)
 
