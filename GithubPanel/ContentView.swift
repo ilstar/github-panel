@@ -57,15 +57,18 @@ struct ContentView: View {
                     }
                     .disabled(!monitor.hasToken || monitor.isLoading)
 
+                    Text("Auto refresh:")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
                     Picker("Auto refresh", selection: $monitor.refreshInterval) {
                         Text("1 min").tag(60.0)
                         Text("5 mins").tag(300.0)
                         Text("10 mins").tag(600.0)
                     }
+                    .labelsHidden()
                     .pickerStyle(.segmented)
-                    .frame(maxWidth: 260)
-
-                    Spacer()
+                    .frame(width: 240)
 
                     Text("Updated \(monitor.lastRefreshText(relativeTo: now))")
                         .font(.caption)
