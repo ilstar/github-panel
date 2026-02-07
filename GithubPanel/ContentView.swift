@@ -63,40 +63,45 @@ struct ContentView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                if monitor.isLoading {
-                    Text("Loading...")
-                        .foregroundStyle(.secondary)
-                } else if monitor.hasToken {
-                    if !monitor.prRows.isEmpty {
-                        List(monitor.prRows) { pr in
-                            Link(destination: pr.htmlURL) {
-                                HStack(alignment: .top, spacing: 10) {
-                                    Text(pr.status.emoji)
-                                        .font(.title3)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(pr.title)
-                                            .font(.subheadline)
-                                            .lineLimit(2)
-                                        Text("\(pr.repoFullName)#\(pr.number) · \(pr.status.descriptionText)")
+                if monitor.hasToken {
+                    List(monitor.prRows) { pr in
+                        Link(destination: pr.htmlURL) {
+                            HStack(alignment: .top, spacing: 10) {
+                                Text(pr.status.emoji)
+                                    .font(.title3)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(pr.title)
+                                        .font(.subheadline)
+                                        .lineLimit(2)
+                                    Text("\(pr.repoFullName)#\(pr.number) · \(pr.status.descriptionText)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    if pr.isDraft {
+                                        Text("Draft")
                                             .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                        if pr.isDraft {
-                                            Text("Draft")
-                                                .font(.caption)
-                                                .foregroundStyle(.orange)
-                                        }
+                                            .foregroundStyle(.orange)
                                     }
                                 }
-                                .padding(.vertical, 2)
                             }
+                            .padding(.vertical, 2)
                         }
-                        .frame(maxHeight: .infinity)
-                    } else {
-                        Text("No open pull requests found for your account.")
-                            .foregroundStyle(.secondary)
-                        Text("Only PRs authored by your GitHub user are shown.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxHeight: .infinity)
+                    .overlay(alignment: .topLeading) {
+                        if monitor.isLoading {
+                            Text("Loading...")
+                                .foregroundStyle(.secondary)
+                                .padding(.top, 6)
+                        } else if monitor.prRows.isEmpty {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("No open pull requests found for your account.")
+                                    .foregroundStyle(.secondary)
+                                Text("Only PRs authored by your GitHub user are shown.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.top, 6)
+                        }
                     }
                 } else {
                     Text("Add a GitHub token to begin.")
