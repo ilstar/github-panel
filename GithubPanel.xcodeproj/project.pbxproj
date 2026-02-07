@@ -1,0 +1,228 @@
+// !$*UTF8*$!
+{
+    archiveVersion = 1;
+    classes = {};
+    objectVersion = 56;
+    objects = {
+
+/* Begin PBXBuildFile section */
+        1A1110012B12345600000001 /* GithubPanelApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110002B12345600000001 /* GithubPanelApp.swift */; };
+        1A1110022B12345600000001 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110032B12345600000001 /* ContentView.swift */; };
+        1A1110042B12345600000001 /* PRMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110052B12345600000001 /* PRMonitor.swift */; };
+        1A1110062B12345600000001 /* GitHubAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110072B12345600000001 /* GitHubAPI.swift */; };
+        1A1110082B12345600000001 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110092B12345600000001 /* KeychainStore.swift */; };
+        1A11100A2B12345600000001 /* NotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A11100B2B12345600000001 /* NotificationManager.swift */; };
+        1A11100C2B12345600000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1A11100D2B12345600000001 /* Assets.xcassets */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+        1A11100E2B12345600000001 /* GithubPanel.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; path = GithubPanel.app; sourceTree = BUILT_PRODUCTS_DIR; };
+        1A1110002B12345600000001 /* GithubPanelApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GithubPanelApp.swift; sourceTree = "<group>"; };
+        1A1110032B12345600000001 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+        1A1110052B12345600000001 /* PRMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PRMonitor.swift; sourceTree = "<group>"; };
+        1A1110072B12345600000001 /* GitHubAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitHubAPI.swift; sourceTree = "<group>"; };
+        1A1110092B12345600000001 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
+        1A11100B2B12345600000001 /* NotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationManager.swift; sourceTree = "<group>"; };
+        1A11100D2B12345600000001 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+        1A11100F2B12345600000001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+        1A1110102B12345600000001 = {
+            isa = PBXGroup;
+            children = (
+                1A1110112B12345600000001 /* GithubPanel */,
+                1A1110122B12345600000001 /* Products */,
+            );
+            sourceTree = "<group>";
+        };
+        1A1110112B12345600000001 /* GithubPanel */ = {
+            isa = PBXGroup;
+            children = (
+                1A1110002B12345600000001 /* GithubPanelApp.swift */,
+                1A1110032B12345600000001 /* ContentView.swift */,
+                1A1110052B12345600000001 /* PRMonitor.swift */,
+                1A1110072B12345600000001 /* GitHubAPI.swift */,
+                1A1110092B12345600000001 /* KeychainStore.swift */,
+                1A11100B2B12345600000001 /* NotificationManager.swift */,
+                1A11100D2B12345600000001 /* Assets.xcassets */,
+                1A11100F2B12345600000001 /* Info.plist */,
+            );
+            path = GithubPanel;
+            sourceTree = "<group>";
+        };
+        1A1110122B12345600000001 /* Products */ = {
+            isa = PBXGroup;
+            children = (
+                1A11100E2B12345600000001 /* GithubPanel.app */,
+            );
+            name = Products;
+            sourceTree = "<group>";
+        };
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+        1A1110132B12345600000001 /* GithubPanel */ = {
+            isa = PBXNativeTarget;
+            buildConfigurationList = 1A1110142B12345600000001 /* Build configuration list for PBXNativeTarget "GithubPanel" */;
+            buildPhases = (
+                1A1110152B12345600000001 /* Sources */,
+                1A1110162B12345600000001 /* Resources */,
+            );
+            buildRules = (
+            );
+            dependencies = (
+            );
+            name = GithubPanel;
+            productName = GithubPanel;
+            productReference = 1A11100E2B12345600000001 /* GithubPanel.app */;
+            productType = "com.apple.product-type.application";
+        };
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+        1A1110172B12345600000001 /* Project object */ = {
+            isa = PBXProject;
+            attributes = {
+                LastUpgradeCheck = 1500;
+                TargetAttributes = {
+                    1A1110132B12345600000001 = {
+                        CreatedOnToolsVersion = 15.0;
+                    };
+                };
+            };
+            buildConfigurationList = 1A1110182B12345600000001 /* Build configuration list for PBXProject "GithubPanel" */;
+            compatibilityVersion = "Xcode 14.0";
+            developmentRegion = en;
+            hasScannedForEncodings = 0;
+            mainGroup = 1A1110102B12345600000001;
+            productRefGroup = 1A1110122B12345600000001 /* Products */;
+            projectDirPath = "";
+            projectRoot = "";
+            targets = (
+                1A1110132B12345600000001 /* GithubPanel */,
+            );
+        };
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+        1A1110162B12345600000001 /* Resources */ = {
+            isa = PBXResourcesBuildPhase;
+            buildActionMask = 2147483647;
+            files = (
+                1A11100C2B12345600000001 /* Assets.xcassets in Resources */,
+            );
+            runOnlyForDeploymentPostprocessing = 0;
+        };
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+        1A1110152B12345600000001 /* Sources */ = {
+            isa = PBXSourcesBuildPhase;
+            buildActionMask = 2147483647;
+            files = (
+                1A1110012B12345600000001 /* GithubPanelApp.swift in Sources */,
+                1A1110022B12345600000001 /* ContentView.swift in Sources */,
+                1A1110042B12345600000001 /* PRMonitor.swift in Sources */,
+                1A1110062B12345600000001 /* GitHubAPI.swift in Sources */,
+                1A1110082B12345600000001 /* KeychainStore.swift in Sources */,
+                1A11100A2B12345600000001 /* NotificationManager.swift in Sources */,
+            );
+            runOnlyForDeploymentPostprocessing = 0;
+        };
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+        1A1110192B12345600000001 /* Debug */ = {
+            isa = XCBuildConfiguration;
+            buildSettings = {
+                ALWAYS_SEARCH_USER_PATHS = NO;
+                ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+                CODE_SIGN_IDENTITY = "-";
+                CURRENT_PROJECT_VERSION = 1;
+                DEVELOPMENT_ASSET_PATHS = "";
+                ENABLE_HARDENED_RUNTIME = YES;
+                INFOPLIST_FILE = GithubPanel/Info.plist;
+                LD_RUNPATH_SEARCH_PATHS = (
+                    "$(inherited)",
+                    "@executable_path/../Frameworks",
+                );
+                MACOSX_DEPLOYMENT_TARGET = 13.0;
+                PRODUCT_BUNDLE_IDENTIFIER = com.githubpanel.app;
+                PRODUCT_NAME = "$(TARGET_NAME)";
+                SWIFT_VERSION = 5.0;
+            };
+            name = Debug;
+        };
+        1A11101A2B12345600000001 /* Release */ = {
+            isa = XCBuildConfiguration;
+            buildSettings = {
+                ALWAYS_SEARCH_USER_PATHS = NO;
+                ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+                CODE_SIGN_IDENTITY = "-";
+                CURRENT_PROJECT_VERSION = 1;
+                DEVELOPMENT_ASSET_PATHS = "";
+                ENABLE_HARDENED_RUNTIME = YES;
+                INFOPLIST_FILE = GithubPanel/Info.plist;
+                LD_RUNPATH_SEARCH_PATHS = (
+                    "$(inherited)",
+                    "@executable_path/../Frameworks",
+                );
+                MACOSX_DEPLOYMENT_TARGET = 13.0;
+                PRODUCT_BUNDLE_IDENTIFIER = com.githubpanel.app;
+                PRODUCT_NAME = "$(TARGET_NAME)";
+                SWIFT_VERSION = 5.0;
+            };
+            name = Release;
+        };
+        1A11101B2B12345600000001 /* Debug */ = {
+            isa = XCBuildConfiguration;
+            buildSettings = {
+                CODE_SIGN_STYLE = Automatic;
+                DEVELOPMENT_TEAM = "";
+                ENABLE_HARDENED_RUNTIME = YES;
+                MACOSX_DEPLOYMENT_TARGET = 13.0;
+                PRODUCT_NAME = "$(TARGET_NAME)";
+                SWIFT_VERSION = 5.0;
+                TARGETED_DEVICE_FAMILY = 1;
+            };
+            name = Debug;
+        };
+        1A11101C2B12345600000001 /* Release */ = {
+            isa = XCBuildConfiguration;
+            buildSettings = {
+                CODE_SIGN_STYLE = Automatic;
+                DEVELOPMENT_TEAM = "";
+                ENABLE_HARDENED_RUNTIME = YES;
+                MACOSX_DEPLOYMENT_TARGET = 13.0;
+                PRODUCT_NAME = "$(TARGET_NAME)";
+                SWIFT_VERSION = 5.0;
+                TARGETED_DEVICE_FAMILY = 1;
+            };
+            name = Release;
+        };
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+        1A1110182B12345600000001 /* Build configuration list for PBXProject "GithubPanel" */ = {
+            isa = XCConfigurationList;
+            buildConfigurations = (
+                1A11101B2B12345600000001 /* Debug */,
+                1A11101C2B12345600000001 /* Release */,
+            );
+            defaultConfigurationIsVisible = 0;
+            defaultConfigurationName = Debug;
+        };
+        1A1110142B12345600000001 /* Build configuration list for PBXNativeTarget "GithubPanel" */ = {
+            isa = XCConfigurationList;
+            buildConfigurations = (
+                1A1110192B12345600000001 /* Debug */,
+                1A11101A2B12345600000001 /* Release */,
+            );
+            defaultConfigurationIsVisible = 0;
+            defaultConfigurationName = Debug;
+        };
+/* End XCConfigurationList section */
+    };
+    rootObject = 1A1110172B12345600000001 /* Project object */;
+}
