@@ -53,7 +53,7 @@ final class GitHubAPI {
         guard let item = response.items.first else { return nil }
         let components = item.repositoryURL.pathComponents
         guard components.count >= 4 else { return nil }
-        let repoFullName = components[2] + \"/\" + components[3]
+        let repoFullName = "\(components[2])/\(components[3])"
 
         let prRequest = makeRequest(path: "/repos/\(repoFullName)/pulls/\(item.number)", token: token)
         let pr = try await decode(PullResponse.self, request: prRequest)
@@ -124,3 +124,4 @@ private struct PullHead: Decodable {
 private struct StatusResponse: Decodable {
     let state: String
 }
+
