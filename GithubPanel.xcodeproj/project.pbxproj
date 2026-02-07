@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		1A1110012B12345600000001 /* GithubPanelApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110002B12345600000001 /* GithubPanelApp.swift */; };
 		1A1110022B12345600000001 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110032B12345600000001 /* ContentView.swift */; };
+		1A1110202B12345600000001 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110212B12345600000001 /* SettingsView.swift */; };
 		1A1110042B12345600000001 /* PRMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110052B12345600000001 /* PRMonitor.swift */; };
 		1A1110062B12345600000001 /* GitHubAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110072B12345600000001 /* GitHubAPI.swift */; };
 		1A1110082B12345600000001 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110092B12345600000001 /* KeychainStore.swift */; };
@@ -19,6 +20,7 @@
 /* Begin PBXFileReference section */
 		1A1110002B12345600000001 /* GithubPanelApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GithubPanelApp.swift; sourceTree = "<group>"; };
 		1A1110032B12345600000001 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		1A1110212B12345600000001 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		1A1110052B12345600000001 /* PRMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PRMonitor.swift; sourceTree = "<group>"; };
 		1A1110072B12345600000001 /* GitHubAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitHubAPI.swift; sourceTree = "<group>"; };
 		1A1110092B12345600000001 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
@@ -42,6 +44,7 @@
 			children = (
 				1A1110002B12345600000001 /* GithubPanelApp.swift */,
 				1A1110032B12345600000001 /* ContentView.swift */,
+				1A1110212B12345600000001 /* SettingsView.swift */,
 				1A1110052B12345600000001 /* PRMonitor.swift */,
 				1A1110072B12345600000001 /* GitHubAPI.swift */,
 				1A1110092B12345600000001 /* KeychainStore.swift */,
@@ -128,6 +131,7 @@
 			files = (
 				1A1110012B12345600000001 /* GithubPanelApp.swift in Sources */,
 				1A1110022B12345600000001 /* ContentView.swift in Sources */,
+				1A1110202B12345600000001 /* SettingsView.swift in Sources */,
 				1A1110042B12345600000001 /* PRMonitor.swift in Sources */,
 				1A1110062B12345600000001 /* GitHubAPI.swift in Sources */,
 				1A1110082B12345600000001 /* KeychainStore.swift in Sources */,

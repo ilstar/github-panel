@@ -14,5 +14,9 @@ struct GithubPanelApp: App {
             ContentView()
                 .environmentObject(monitor)
         }
+        Settings {
+            SettingsView()
+                .environmentObject(monitor)
+        }
     }
 }
