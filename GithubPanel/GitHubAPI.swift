@@ -13,6 +13,23 @@ struct PullRequestInfo: Identifiable {
     let headSHA: String
 }
 
+struct PullRequestSummary: Identifiable {
+    let id: String
+    let title: String
+    let number: Int
+    let repoFullName: String
+    let htmlURL: URL
+}
+
+struct PullRequestRow: Identifiable {
+    let id: String
+    let title: String
+    let number: Int
+    let repoFullName: String
+    let htmlURL: URL
+    let status: CheckState
+}
+
 enum CheckState: String {
     case success
     case failure
@@ -45,17 +62,25 @@ final class GitHubAPI {
         return try await decode(GitHubUser.self, request: request)
     }
 
-    func fetchLatestOpenPR(token: String, username: String) async throws -> PullRequestInfo? {
+    func fetchOpenPRs(token: String, username: String) async throws -> [PullRequestSummary] {
         let query = "is:pr author:\(username) is:open sort:updated-desc"
         let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
         let request = makeRequest(path: "/search/issues?q=\(encoded)", token: token)
         let response = try await decode(SearchResponse.self, request: request)
-        guard let item = response.items.first else { return nil }
-        let components = item.repositoryURL.pathComponents
-        guard components.count >= 4 else { return nil }
-        let repoFullName = "\(components[2])/\(components[3])"
+        return response.items.compactMap { item in
+            let components = item.repositoryURL.pathComponents
+            guard components.count >= 4 else { return nil }
+            let repoFullName = "\(components[2])/\(components[3])"
+            return PullRequestSummary(id: "\(repoFullName)#\(item.number)",
+                                      title: item.title,
+                                      number: item.number,
+                                      repoFullName: repoFullName,
+                                      htmlURL: item.htmlURL)
+        }
+    }
 
-        let prRequest = makeRequest(path: "/repos/\(repoFullName)/pulls/\(item.number)", token: token)
+    func fetchPullRequest(token: String, repoFullName: String, number: Int) async throws -> PullRequestInfo {
+        let prRequest = makeRequest(path: "/repos/\(repoFullName)/pulls/\(number)", token: token)
         let pr = try await decode(PullResponse.self, request: prRequest)
         return PullRequestInfo(title: pr.title,
                                number: pr.number,
@@ -129,10 +154,14 @@ private struct SearchResponse: Decodable {
 private struct SearchItem: Decodable {
     let number: Int
     let repositoryURL: URL
+    let title: String
+    let htmlURL: URL
 
     enum CodingKeys: String, CodingKey {
         case number
         case repositoryURL = "repository_url"
+        case title
+        case htmlURL = "html_url"
     }
 }
 

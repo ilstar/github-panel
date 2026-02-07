@@ -11,12 +11,16 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
-    func postStatusNotification(state: CheckState, pr: PullRequestInfo) {
+    func postStatusNotification(state: CheckState,
+                                title: String,
+                                repoFullName: String,
+                                number: Int,
+                                htmlURL: URL) {
         let content = UNMutableNotificationContent()
         content.title = state == .success ? "Checks Passed" : "Checks Failed"
-        content.body = "\(pr.repoFullName)#\(pr.number): \(pr.title)"
+        content.body = "\(repoFullName)#\(number): \(title)"
         content.sound = .default
-        content.userInfo = ["url": pr.htmlURL.absoluteString]
+        content.userInfo = ["url": htmlURL.absoluteString]
 
         let request = UNNotificationRequest(identifier: UUID().uuidString,
                                             content: content,

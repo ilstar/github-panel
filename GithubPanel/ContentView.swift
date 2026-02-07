@@ -46,7 +46,7 @@ struct ContentView: View {
             Divider()
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("Active Pull Request")
+                Text("Open Pull Requests")
                     .font(.headline)
 
                 if let error = monitor.lastError {
@@ -61,27 +61,33 @@ struct ContentView: View {
                 if monitor.isLoading {
                     Text("Loading...")
                         .foregroundStyle(.secondary)
-                } else if let pr = monitor.activePR {
-                    HStack {
-                        Text(monitor.statusEmoji)
-                            .font(.title2)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(pr.title)
-                                .font(.subheadline)
-                                .lineLimit(2)
-                            Text("\(pr.repoFullName)#\(pr.number)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    Text(monitor.statusText)
-                        .font(.subheadline)
                 } else if monitor.hasToken {
-                    Text("No open pull requests found for your account.")
-                        .foregroundStyle(.secondary)
-                    Text("Only PRs authored by your GitHub user are shown.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    if !monitor.prRows.isEmpty {
+                        List(monitor.prRows) { pr in
+                            Link(destination: pr.htmlURL) {
+                                HStack(alignment: .top, spacing: 10) {
+                                    Text(pr.status.emoji)
+                                        .font(.title3)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(pr.title)
+                                            .font(.subheadline)
+                                            .lineLimit(2)
+                                        Text("\(pr.repoFullName)#\(pr.number) · \(pr.status.descriptionText)")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                .padding(.vertical, 2)
+                            }
+                        }
+                        .frame(height: 200)
+                    } else {
+                        Text("No open pull requests found for your account.")
+                            .foregroundStyle(.secondary)
+                        Text("Only PRs authored by your GitHub user are shown.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 } else {
                     Text("Add a GitHub token to begin.")
                         .foregroundStyle(.secondary)

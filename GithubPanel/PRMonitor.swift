@@ -3,9 +3,7 @@ import Combine
 
 @MainActor
 final class PRMonitor: ObservableObject {
-    @Published var activePR: PullRequestInfo?
-    @Published var statusText: String = ""
-    @Published var statusEmoji: String = ""
+    @Published var prRows: [PullRequestRow] = []
     @Published var isLoading: Bool = false
     @Published var hasToken: Bool = false
     @Published var lastError: String?
@@ -14,7 +12,7 @@ final class PRMonitor: ObservableObject {
     private let tokenStore = KeychainStore()
     private var timer: Timer?
     private var lastState: CheckState?
-    private var lastPRURL: URL?
+    private var lastActiveID: String?
 
     func start() {
         hasToken = tokenStore.hasToken
@@ -31,10 +29,9 @@ final class PRMonitor: ObservableObject {
     func clearToken() {
         tokenStore.clearToken()
         hasToken = false
-        activePR = nil
-        statusText = ""
-        statusEmoji = ""
+        prRows = []
         lastState = nil
+        lastActiveID = nil
     }
 
     private func scheduleTimer() {
@@ -51,40 +48,66 @@ final class PRMonitor: ObservableObject {
         Task {
             do {
                 let user = try await api.fetchCurrentUser(token: token)
-                if let pr = try await api.fetchLatestOpenPR(token: token, username: user.login) {
-                    activePR = pr
-                    let state = try await api.fetchPRCheckState(token: token, pr: pr)
-                    updateStatus(state: state, pr: pr)
-                } else {
-                    activePR = nil
-                    statusText = ""
-                    statusEmoji = ""
-                    lastState = nil
-                    lastPRURL = nil
-                }
+                let summaries = try await api.fetchOpenPRs(token: token, username: user.login)
+                prRows = try await buildRows(token: token, summaries: summaries)
+                updateActiveStatus()
             } catch {
-                activePR = nil
-                statusText = "Failed to load PR status."
-                statusEmoji = "⚠️"
+                prRows = []
                 lastError = error.localizedDescription
             }
             isLoading = false
         }
     }
 
-    private func updateStatus(state: CheckState, pr: PullRequestInfo) {
-        if lastPRURL != pr.htmlURL {
-            lastState = nil
-            lastPRURL = pr.htmlURL
+    private func buildRows(token: String, summaries: [PullRequestSummary]) async throws -> [PullRequestRow] {
+        let limited = Array(summaries.prefix(10))
+        var rowsByID: [String: PullRequestRow] = [:]
+
+        try await withThrowingTaskGroup(of: PullRequestRow.self) { group in
+            for summary in limited {
+                group.addTask {
+                    let pr = try await self.api.fetchPullRequest(token: token,
+                                                                 repoFullName: summary.repoFullName,
+                                                                 number: summary.number)
+                    let state = try await self.api.fetchPRCheckState(token: token, pr: pr)
+                    return PullRequestRow(id: summary.id,
+                                          title: summary.title,
+                                          number: summary.number,
+                                          repoFullName: summary.repoFullName,
+                                          htmlURL: summary.htmlURL,
+                                          status: state)
+                }
+            }
+
+            for try await row in group {
+                rowsByID[row.id] = row
+            }
         }
-        statusText = state.descriptionText
-        statusEmoji = state.emoji
+
+        return limited.compactMap { rowsByID[$0.id] }
+    }
+
+    private func updateActiveStatus() {
+        guard let first = prRows.first else {
+            lastState = nil
+            lastActiveID = nil
+            return
+        }
+
+        if lastActiveID != first.id {
+            lastState = nil
+            lastActiveID = first.id
+        }
 
         if let previous = lastState,
            previous == .pending,
-           state != .pending {
-            NotificationManager.shared.postStatusNotification(state: state, pr: pr)
+           first.status != .pending {
+            NotificationManager.shared.postStatusNotification(state: first.status,
+                                                              title: first.title,
+                                                              repoFullName: first.repoFullName,
+                                                              number: first.number,
+                                                              htmlURL: first.htmlURL)
         }
-        lastState = state
+        lastState = first.status
     }
 }
