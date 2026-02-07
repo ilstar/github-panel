@@ -15,3 +15,5 @@ Mini macOS app to monitor your active GitHub pull request checks.
 
 ## Open in Xcode
 Open `/Users/fred/Documents/github-panel/GithubPanel.xcodeproj` and run the `GithubPanel` target.
+
+test
