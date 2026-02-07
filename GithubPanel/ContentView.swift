@@ -49,6 +49,21 @@ struct ContentView: View {
                 Text("Open Pull Requests")
                     .font(.headline)
 
+                HStack(spacing: 12) {
+                    Button("Refresh") {
+                        monitor.start()
+                    }
+                    .disabled(!monitor.hasToken || monitor.isLoading)
+
+                    Picker("Auto refresh", selection: $monitor.refreshInterval) {
+                        Text("1 min").tag(60.0)
+                        Text("5 mins").tag(300.0)
+                        Text("10 mins").tag(600.0)
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 260)
+                }
+
                 if let error = monitor.lastError {
                     Text(error)
                         .font(.caption)

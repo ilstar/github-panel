@@ -7,12 +7,28 @@ final class PRMonitor: ObservableObject {
     @Published var isLoading: Bool = false
     @Published var hasToken: Bool = false
     @Published var lastError: String?
+    @Published var refreshInterval: TimeInterval {
+        didSet {
+            defaults.set(refreshInterval, forKey: DefaultsKeys.refreshInterval)
+            scheduleTimer()
+        }
+    }
 
     private let api = GitHubAPI()
     private let tokenStore = KeychainStore()
     private var timer: Timer?
     private var lastState: CheckState?
     private var lastActiveID: String?
+    private let defaults = UserDefaults.standard
+
+    init() {
+        let stored = defaults.double(forKey: DefaultsKeys.refreshInterval)
+        if stored == 0 {
+            refreshInterval = 60
+        } else {
+            refreshInterval = stored
+        }
+    }
 
     func start() {
         hasToken = tokenStore.hasToken
@@ -34,9 +50,9 @@ final class PRMonitor: ObservableObject {
         lastActiveID = nil
     }
 
-    private func scheduleTimer() {
+    func scheduleTimer() {
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { [weak self] _ in
             self?.refresh()
         }
     }
@@ -111,4 +127,8 @@ final class PRMonitor: ObservableObject {
         }
         lastState = first.status
     }
+}
+
+private enum DefaultsKeys {
+    static let refreshInterval = "GithubPanel.refreshInterval"
 }
