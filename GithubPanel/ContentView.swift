@@ -6,6 +6,11 @@ struct ContentView: View {
     @State private var isSaving = false
     @State private var now = Date()
     private let minuteTicker = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
+    private let relativeFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
+        return formatter
+    }()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -81,6 +86,9 @@ struct ContentView: View {
                                             .font(.caption)
                                             .foregroundStyle(.orange)
                                     }
+                                    Text("Updated \(relativeFormatter.localizedString(for: pr.updatedAt, relativeTo: now))")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
                                 }
                             }
                             .padding(.vertical, 2)

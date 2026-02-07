@@ -20,6 +20,7 @@ struct PullRequestSummary: Identifiable {
     let number: Int
     let repoFullName: String
     let htmlURL: URL
+    let updatedAt: Date
 }
 
 struct PullRequestRow: Identifiable {
@@ -30,6 +31,7 @@ struct PullRequestRow: Identifiable {
     let htmlURL: URL
     let status: CheckState
     let isDraft: Bool
+    let updatedAt: Date
 }
 
 enum CheckState: String {
@@ -77,7 +79,8 @@ final class GitHubAPI {
                                       title: item.title,
                                       number: item.number,
                                       repoFullName: repoFullName,
-                                      htmlURL: item.htmlURL)
+                                      htmlURL: item.htmlURL,
+                                      updatedAt: item.updatedAt)
         }
     }
 
@@ -122,7 +125,9 @@ final class GitHubAPI {
             }
             throw GitHubAPIError(message: "Unexpected response from GitHub.", documentationURL: nil, statusCode: http.statusCode)
         }
-        return try JSONDecoder().decode(T.self, from: data)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(T.self, from: data)
     }
 }
 
@@ -159,12 +164,14 @@ private struct SearchItem: Decodable {
     let repositoryURL: URL
     let title: String
     let htmlURL: URL
+    let updatedAt: Date
 
     enum CodingKeys: String, CodingKey {
         case number
         case repositoryURL = "repository_url"
         case title
         case htmlURL = "html_url"
+        case updatedAt = "updated_at"
     }
 }
 
