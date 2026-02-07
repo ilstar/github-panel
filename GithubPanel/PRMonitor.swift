@@ -7,6 +7,7 @@ final class PRMonitor: ObservableObject {
     @Published var isLoading: Bool = false
     @Published var hasToken: Bool = false
     @Published var lastError: String?
+    @Published var lastRefreshAt: Date?
     @Published var refreshInterval: TimeInterval {
         didSet {
             defaults.set(refreshInterval, forKey: DefaultsKeys.refreshInterval)
@@ -20,6 +21,11 @@ final class PRMonitor: ObservableObject {
     private var lastState: CheckState?
     private var lastActiveID: String?
     private let defaults = UserDefaults.standard
+    private let relativeFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
+        return formatter
+    }()
 
     init() {
         let stored = defaults.double(forKey: DefaultsKeys.refreshInterval)
@@ -34,6 +40,13 @@ final class PRMonitor: ObservableObject {
         hasToken = tokenStore.hasToken
         refresh()
         scheduleTimer()
+    }
+
+    func lastRefreshText(relativeTo now: Date) -> String {
+        guard let lastRefreshAt else {
+            return "Never"
+        }
+        return relativeFormatter.localizedString(for: lastRefreshAt, relativeTo: now)
     }
 
     func saveToken(_ token: String) {
@@ -67,6 +80,7 @@ final class PRMonitor: ObservableObject {
                 let summaries = try await api.fetchOpenPRs(token: token, username: user.login)
                 prRows = try await buildRows(token: token, summaries: summaries)
                 updateActiveStatus()
+                lastRefreshAt = Date()
             } catch {
                 prRows = []
                 lastError = error.localizedDescription

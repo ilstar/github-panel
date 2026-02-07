@@ -4,6 +4,8 @@ struct ContentView: View {
     @EnvironmentObject private var monitor: PRMonitor
     @State private var tokenInput: String = ""
     @State private var isSaving = false
+    @State private var now = Date()
+    private let minuteTicker = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -62,6 +64,12 @@ struct ContentView: View {
                     }
                     .pickerStyle(.segmented)
                     .frame(maxWidth: 260)
+
+                    Spacer()
+
+                    Text("Updated \(monitor.lastRefreshText(relativeTo: now))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 if let error = monitor.lastError {
@@ -120,6 +128,9 @@ struct ContentView: View {
         .frame(minWidth: 420, minHeight: 300)
         .onAppear {
             monitor.start()
+        }
+        .onReceive(minuteTicker) { tick in
+            now = tick
         }
     }
 
