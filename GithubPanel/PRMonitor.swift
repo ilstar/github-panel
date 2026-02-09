@@ -18,8 +18,7 @@ final class PRMonitor: ObservableObject {
     private let api = GitHubAPI()
     private let tokenStore = KeychainStore()
     private var timer: Timer?
-    private var lastState: CheckState?
-    private var lastActiveID: String?
+    private var lastStates: [String: CheckState] = [:]
     private let defaults = UserDefaults.standard
     private let relativeFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
@@ -59,8 +58,7 @@ final class PRMonitor: ObservableObject {
         tokenStore.clearToken()
         hasToken = false
         prRows = []
-        lastState = nil
-        lastActiveID = nil
+        lastStates = [:]
     }
 
     func scheduleTimer() {
@@ -79,7 +77,7 @@ final class PRMonitor: ObservableObject {
                 let user = try await api.fetchCurrentUser(token: token)
                 let summaries = try await api.fetchOpenPRs(token: token, username: user.login)
                 prRows = try await buildRows(token: token, summaries: summaries)
-                updateActiveStatus()
+                updateNotificationsForRows()
                 lastRefreshAt = Date()
             } catch {
                 prRows = []
@@ -119,28 +117,25 @@ final class PRMonitor: ObservableObject {
         return limited.compactMap { rowsByID[$0.id] }
     }
 
-    private func updateActiveStatus() {
-        guard let first = prRows.first else {
-            lastState = nil
-            lastActiveID = nil
-            return
+    private func updateNotificationsForRows() {
+        var seen: Set<String> = []
+
+        for pr in prRows {
+            seen.insert(pr.id)
+            if let previous = lastStates[pr.id],
+               previous == .pending,
+               pr.status != .pending {
+                NotificationManager.shared.postStatusNotification(state: pr.status,
+                                                                  title: pr.title,
+                                                                  repoFullName: pr.repoFullName,
+                                                                  number: pr.number,
+                                                                  htmlURL: pr.htmlURL)
+            }
+            lastStates[pr.id] = pr.status
         }
 
-        if lastActiveID != first.id {
-            lastState = nil
-            lastActiveID = first.id
-        }
-
-        if let previous = lastState,
-           previous == .pending,
-           first.status != .pending {
-            NotificationManager.shared.postStatusNotification(state: first.status,
-                                                              title: first.title,
-                                                              repoFullName: first.repoFullName,
-                                                              number: first.number,
-                                                              htmlURL: first.htmlURL)
-        }
-        lastState = first.status
+        // Remove states for PRs that are no longer in the list.
+        lastStates = lastStates.filter { seen.contains($0.key) }
     }
 }
 
