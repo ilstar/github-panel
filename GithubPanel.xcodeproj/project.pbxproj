@@ -14,7 +14,10 @@
 		1A1110062B12345600000001 /* GitHubAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110072B12345600000001 /* GitHubAPI.swift */; };
 		1A1110082B12345600000001 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110092B12345600000001 /* KeychainStore.swift */; };
 		1A11100A2B12345600000001 /* NotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A11100B2B12345600000001 /* NotificationManager.swift */; };
+		1A1110242B12345600000001 /* Shortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110222B12345600000001 /* Shortcuts.swift */; };
+		1A1110252B12345600000001 /* AppVisibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110232B12345600000001 /* AppVisibility.swift */; };
 		1A11100C2B12345600000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1A11100D2B12345600000001 /* Assets.xcassets */; };
+		1A1110302B12345600000001 /* KeyboardShortcuts in Frameworks */ = {isa = PBXBuildFile; productRef = 1A1110322B12345600000001 /* KeyboardShortcuts */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -25,6 +28,8 @@
 		1A1110072B12345600000001 /* GitHubAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitHubAPI.swift; sourceTree = "<group>"; };
 		1A1110092B12345600000001 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
 		1A11100B2B12345600000001 /* NotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationManager.swift; sourceTree = "<group>"; };
+		1A1110222B12345600000001 /* Shortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shortcuts.swift; sourceTree = "<group>"; };
+		1A1110232B12345600000001 /* AppVisibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppVisibility.swift; sourceTree = "<group>"; };
 		1A11100D2B12345600000001 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		1A11100E2B12345600000001 /* GithubPanel.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; path = GithubPanel.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A11100F2B12345600000001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -45,6 +50,8 @@
 				1A1110002B12345600000001 /* GithubPanelApp.swift */,
 				1A1110032B12345600000001 /* ContentView.swift */,
 				1A1110212B12345600000001 /* SettingsView.swift */,
+				1A1110222B12345600000001 /* Shortcuts.swift */,
+				1A1110232B12345600000001 /* AppVisibility.swift */,
 				1A1110052B12345600000001 /* PRMonitor.swift */,
 				1A1110072B12345600000001 /* GitHubAPI.swift */,
 				1A1110092B12345600000001 /* KeychainStore.swift */,
@@ -71,6 +78,7 @@
 			buildConfigurationList = 1A1110142B12345600000001 /* Build configuration list for PBXNativeTarget "GithubPanel" */;
 			buildPhases = (
 				1A1110152B12345600000001 /* Sources */,
+				1A1110312B12345600000001 /* Frameworks */,
 				1A1110162B12345600000001 /* Resources */,
 			);
 			buildRules = (
@@ -78,6 +86,9 @@
 			dependencies = (
 			);
 			name = GithubPanel;
+			packageProductDependencies = (
+				1A1110322B12345600000001 /* KeyboardShortcuts */,
+			);
 			productName = GithubPanel;
 			productReference = 1A11100E2B12345600000001 /* GithubPanel.app */;
 			productType = "com.apple.product-type.application";
@@ -104,6 +115,9 @@
 				Base,
 			);
 			mainGroup = 1A1110102B12345600000001;
+			packageReferences = (
+				1A1110332B12345600000001 /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */,
+			);
 			productRefGroup = 1A1110122B12345600000001 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -124,6 +138,17 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXFrameworksBuildPhase section */
+		1A1110312B12345600000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1A1110302B12345600000001 /* KeyboardShortcuts in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		1A1110152B12345600000001 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -136,10 +161,31 @@
 				1A1110062B12345600000001 /* GitHubAPI.swift in Sources */,
 				1A1110082B12345600000001 /* KeychainStore.swift in Sources */,
 				1A11100A2B12345600000001 /* NotificationManager.swift in Sources */,
+				1A1110242B12345600000001 /* Shortcuts.swift in Sources */,
+				1A1110252B12345600000001 /* AppVisibility.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		1A1110322B12345600000001 /* KeyboardShortcuts */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 1A1110332B12345600000001 /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */;
+			productName = KeyboardShortcuts;
+		};
+/* End XCSwiftPackageProductDependency section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		1A1110332B12345600000001 /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sindresorhus/KeyboardShortcuts";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.4.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCBuildConfiguration section */
 		1A1110192B12345600000001 /* Debug */ = {

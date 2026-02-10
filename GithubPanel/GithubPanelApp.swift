@@ -1,5 +1,6 @@
 import SwiftUI
 import UserNotifications
+import KeyboardShortcuts
 
 @main
 struct GithubPanelApp: App {
@@ -7,6 +8,9 @@ struct GithubPanelApp: App {
 
     init() {
         NotificationManager.shared.configure()
+        KeyboardShortcuts.onKeyUp(for: .toggleApp) {
+            AppVisibility.toggle()
+        }
     }
 
     var body: some Scene {

@@ -1,4 +1,5 @@
 import SwiftUI
+import KeyboardShortcuts
 
 struct SettingsView: View {
     @EnvironmentObject private var monitor: PRMonitor
@@ -16,6 +17,10 @@ struct SettingsView: View {
             Divider()
 
             refreshSection
+
+            Divider()
+
+            shortcutSection
 
             Spacer()
         }
@@ -70,6 +75,14 @@ struct SettingsView: View {
             }
             .pickerStyle(.segmented)
             .frame(maxWidth: 260)
+        }
+    }
+
+    private var shortcutSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Shortcut")
+                .font(.headline)
+            KeyboardShortcuts.Recorder("Show/Hide App", name: .toggleApp)
         }
     }
 
