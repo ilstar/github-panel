@@ -84,6 +84,7 @@ struct ContentView: View {
                                     .fill(Color.secondary.opacity(selectedPRID == pr.id ? 0.7 : 0.0))
                                     .frame(width: 6, height: 6)
                                     .padding(.top, 6)
+                                    .padding(.leading, 4)
                                 Text(pr.status.emoji)
                                     .font(.title3)
                                 VStack(alignment: .leading, spacing: 2) {
@@ -104,8 +105,12 @@ struct ContentView: View {
                                 }
                             }
                             .padding(.vertical, 2)
+                            .padding(.leading, -12)
                         }
+                        .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
                     }
+                    .listStyle(.plain)
+                    .padding(.leading, -4)
                     .frame(maxHeight: .infinity)
                     .overlay(alignment: .topLeading) {
                         if monitor.prRows.isEmpty {
