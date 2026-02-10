@@ -1,10 +1,12 @@
 import SwiftUI
+import AppKit
 
 struct ContentView: View {
     @EnvironmentObject private var monitor: PRMonitor
     @State private var tokenInput: String = ""
     @State private var isSaving = false
     @State private var now = Date()
+    @State private var selectedPRID: String?
     private let minuteTicker = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
     private let relativeFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
@@ -78,6 +80,10 @@ struct ContentView: View {
                     List(monitor.prRows) { pr in
                         Link(destination: pr.htmlURL) {
                             HStack(alignment: .top, spacing: 10) {
+                                Circle()
+                                    .fill(Color.secondary.opacity(selectedPRID == pr.id ? 0.7 : 0.0))
+                                    .frame(width: 6, height: 6)
+                                    .padding(.top, 6)
                                 Text(pr.status.emoji)
                                     .font(.title3)
                                 VStack(alignment: .leading, spacing: 2) {
@@ -113,6 +119,22 @@ struct ContentView: View {
                             .padding(.top, 6)
                         }
                     }
+                    .background(
+                        KeyEventHandlingView { event in
+                            handleKeyEvent(event)
+                        }
+                        .frame(width: 0, height: 0)
+                    )
+                    .onAppear {
+                        if selectedPRID == nil {
+                            selectedPRID = monitor.prRows.first?.id
+                        }
+                    }
+                    .onChange(of: monitor.prRows.map { $0.id }) { newIDs in
+                        if selectedPRID == nil || !newIDs.contains(selectedPRID ?? "") {
+                            selectedPRID = newIDs.first
+                        }
+                    }
                 } else {
                     Text("Add a GitHub token to begin.")
                         .foregroundStyle(.secondary)
@@ -138,6 +160,67 @@ struct ContentView: View {
         tokenInput = ""
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             isSaving = false
+        }
+    }
+
+    private func handleKeyEvent(_ event: NSEvent) -> Bool {
+        switch event.keyCode {
+        case 125: // down arrow
+            moveSelection(delta: 1)
+            return true
+        case 126: // up arrow
+            moveSelection(delta: -1)
+            return true
+        case 36, 76: // return, enter
+            openSelectedPR()
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func moveSelection(delta: Int) {
+        guard !monitor.prRows.isEmpty else { return }
+        let ids = monitor.prRows.map { $0.id }
+        let currentIndex = selectedPRID.flatMap { ids.firstIndex(of: $0) } ?? 0
+        let nextIndex = min(max(currentIndex + delta, 0), ids.count - 1)
+        selectedPRID = ids[nextIndex]
+    }
+
+    private func openSelectedPR() {
+        guard let id = selectedPRID,
+              let pr = monitor.prRows.first(where: { $0.id == id }) else { return }
+        NSWorkspace.shared.open(pr.htmlURL)
+    }
+}
+
+private struct KeyEventHandlingView: NSViewRepresentable {
+    var handler: (NSEvent) -> Bool
+
+    func makeNSView(context: Context) -> NSView {
+        let view = KeyView()
+        view.handler = handler
+        DispatchQueue.main.async {
+            view.window?.makeFirstResponder(view)
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        guard let view = nsView as? KeyView else { return }
+        view.handler = handler
+    }
+
+    private final class KeyView: NSView {
+        var handler: ((NSEvent) -> Bool)?
+
+        override var acceptsFirstResponder: Bool { true }
+
+        override func keyDown(with event: NSEvent) {
+            if handler?(event) == true {
+                return
+            }
+            super.keyDown(with: event)
         }
     }
 }
