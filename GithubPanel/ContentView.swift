@@ -54,9 +54,15 @@ struct ContentView: View {
                     }
                     .disabled(!monitor.hasToken || monitor.isLoading)
 
-                    Text("Updated \(monitor.lastRefreshText(relativeTo: now))")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    HStack(spacing: 6) {
+                        if monitor.isLoading {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                        Text("Updated \(monitor.lastRefreshText(relativeTo: now))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 if let error = monitor.lastError {
@@ -96,11 +102,7 @@ struct ContentView: View {
                     }
                     .frame(maxHeight: .infinity)
                     .overlay(alignment: .topLeading) {
-                        if monitor.isLoading {
-                            Text("Loading...")
-                                .foregroundStyle(.secondary)
-                                .padding(.top, 6)
-                        } else if monitor.prRows.isEmpty {
+                        if monitor.prRows.isEmpty {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("No open pull requests found for your account.")
                                     .foregroundStyle(.secondary)
