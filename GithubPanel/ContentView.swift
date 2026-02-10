@@ -149,6 +149,7 @@ struct ContentView: View {
             Spacer()
         }
         .padding(.horizontal, 20)
+        .padding(.top, 12)
         .frame(minWidth: 420, minHeight: 300)
         .onAppear {
             monitor.start()
