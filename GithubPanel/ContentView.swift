@@ -249,7 +249,7 @@ private struct PRRow: View {
                     .font(.headline.weight(.semibold))
                     .lineLimit(1)
 
-                Text("\(pr.repoFullName)#\(pr.number) · \(pr.status.descriptionText)")
+                Text("\(pr.repoFullName)#\(String(pr.number)) · \(pr.status.descriptionText)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
