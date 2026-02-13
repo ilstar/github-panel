@@ -292,7 +292,7 @@ private struct PRRow: View {
             switch pr.status {
             case .success:
                 Image(systemName: "checkmark.circle.fill")
-                    .symbolRenderingMode(.multicolor)
+                    .foregroundStyle(.green)
             case .failure, .error:
                 Image(systemName: "xmark.octagon.fill")
                     .symbolRenderingMode(.multicolor)
