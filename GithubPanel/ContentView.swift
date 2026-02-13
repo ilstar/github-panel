@@ -242,12 +242,6 @@ private struct PRRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            Circle()
-                .fill(Color.secondary.opacity(isSelected ? 0.7 : 0.0))
-                .frame(width: 6, height: 6)
-                .padding(.top, 7)
-                .padding(.leading, 4)
-
             statusIcon
 
             VStack(alignment: .leading, spacing: 6) {
@@ -275,7 +269,7 @@ private struct PRRow: View {
         .padding(14)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.white.opacity(isHovering ? 0.95 : 0.9))
+                .fill(cardFill)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -307,6 +301,18 @@ private struct PRRow: View {
         }
         .font(.title)
         .frame(width: 30)
+    }
+
+    private var cardFill: AnyShapeStyle {
+        if isSelected {
+            return AnyShapeStyle(
+                LinearGradient(colors: [
+                    Color(red: 0.93, green: 0.96, blue: 1.0),
+                    Color(red: 0.98, green: 0.99, blue: 1.0)
+                ], startPoint: .topLeading, endPoint: .bottomTrailing)
+            )
+        }
+        return AnyShapeStyle(Color.white.opacity(isHovering ? 0.95 : 0.9))
     }
 }
 
