@@ -116,6 +116,7 @@ struct ContentView: View {
                         .padding(.top, 6)
                         .padding(.bottom, 8)
                     }
+                    .scrollIndicators(.hidden)
                     .background(
                         KeyEventHandlingView { event in
                             handleKeyEvent(event)
