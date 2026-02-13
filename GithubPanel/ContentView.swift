@@ -77,67 +77,81 @@ struct ContentView: View {
                 }
 
                 if monitor.hasToken {
-                    List(monitor.prRows) { pr in
-                        Link(destination: pr.htmlURL) {
-                            HStack(alignment: .top, spacing: 10) {
-                                Circle()
-                                    .fill(Color.secondary.opacity(selectedPRID == pr.id ? 0.7 : 0.0))
-                                    .frame(width: 6, height: 6)
-                                    .padding(.top, 6)
-                                    .padding(.leading, 4)
-                                Text(pr.status.emoji)
-                                    .font(.title3)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(pr.title)
-                                        .font(.subheadline)
-                                        .lineLimit(2)
-                                    Text("\(pr.repoFullName)#\(pr.number) · \(pr.status.descriptionText)")
+                    ScrollViewReader { proxy in
+                        List(monitor.prRows) { pr in
+                            Link(destination: pr.htmlURL) {
+                                HStack(alignment: .top, spacing: 10) {
+                                    Circle()
+                                        .fill(Color.secondary.opacity(selectedPRID == pr.id ? 0.7 : 0.0))
+                                        .frame(width: 6, height: 6)
+                                        .padding(.top, 6)
+                                        .padding(.leading, 4)
+                                    Text(pr.status.emoji)
+                                        .font(.title3)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(pr.title)
+                                            .font(.subheadline)
+                                            .lineLimit(2)
+                                        Text("\(pr.repoFullName)#\(pr.number) · \(pr.status.descriptionText)")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                        if pr.isDraft {
+                                            Text("Draft")
+                                                .font(.caption)
+                                                .foregroundStyle(.orange)
+                                        }
+                                        Text("Updated \(relativeFormatter.localizedString(for: pr.updatedAt, relativeTo: now))")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                .padding(.vertical, 2)
+                                .padding(.leading, -12)
+                            }
+                            .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+                            .id(pr.id)
+                        }
+                        .listStyle(.plain)
+                        .padding(.leading, -4)
+                        .frame(maxHeight: .infinity)
+                        .overlay(alignment: .topLeading) {
+                            if monitor.prRows.isEmpty {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("No open pull requests found for your account.")
+                                        .foregroundStyle(.secondary)
+                                    Text("Only PRs authored by your GitHub user are shown.")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
-                                    if pr.isDraft {
-                                        Text("Draft")
-                                            .font(.caption)
-                                            .foregroundStyle(.orange)
-                                    }
-                                    Text("Updated \(relativeFormatter.localizedString(for: pr.updatedAt, relativeTo: now))")
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
                                 }
+                                .padding(.top, 6)
                             }
-                            .padding(.vertical, 2)
-                            .padding(.leading, -12)
                         }
-                        .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
-                    }
-                    .listStyle(.plain)
-                    .padding(.leading, -4)
-                    .frame(maxHeight: .infinity)
-                    .overlay(alignment: .topLeading) {
-                        if monitor.prRows.isEmpty {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("No open pull requests found for your account.")
-                                    .foregroundStyle(.secondary)
-                                Text("Only PRs authored by your GitHub user are shown.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                        .background(
+                            KeyEventHandlingView { event in
+                                handleKeyEvent(event)
                             }
-                            .padding(.top, 6)
+                            .frame(width: 0, height: 0)
+                        )
+                        .onAppear {
+                            if selectedPRID == nil {
+                                selectedPRID = monitor.prRows.first?.id
+                            }
                         }
-                    }
-                    .background(
-                        KeyEventHandlingView { event in
-                            handleKeyEvent(event)
+                        .onChange(of: monitor.prRows.map { $0.id }) { newIDs in
+                            guard let first = newIDs.first else {
+                                selectedPRID = nil
+                                return
+                            }
+                            if selectedPRID == nil || !newIDs.contains(selectedPRID ?? "") {
+                                selectedPRID = first
+                            }
                         }
-                        .frame(width: 0, height: 0)
-                    )
-                    .onAppear {
-                        if selectedPRID == nil {
-                            selectedPRID = monitor.prRows.first?.id
-                        }
-                    }
-                    .onChange(of: monitor.prRows.map { $0.id }) { newIDs in
-                        if selectedPRID == nil || !newIDs.contains(selectedPRID ?? "") {
-                            selectedPRID = newIDs.first
+                        .onChange(of: monitor.lastRefreshAt) { _ in
+                            guard let first = monitor.prRows.first else { return }
+                            selectedPRID = first.id
+                            withAnimation {
+                                proxy.scrollTo(first.id, anchor: .top)
+                            }
                         }
                     }
                 } else {
