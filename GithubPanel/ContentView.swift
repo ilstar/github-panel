@@ -152,6 +152,7 @@ struct ContentView: View {
         Text("Updated \(monitor.lastRefreshText(relativeTo: now))")
             .font(.caption)
             .foregroundStyle(.secondary)
+            .frame(width: 110, alignment: .trailing)
     }
 
     private var refreshPill: some View {
@@ -352,7 +353,7 @@ private struct RefreshPill: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 TimelineView(.animation) { context in
                     Image(systemName: "arrow.clockwise")
                         .font(.body.weight(.semibold))
@@ -361,6 +362,7 @@ private struct RefreshPill: View {
                 }
                 Text("Refresh")
                     .font(.subheadline.weight(.semibold))
+                    .padding(.trailing, 2)
                 lastUpdatedView
             }
             .padding(.horizontal, 12)
