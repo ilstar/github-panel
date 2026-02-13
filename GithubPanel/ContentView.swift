@@ -336,6 +336,10 @@ private struct RefreshPill: View {
     let lastUpdatedView: AnyView
     let action: () -> Void
 
+    @State private var spinStart = Date()
+    @State private var stopAtCycle: Double?
+    private let spinDuration = 1.6
+
     init(isLoading: Bool,
          isEnabled: Bool,
          lastUpdatedView: some View,
@@ -349,8 +353,12 @@ private struct RefreshPill: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 8) {
-                Image(systemName: "arrow.clockwise")
-                    .font(.body.weight(.semibold))
+                TimelineView(.animation) { context in
+                    Image(systemName: "arrow.clockwise")
+                        .font(.body.weight(.semibold))
+                        .rotationEffect(.degrees(rotationAngle(at: context.date)))
+                        .opacity(isLoading || stopAtCycle != nil ? 1 : 1)
+                }
                 Text("Refresh")
                     .font(.subheadline.weight(.semibold))
                 lastUpdatedView
@@ -368,6 +376,32 @@ private struct RefreshPill: View {
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
+        .onAppear {
+            spinStart = Date()
+        }
+        .onChange(of: isLoading) { loading in
+            let now = Date()
+            if loading {
+                spinStart = now
+                stopAtCycle = nil
+            } else {
+                let cycles = max(0, now.timeIntervalSince(spinStart) / spinDuration)
+                stopAtCycle = ceil(cycles)
+            }
+        }
+    }
+
+    private func rotationAngle(at date: Date) -> Double {
+        guard isLoading || stopAtCycle != nil else {
+            return 0
+        }
+        let elapsed = max(0, date.timeIntervalSince(spinStart))
+        let cycles = elapsed / spinDuration
+        if let stopAtCycle, cycles >= stopAtCycle {
+            return 0
+        }
+        let fraction = cycles.truncatingRemainder(dividingBy: 1)
+        return fraction * 360
     }
 }
 
