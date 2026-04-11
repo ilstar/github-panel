@@ -136,7 +136,7 @@ final class GitHubAPI {
         _ = try await graphQL(Response.self, query: query, variables: ["id": pullRequestID], token: token)
     }
 
-    func mergePullRequest(token: String, repoFullName: String, number: Int) async throws {
+    func mergePullRequest(token: String, repoFullName: String, number: Int) async throws -> Bool {
         let parts = repoFullName.split(separator: "/", maxSplits: 1).map(String.init)
         guard parts.count == 2 else { throw URLError(.badURL) }
         var request = makeRequest(path: "/repos/\(parts[0])/\(parts[1])/pulls/\(number)/merge", token: token)
@@ -152,6 +152,11 @@ final class GitHubAPI {
             let raw = String(data: data, encoding: .utf8) ?? "<non-utf8 response>"
             throw GitHubAPIError(message: raw, documentationURL: nil, statusCode: http.statusCode)
         }
+        struct MergeResponse: Decodable { let merged: Bool }
+        if let decoded = try? JSONDecoder().decode(MergeResponse.self, from: data) {
+            return decoded.merged
+        }
+        return true
     }
 
     private func makeRequest(path: String, token: String) -> URLRequest {

@@ -144,7 +144,14 @@ final class PRMonitor: ObservableObject {
         do {
             if row.status == .success && !row.isDraft {
                 do {
-                    try await api.mergePullRequest(token: token, repoFullName: row.repoFullName, number: row.number)
+                    let merged = try await api.mergePullRequest(token: token, repoFullName: row.repoFullName, number: row.number)
+                    if merged {
+                        await MainActor.run {
+                            prRows.removeAll { $0.id == row.id }
+                            lastStates.removeValue(forKey: row.id)
+                        }
+                        return
+                    }
                 } catch {
                     try await fallbackQueueOrAutomerge(token: token, row: row, error: error)
                 }
