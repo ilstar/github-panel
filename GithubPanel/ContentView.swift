@@ -259,6 +259,7 @@ private struct PRRow: View {
     let onMerge: () -> Void
 
     @State private var isHovering = false
+    @State private var isMergeButtonHovering = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -309,7 +310,7 @@ private struct PRRow: View {
     }
 
     private var mergeButton: some View {
-        Button(action: onMerge) {
+        Button(action: handleMergeButtonClick) {
             HStack(spacing: 6) {
                 if isMerging {
                     ProgressView()
@@ -338,11 +339,21 @@ private struct PRRow: View {
                     .stroke(mergeStroke, lineWidth: 1)
             )
             .shadow(color: mergeShadow, radius: isMerging ? 0 : 4, x: 0, y: 1)
+            .offset(y: mergeButtonOffset)
             .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
-        .disabled(isMerging || pr.isAutoMergeEnabled)
+        .disabled(isMerging)
         .opacity(isMerging ? 0.75 : 1)
+        .animation(.easeInOut(duration: 0.12), value: isMergeButtonHovering)
+        .onHover { hovering in
+            isMergeButtonHovering = hovering && !isMerging
+        }
+    }
+
+    private func handleMergeButtonClick() {
+        guard !pr.isAutoMergeEnabled else { return }
+        onMerge()
     }
 
     private var mergeButtonTitle: String {
@@ -364,17 +375,23 @@ private struct PRRow: View {
 
     private var mergeFill: Color {
         if pr.isAutoMergeEnabled {
-            return Color.white
+            return isMergeButtonHovering
+                ? Color(red: 0.94, green: 0.99, blue: 0.96)
+                : Color.white
         }
         if isReady {
-            return Color(red: 0.13, green: 0.49, blue: 0.25)
+            return isMergeButtonHovering
+                ? Color(red: 0.16, green: 0.56, blue: 0.29)
+                : Color(red: 0.13, green: 0.49, blue: 0.25)
         }
-        return Color(red: 0.95, green: 0.98, blue: 1.0)
+        return isMergeButtonHovering
+            ? Color(red: 0.91, green: 0.96, blue: 1.0)
+            : Color(red: 0.95, green: 0.98, blue: 1.0)
     }
 
     private var mergeForeground: Color {
         if pr.isAutoMergeEnabled {
-            return Color.secondary
+            return Color(red: 0.10, green: 0.43, blue: 0.24)
         }
         if isReady {
             return Color.white
@@ -384,26 +401,30 @@ private struct PRRow: View {
 
     private var mergeStroke: Color {
         if pr.isAutoMergeEnabled {
-            return Color.black.opacity(0.12)
+            return Color(red: 0.30, green: 0.63, blue: 0.42).opacity(isMergeButtonHovering ? 0.55 : 0.32)
         }
         if isReady {
-            return Color(red: 0.06, green: 0.38, blue: 0.16).opacity(0.45)
+            return Color(red: 0.06, green: 0.38, blue: 0.16).opacity(isMergeButtonHovering ? 0.62 : 0.45)
         }
-        return Color(red: 0.50, green: 0.68, blue: 0.86).opacity(0.45)
+        return Color(red: 0.50, green: 0.68, blue: 0.86).opacity(isMergeButtonHovering ? 0.68 : 0.45)
     }
 
     private var mergeShadow: Color {
         if pr.isAutoMergeEnabled {
-            return Color.black.opacity(0.04)
+            return Color.green.opacity(isMergeButtonHovering ? 0.14 : 0.07)
         }
         if isReady {
-            return Color.green.opacity(0.18)
+            return Color.green.opacity(isMergeButtonHovering ? 0.26 : 0.18)
         }
-        return Color.black.opacity(0.06)
+        return Color.black.opacity(isMergeButtonHovering ? 0.10 : 0.06)
     }
 
     private var mergeProgressTint: Color {
         isReady ? Color.white : mergeForeground
+    }
+
+    private var mergeButtonOffset: CGFloat {
+        isMergeButtonHovering ? -1 : 0
     }
 
     private var statusIcon: some View {
