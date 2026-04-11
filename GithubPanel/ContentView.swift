@@ -310,22 +310,67 @@ private struct PRRow: View {
 
     private var mergeButton: some View {
         Button(action: onMerge) {
-            Text(isReady ? "Merge" : "Merge when ready")
-                .font(.caption.weight(.semibold))
-                .frame(width: 140, height: 26)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(isReady ? Color.green.opacity(0.16) : Color.gray.opacity(0.18))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(isReady ? Color.green.opacity(0.35) : Color.gray.opacity(0.35), lineWidth: 1)
-                )
-                .foregroundStyle(isReady ? Color.green : Color.secondary)
+            HStack(spacing: 6) {
+                if isMerging {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(.white)
+                        .scaleEffect(0.7)
+                        .frame(width: 12, height: 12)
+                } else {
+                    Image(systemName: isReady ? "checkmark" : "clock")
+                        .font(.caption.weight(.bold))
+                        .frame(width: 12)
+                }
+
+                Text(isMerging ? "Merging..." : (isReady ? "Merge" : "Merge when ready"))
+                    .font(.caption.weight(.bold))
+                    .lineLimit(1)
+            }
+            .frame(width: 150, height: 30)
+            .foregroundStyle(mergeForeground)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(mergeFill)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(mergeStroke, lineWidth: 1)
+            )
+            .shadow(color: mergeShadow, radius: isMerging ? 0 : 4, x: 0, y: 1)
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
         .disabled(isMerging)
-        .opacity(isMerging ? 0.6 : 1)
+        .opacity(isMerging ? 0.75 : 1)
+    }
+
+    private var mergeFill: Color {
+        if isReady {
+            return Color(red: 0.13, green: 0.49, blue: 0.25)
+        }
+        return Color(red: 0.95, green: 0.98, blue: 1.0)
+    }
+
+    private var mergeForeground: Color {
+        if isReady {
+            return Color.white
+        }
+        return Color(red: 0.14, green: 0.36, blue: 0.62)
+    }
+
+    private var mergeStroke: Color {
+        if isReady {
+            return Color(red: 0.06, green: 0.38, blue: 0.16).opacity(0.45)
+        }
+        return Color(red: 0.50, green: 0.68, blue: 0.86).opacity(0.45)
+    }
+
+    private var mergeShadow: Color {
+        if isReady {
+            return Color.green.opacity(0.18)
+        }
+        return Color.black.opacity(0.06)
     }
 
     private var statusIcon: some View {
