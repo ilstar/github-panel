@@ -6,6 +6,7 @@ struct GitHubUser: Decodable {
 
 struct PullRequestInfo: Identifiable {
     let id = UUID()
+    let nodeID: String
     let title: String
     let number: Int
     let repoFullName: String
@@ -25,6 +26,7 @@ struct PullRequestSummary: Identifiable {
 
 struct PullRequestRow: Identifiable {
     let id: String
+    let nodeID: String
     let title: String
     let number: Int
     let repoFullName: String
@@ -87,7 +89,8 @@ final class GitHubAPI {
     func fetchPullRequest(token: String, repoFullName: String, number: Int) async throws -> PullRequestInfo {
         let prRequest = makeRequest(path: "/repos/\(repoFullName)/pulls/\(number)", token: token)
         let pr = try await decode(PullResponse.self, request: prRequest)
-        return PullRequestInfo(title: pr.title,
+        return PullRequestInfo(nodeID: pr.nodeID,
+                               title: pr.title,
                                number: pr.number,
                                repoFullName: repoFullName,
                                htmlURL: pr.htmlURL,
@@ -103,6 +106,52 @@ final class GitHubAPI {
             return .success
         }
         return CheckState(rawValue: response.state) ?? .unknown
+    }
+
+    func enqueuePullRequest(token: String, pullRequestID: String) async throws {
+        let query = """
+        mutation($id: ID!) {
+          enqueuePullRequest(input: { pullRequestId: $id }) {
+            mergeQueueEntry { id }
+          }
+        }
+        """
+        struct Response: Decodable { let enqueuePullRequest: EnqueueResult? }
+        struct EnqueueResult: Decodable { let mergeQueueEntry: MergeQueueEntry }
+        struct MergeQueueEntry: Decodable { let id: String }
+        _ = try await graphQL(Response.self, query: query, variables: ["id": pullRequestID], token: token)
+    }
+
+    func enableAutoMerge(token: String, pullRequestID: String) async throws {
+        let query = """
+        mutation($id: ID!) {
+          enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: MERGE }) {
+            pullRequest { id }
+          }
+        }
+        """
+        struct Response: Decodable { let enablePullRequestAutoMerge: EnableResult? }
+        struct EnableResult: Decodable { let pullRequest: PullRequestNode }
+        struct PullRequestNode: Decodable { let id: String }
+        _ = try await graphQL(Response.self, query: query, variables: ["id": pullRequestID], token: token)
+    }
+
+    func mergePullRequest(token: String, repoFullName: String, number: Int) async throws {
+        let parts = repoFullName.split(separator: "/", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { throw URLError(.badURL) }
+        var request = makeRequest(path: "/repos/\(parts[0])/\(parts[1])/pulls/\(number)/merge", token: token)
+        request.httpMethod = "PUT"
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["merge_method": "merge"])
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        guard (200...299).contains(http.statusCode) else {
+            let raw = String(data: data, encoding: .utf8) ?? "<non-utf8 response>"
+            throw GitHubAPIError(message: raw, documentationURL: nil, statusCode: http.statusCode)
+        }
     }
 
     private func makeRequest(path: String, token: String) -> URLRequest {
@@ -128,6 +177,44 @@ final class GitHubAPI {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return try decoder.decode(T.self, from: data)
+    }
+
+    private func graphQL<T: Decodable>(_ type: T.Type,
+                                       query: String,
+                                       variables: [String: Any],
+                                       token: String) async throws -> T {
+        var request = URLRequest(url: URL(string: "https://api.github.com/graphql")!)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("GithubPanel", forHTTPHeaderField: "User-Agent")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = ["query": query, "variables": variables]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        guard (200...299).contains(http.statusCode) else {
+            let raw = String(data: data, encoding: .utf8) ?? "<non-utf8 response>"
+            throw GraphQLError(message: "GraphQL HTTP \(http.statusCode): \(raw)")
+        }
+        let decoder = JSONDecoder()
+        let envelope: GraphQLResponse<T>
+        do {
+            envelope = try decoder.decode(GraphQLResponse<T>.self, from: data)
+        } catch {
+            let raw = String(data: data, encoding: .utf8) ?? "<non-utf8 response>"
+            throw GraphQLError(message: "GraphQL decode failed: \(raw)")
+        }
+        if let errors = envelope.errors, !errors.isEmpty {
+            throw GraphQLError(message: errors.map(\.message).joined(separator: " "))
+        }
+        guard let value = envelope.data else {
+            throw GraphQLError(message: "Empty response from GitHub.")
+        }
+        return value
     }
 }
 
@@ -176,6 +263,7 @@ private struct SearchItem: Decodable {
 }
 
 private struct PullResponse: Decodable {
+    let nodeID: String
     let title: String
     let number: Int
     let htmlURL: URL
@@ -183,12 +271,28 @@ private struct PullResponse: Decodable {
     let draft: Bool
 
     enum CodingKeys: String, CodingKey {
+        case nodeID = "node_id"
         case title
         case number
         case htmlURL = "html_url"
         case head
         case draft
     }
+}
+
+private struct GraphQLResponse<T: Decodable>: Decodable {
+    let data: T?
+    let errors: [GraphQLErrorPayload]?
+}
+
+private struct GraphQLErrorPayload: Decodable {
+    let message: String
+}
+
+struct GraphQLError: LocalizedError {
+    let message: String
+
+    var errorDescription: String? { message }
 }
 
 private struct PullHead: Decodable {
