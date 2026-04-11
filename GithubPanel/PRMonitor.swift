@@ -142,13 +142,25 @@ final class PRMonitor: ObservableObject {
     func requestMerge(for row: PullRequestRow) async {
         guard let token = tokenStore.loadToken() else { return }
         do {
-            do {
-                try await api.enqueuePullRequest(token: token, pullRequestID: row.nodeID)
-            } catch {
-                try await api.enableAutoMerge(token: token, pullRequestID: row.nodeID)
+            if row.status == .success && !row.isDraft {
+                do {
+                    try await api.mergePullRequest(token: token, repoFullName: row.repoFullName, number: row.number)
+                } catch {
+                    try await fallbackQueueOrAutomerge(token: token, row: row, error: error)
+                }
+            } else {
+                try await fallbackQueueOrAutomerge(token: token, row: row, error: nil)
             }
         } catch {
             lastError = error.localizedDescription
+        }
+    }
+
+    private func fallbackQueueOrAutomerge(token: String, row: PullRequestRow, error: Error?) async throws {
+        do {
+            try await api.enableAutoMerge(token: token, pullRequestID: row.nodeID)
+        } catch {
+            try await api.enqueuePullRequest(token: token, pullRequestID: row.nodeID)
         }
     }
 }

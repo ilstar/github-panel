@@ -125,7 +125,7 @@ final class GitHubAPI {
     func enableAutoMerge(token: String, pullRequestID: String) async throws {
         let query = """
         mutation($id: ID!) {
-          enablePullRequestAutoMerge(input: { pullRequestId: $id }) {
+          enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: MERGE }) {
             pullRequest { id }
           }
         }
@@ -134,6 +134,24 @@ final class GitHubAPI {
         struct EnableResult: Decodable { let pullRequest: PullRequestNode }
         struct PullRequestNode: Decodable { let id: String }
         _ = try await graphQL(Response.self, query: query, variables: ["id": pullRequestID], token: token)
+    }
+
+    func mergePullRequest(token: String, repoFullName: String, number: Int) async throws {
+        let parts = repoFullName.split(separator: "/", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { throw URLError(.badURL) }
+        var request = makeRequest(path: "/repos/\(parts[0])/\(parts[1])/pulls/\(number)/merge", token: token)
+        request.httpMethod = "PUT"
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["merge_method": "merge"])
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        guard (200...299).contains(http.statusCode) else {
+            let raw = String(data: data, encoding: .utf8) ?? "<non-utf8 response>"
+            throw GitHubAPIError(message: raw, documentationURL: nil, statusCode: http.statusCode)
+        }
     }
 
     private func makeRequest(path: String, token: String) -> URLRequest {
