@@ -13,6 +13,7 @@ struct PullRequestInfo: Identifiable {
     let htmlURL: URL
     let headSHA: String
     let isDraft: Bool
+    let isAutoMergeEnabled: Bool
 }
 
 struct PullRequestSummary: Identifiable {
@@ -33,6 +34,7 @@ struct PullRequestRow: Identifiable {
     let htmlURL: URL
     let status: CheckState
     let isDraft: Bool
+    let isAutoMergeEnabled: Bool
     let updatedAt: Date
 }
 
@@ -95,7 +97,8 @@ final class GitHubAPI {
                                repoFullName: repoFullName,
                                htmlURL: pr.htmlURL,
                                headSHA: pr.head.sha,
-                               isDraft: pr.draft)
+                               isDraft: pr.draft,
+                               isAutoMergeEnabled: pr.autoMerge != nil)
     }
 
     func fetchPRCheckState(token: String, pr: PullRequestInfo) async throws -> CheckState {
@@ -274,6 +277,7 @@ private struct PullResponse: Decodable {
     let htmlURL: URL
     let head: PullHead
     let draft: Bool
+    let autoMerge: AutoMergeRequest?
 
     enum CodingKeys: String, CodingKey {
         case nodeID = "node_id"
@@ -282,8 +286,11 @@ private struct PullResponse: Decodable {
         case htmlURL = "html_url"
         case head
         case draft
+        case autoMerge = "auto_merge"
     }
 }
+
+private struct AutoMergeRequest: Decodable {}
 
 private struct GraphQLResponse<T: Decodable>: Decodable {
     let data: T?

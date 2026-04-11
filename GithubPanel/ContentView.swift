@@ -314,16 +314,16 @@ private struct PRRow: View {
                 if isMerging {
                     ProgressView()
                         .controlSize(.small)
-                        .tint(.white)
+                        .tint(mergeProgressTint)
                         .scaleEffect(0.7)
                         .frame(width: 12, height: 12)
                 } else {
-                    Image(systemName: isReady ? "checkmark" : "clock")
+                    Image(systemName: mergeIconName)
                         .font(.caption.weight(.bold))
                         .frame(width: 12)
                 }
 
-                Text(isMerging ? "Merging..." : (isReady ? "Merge" : "Merge when ready"))
+                Text(mergeButtonTitle)
                     .font(.caption.weight(.bold))
                     .lineLimit(1)
             }
@@ -341,11 +341,31 @@ private struct PRRow: View {
             .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
-        .disabled(isMerging)
+        .disabled(isMerging || pr.isAutoMergeEnabled)
         .opacity(isMerging ? 0.75 : 1)
     }
 
+    private var mergeButtonTitle: String {
+        if isMerging {
+            return "Merging..."
+        }
+        if pr.isAutoMergeEnabled {
+            return "auto-merge"
+        }
+        return isReady ? "Merge" : "Merge when ready"
+    }
+
+    private var mergeIconName: String {
+        if pr.isAutoMergeEnabled {
+            return "checkmark.circle"
+        }
+        return isReady ? "checkmark" : "clock"
+    }
+
     private var mergeFill: Color {
+        if pr.isAutoMergeEnabled {
+            return Color.white
+        }
         if isReady {
             return Color(red: 0.13, green: 0.49, blue: 0.25)
         }
@@ -353,6 +373,9 @@ private struct PRRow: View {
     }
 
     private var mergeForeground: Color {
+        if pr.isAutoMergeEnabled {
+            return Color.secondary
+        }
         if isReady {
             return Color.white
         }
@@ -360,6 +383,9 @@ private struct PRRow: View {
     }
 
     private var mergeStroke: Color {
+        if pr.isAutoMergeEnabled {
+            return Color.black.opacity(0.12)
+        }
         if isReady {
             return Color(red: 0.06, green: 0.38, blue: 0.16).opacity(0.45)
         }
@@ -367,10 +393,17 @@ private struct PRRow: View {
     }
 
     private var mergeShadow: Color {
+        if pr.isAutoMergeEnabled {
+            return Color.black.opacity(0.04)
+        }
         if isReady {
             return Color.green.opacity(0.18)
         }
         return Color.black.opacity(0.06)
+    }
+
+    private var mergeProgressTint: Color {
+        isReady ? Color.white : mergeForeground
     }
 
     private var statusIcon: some View {

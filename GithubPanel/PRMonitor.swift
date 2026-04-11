@@ -106,6 +106,7 @@ final class PRMonitor: ObservableObject {
                                           htmlURL: summary.htmlURL,
                                           status: state,
                                           isDraft: pr.isDraft,
+                                          isAutoMergeEnabled: pr.isAutoMergeEnabled,
                                           updatedAt: summary.updatedAt)
                 }
             }
