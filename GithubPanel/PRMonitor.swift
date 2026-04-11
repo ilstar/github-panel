@@ -99,6 +99,7 @@ final class PRMonitor: ObservableObject {
                                                                  number: summary.number)
                     let state = try await self.api.fetchPRCheckState(token: token, pr: pr)
                     return PullRequestRow(id: summary.id,
+                                          nodeID: pr.nodeID,
                                           title: summary.title,
                                           number: summary.number,
                                           repoFullName: summary.repoFullName,
@@ -136,6 +137,19 @@ final class PRMonitor: ObservableObject {
 
         // Remove states for PRs that are no longer in the list.
         lastStates = lastStates.filter { seen.contains($0.key) }
+    }
+
+    func requestMerge(for row: PullRequestRow) async {
+        guard let token = tokenStore.loadToken() else { return }
+        do {
+            do {
+                try await api.enqueuePullRequest(token: token, pullRequestID: row.nodeID)
+            } catch {
+                try await api.enableAutoMerge(token: token, pullRequestID: row.nodeID)
+            }
+        } catch {
+            lastError = error.localizedDescription
+        }
     }
 }
 

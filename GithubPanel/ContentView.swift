@@ -7,6 +7,7 @@ struct ContentView: View {
     @State private var isSaving = false
     @State private var now = Date()
     @State private var selectedPRID: String?
+    @State private var mergeInFlight: Set<String> = []
     private let minuteTicker = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
     private let relativeFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
@@ -21,6 +22,7 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 18) {
                 if !monitor.hasToken {
                     tokenCallout
+
                 }
 
                 prSection
@@ -103,7 +105,11 @@ struct ContentView: View {
                                         pr: pr,
                                         isSelected: selectedPRID == pr.id,
                                         relativeFormatter: relativeFormatter,
-                                        now: now
+                                        now: now,
+                                        isMerging: mergeInFlight.contains(pr.id),
+                                        onMerge: {
+                                            merge(pr: pr)
+                                        }
                                     )
                                     .id(pr.id)
                                     .onTapGesture {
@@ -202,6 +208,17 @@ struct ContentView: View {
         }
     }
 
+    private func merge(pr: PullRequestRow) {
+        if mergeInFlight.contains(pr.id) { return }
+        mergeInFlight.insert(pr.id)
+        Task {
+            await monitor.requestMerge(for: pr)
+            await MainActor.run {
+                mergeInFlight.remove(pr.id)
+            }
+        }
+    }
+
     private func handleKeyEvent(_ event: NSEvent) -> Bool {
         switch event.keyCode {
         case 125: // down arrow
@@ -238,6 +255,8 @@ private struct PRRow: View {
     let isSelected: Bool
     let relativeFormatter: RelativeDateTimeFormatter
     let now: Date
+    let isMerging: Bool
+    let onMerge: () -> Void
 
     @State private var isHovering = false
 
@@ -266,6 +285,8 @@ private struct PRRow: View {
             }
 
             Spacer(minLength: 0)
+
+            mergeButton
         }
         .padding(14)
         .background(
@@ -281,6 +302,30 @@ private struct PRRow: View {
         .onHover { hovering in
             isHovering = hovering
         }
+    }
+
+    private var isReady: Bool {
+        pr.status == .success && !pr.isDraft
+    }
+
+    private var mergeButton: some View {
+        Button(action: onMerge) {
+            Text(isReady ? "Merge" : "Merge when ready")
+                .font(.caption.weight(.semibold))
+                .frame(width: 140, height: 26)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(isReady ? Color.green.opacity(0.16) : Color.gray.opacity(0.18))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(isReady ? Color.green.opacity(0.35) : Color.gray.opacity(0.35), lineWidth: 1)
+                )
+                .foregroundStyle(isReady ? Color.green : Color.secondary)
+        }
+        .buttonStyle(.plain)
+        .disabled(isMerging)
+        .opacity(isMerging ? 0.6 : 1)
     }
 
     private var statusIcon: some View {
