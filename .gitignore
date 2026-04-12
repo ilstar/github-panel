@@ -1,1 +1,33 @@
+# macOS
+.DS_Store
+
+# Xcode
 build/
+DerivedData/
+*.xcuserstate
+*.xcscmblueprint
+*.moved-aside
+*.xccheckout
+*.xcuserdatad/
+xcuserdata/
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# Swift/Xcode generated files
+*.swiftmodule
+*.swiftdoc
+*.swiftsourceinfo
+
+# App archives and exports
+*.xcarchive
+*.ipa
+*.dSYM
+*.dSYM.zip
+
+# Local editor files
+.vscode/
+.idea/
+*.swp
+*.swo
