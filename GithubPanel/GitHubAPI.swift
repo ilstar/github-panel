@@ -1,5 +1,22 @@
 import Foundation
 
+protocol GitHubAPIClient {
+    func fetchCurrentUser(token: String) async throws -> GitHubUser
+    func fetchOpenPRs(token: String, username: String) async throws -> [PullRequestSummary]
+    func fetchPullRequest(token: String, repoFullName: String, number: Int) async throws -> PullRequestInfo
+    func fetchPRCheckState(token: String, pr: PullRequestInfo) async throws -> CheckState
+    func enqueuePullRequest(token: String, pullRequestID: String) async throws
+    func enableAutoMerge(token: String, pullRequestID: String) async throws
+    func disableAutoMerge(token: String, pullRequestID: String) async throws
+    func mergePullRequest(token: String, repoFullName: String, number: Int) async throws -> Bool
+}
+
+protocol HTTPTransport {
+    func data(for request: URLRequest) async throws -> (Data, URLResponse)
+}
+
+extension URLSession: HTTPTransport {}
+
 struct GitHubUser: Decodable {
     let login: String
 }
@@ -90,7 +107,13 @@ enum CheckState: String {
     }
 }
 
-final class GitHubAPI {
+final class GitHubAPI: GitHubAPIClient {
+    private let transport: HTTPTransport
+
+    init(transport: HTTPTransport = URLSession.shared) {
+        self.transport = transport
+    }
+
     func fetchCurrentUser(token: String) async throws -> GitHubUser {
         let request = makeRequest(path: "/user", token: token)
         return try await decode(GitHubUser.self, request: request)
@@ -224,7 +247,7 @@ final class GitHubAPI {
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.httpBody = try JSONSerialization.data(withJSONObject: ["merge_method": "merge"])
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await transport.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }
@@ -249,7 +272,7 @@ final class GitHubAPI {
     }
 
     private func decode<T: Decodable>(_ type: T.Type, request: URLRequest) async throws -> T {
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await transport.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }
@@ -277,7 +300,7 @@ final class GitHubAPI {
         let body: [String: Any] = ["query": query, "variables": variables]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await transport.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }

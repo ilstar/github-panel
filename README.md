@@ -30,6 +30,17 @@ xcodebuild \
   build
 ```
 
+Run the unit tests with:
+
+```bash
+xcodebuild \
+  -project GithubPanel.xcodeproj \
+  -scheme GithubPanel \
+  -configuration Debug \
+  -derivedDataPath build/DerivedData \
+  test
+```
+
 The debug app is created at:
 
 ```bash

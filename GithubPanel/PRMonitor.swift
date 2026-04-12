@@ -1,6 +1,45 @@
 import Foundation
 import Combine
 
+protocol DefaultsStoring {
+    func double(forKey defaultName: String) -> Double
+    func set(_ value: Double, forKey defaultName: String)
+}
+
+extension UserDefaults: DefaultsStoring {}
+
+protocol DateProviding {
+    var now: Date { get }
+}
+
+struct SystemDateProvider: DateProviding {
+    var now: Date { Date() }
+}
+
+protocol RefreshTimer {
+    func invalidate()
+}
+
+extension Timer: RefreshTimer {}
+
+protocol TimerScheduling {
+    func scheduledTimer(withTimeInterval interval: TimeInterval,
+                        repeats: Bool,
+                        block: @escaping @MainActor () -> Void) -> RefreshTimer
+}
+
+struct SystemTimerScheduler: TimerScheduling {
+    func scheduledTimer(withTimeInterval interval: TimeInterval,
+                        repeats: Bool,
+                        block: @escaping @MainActor () -> Void) -> RefreshTimer {
+        Timer.scheduledTimer(withTimeInterval: interval, repeats: repeats) { _ in
+            Task { @MainActor in
+                block()
+            }
+        }
+    }
+}
+
 @MainActor
 final class PRMonitor: ObservableObject {
     @Published var prRows: [PullRequestRow] = []
@@ -15,18 +54,32 @@ final class PRMonitor: ObservableObject {
         }
     }
 
-    private let api = GitHubAPI()
-    private let tokenStore = KeychainStore()
-    private var timer: Timer?
+    private let api: GitHubAPIClient
+    private let tokenStore: TokenStoring
+    private let notificationPoster: NotificationPosting
+    private let defaults: DefaultsStoring
+    private let timerScheduler: TimerScheduling
+    private let dateProvider: DateProviding
+    private var timer: RefreshTimer?
     private var lastStates: [String: CheckState] = [:]
-    private let defaults = UserDefaults.standard
     private let relativeFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .short
         return formatter
     }()
 
-    init() {
+    init(api: GitHubAPIClient = GitHubAPI(),
+         tokenStore: TokenStoring = KeychainStore(),
+         notificationPoster: NotificationPosting = NotificationManager.shared,
+         defaults: DefaultsStoring = UserDefaults.standard,
+         timerScheduler: TimerScheduling = SystemTimerScheduler(),
+         dateProvider: DateProviding = SystemDateProvider()) {
+        self.api = api
+        self.tokenStore = tokenStore
+        self.notificationPoster = notificationPoster
+        self.defaults = defaults
+        self.timerScheduler = timerScheduler
+        self.dateProvider = dateProvider
         let stored = defaults.double(forKey: DefaultsKeys.refreshInterval)
         if stored == 0 {
             refreshInterval = 60
@@ -63,28 +116,32 @@ final class PRMonitor: ObservableObject {
 
     func scheduleTimer() {
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { [weak self] _ in
+        timer = timerScheduler.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { [weak self] in
             self?.refresh()
         }
     }
 
     private func refresh() {
+        Task {
+            await refreshNow()
+        }
+    }
+
+    func refreshNow() async {
         guard let token = tokenStore.loadToken() else { return }
         isLoading = true
         lastError = nil
-        Task {
-            do {
-                let user = try await api.fetchCurrentUser(token: token)
-                let summaries = try await api.fetchOpenPRs(token: token, username: user.login)
-                prRows = try await buildRows(token: token, summaries: summaries)
-                updateNotificationsForRows()
-                lastRefreshAt = Date()
-            } catch {
-                prRows = []
-                lastError = error.localizedDescription
-            }
-            isLoading = false
+        do {
+            let user = try await api.fetchCurrentUser(token: token)
+            let summaries = try await api.fetchOpenPRs(token: token, username: user.login)
+            prRows = try await buildRows(token: token, summaries: summaries)
+            updateNotificationsForRows()
+            lastRefreshAt = dateProvider.now
+        } catch {
+            prRows = []
+            lastError = error.localizedDescription
         }
+        isLoading = false
     }
 
     private func buildRows(token: String, summaries: [PullRequestSummary]) async throws -> [PullRequestRow] {
@@ -131,11 +188,11 @@ final class PRMonitor: ObservableObject {
             if let previous = lastStates[pr.id],
                previous == .pending,
                pr.status != .pending {
-                NotificationManager.shared.postStatusNotification(state: pr.status,
-                                                                  title: pr.title,
-                                                                  repoFullName: pr.repoFullName,
-                                                                  number: pr.number,
-                                                                  htmlURL: pr.htmlURL)
+                notificationPoster.postStatusNotification(state: pr.status,
+                                                          title: pr.title,
+                                                          repoFullName: pr.repoFullName,
+                                                          number: pr.number,
+                                                          htmlURL: pr.htmlURL)
             }
             lastStates[pr.id] = pr.status
         }
@@ -154,16 +211,14 @@ final class PRMonitor: ObservableObject {
             if row.status == .success && !row.isDraft {
                 if row.isMergeQueueEnabled {
                     try await api.enqueuePullRequest(token: token, pullRequestID: row.nodeID)
-                    refresh()
+                    await refreshNow()
                     return
                 }
 
                 let merged = try await api.mergePullRequest(token: token, repoFullName: row.repoFullName, number: row.number)
                 if merged {
-                    await MainActor.run {
-                        prRows.removeAll { $0.id == row.id }
-                        lastStates.removeValue(forKey: row.id)
-                    }
+                    prRows.removeAll { $0.id == row.id }
+                    lastStates.removeValue(forKey: row.id)
                 }
                 return
             }
@@ -171,13 +226,13 @@ final class PRMonitor: ObservableObject {
             if row.isAutoMergeEnabled {
                 guard row.canDisableAutoMerge else { return }
                 try await api.disableAutoMerge(token: token, pullRequestID: row.nodeID)
-                refresh()
+                await refreshNow()
                 return
             }
 
             guard row.canEnableAutoMerge else { return }
             try await api.enableAutoMerge(token: token, pullRequestID: row.nodeID)
-            refresh()
+            await refreshNow()
         } catch {
             lastError = error.localizedDescription
         }
