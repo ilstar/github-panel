@@ -269,6 +269,7 @@ private struct PRRow: View {
                 Text(pr.title)
                     .font(.headline.weight(.semibold))
                     .lineLimit(1)
+                    .help(pr.title)
 
                 Text("\(pr.repoFullName)#\(String(pr.number)) · \(pr.status.descriptionText)")
                     .font(.caption)
