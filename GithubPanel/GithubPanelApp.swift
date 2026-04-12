@@ -7,9 +7,11 @@ struct GithubPanelApp: App {
     @StateObject private var monitor = PRMonitor()
 
     init() {
-        NotificationManager.shared.configure()
-        KeyboardShortcuts.onKeyUp(for: .toggleApp) {
-            AppVisibility.toggle()
+        if !ProcessInfo.processInfo.isRunningTests {
+            NotificationManager.shared.configure()
+            KeyboardShortcuts.onKeyUp(for: .toggleApp) {
+                AppVisibility.toggle()
+            }
         }
     }
 
@@ -22,5 +24,11 @@ struct GithubPanelApp: App {
             SettingsView()
                 .environmentObject(monitor)
         }
+    }
+}
+
+private extension ProcessInfo {
+    var isRunningTests: Bool {
+        environment["XCTestConfigurationFilePath"] != nil
     }
 }

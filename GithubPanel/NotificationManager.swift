@@ -2,7 +2,15 @@ import Foundation
 import UserNotifications
 import AppKit
 
-final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
+protocol NotificationPosting {
+    func postStatusNotification(state: CheckState,
+                                title: String,
+                                repoFullName: String,
+                                number: Int,
+                                htmlURL: URL)
+}
+
+final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, NotificationPosting {
     static let shared = NotificationManager()
 
     func configure() {
