@@ -13,7 +13,13 @@ struct PullRequestInfo: Identifiable {
     let htmlURL: URL
     let headSHA: String
     let isDraft: Bool
+    let status: CheckState
     let isAutoMergeEnabled: Bool
+    let canEnableAutoMerge: Bool
+    let canDisableAutoMerge: Bool
+    let isMergeQueueEnabled: Bool
+    let isInMergeQueue: Bool
+    let mergeStateStatus: String
 }
 
 struct PullRequestSummary: Identifiable {
@@ -35,6 +41,11 @@ struct PullRequestRow: Identifiable {
     let status: CheckState
     let isDraft: Bool
     let isAutoMergeEnabled: Bool
+    let canEnableAutoMerge: Bool
+    let canDisableAutoMerge: Bool
+    let isMergeQueueEnabled: Bool
+    let isInMergeQueue: Bool
+    let mergeStateStatus: String
     let updatedAt: Date
 }
 
@@ -44,6 +55,21 @@ enum CheckState: String {
     case error
     case pending
     case unknown
+
+    init(githubStatus: String?) {
+        switch githubStatus {
+        case "SUCCESS", nil:
+            self = .success
+        case "FAILURE":
+            self = .failure
+        case "ERROR":
+            self = .error
+        case "PENDING", "EXPECTED":
+            self = .pending
+        default:
+            self = .unknown
+        }
+    }
 
     var emoji: String {
         switch self {
@@ -89,16 +115,53 @@ final class GitHubAPI {
     }
 
     func fetchPullRequest(token: String, repoFullName: String, number: Int) async throws -> PullRequestInfo {
-        let prRequest = makeRequest(path: "/repos/\(repoFullName)/pulls/\(number)", token: token)
-        let pr = try await decode(PullResponse.self, request: prRequest)
-        return PullRequestInfo(nodeID: pr.nodeID,
+        let parts = repoFullName.split(separator: "/", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { throw URLError(.badURL) }
+
+        let query = """
+        query($owner: String!, $name: String!, $number: Int!) {
+          repository(owner: $owner, name: $name) {
+            pullRequest(number: $number) {
+              id
+              title
+              number
+              url
+              headRefOid
+              isDraft
+              autoMergeRequest { enabledAt }
+              viewerCanEnableAutoMerge
+              viewerCanDisableAutoMerge
+              isMergeQueueEnabled
+              isInMergeQueue
+              mergeStateStatus
+              statusCheckRollup { state }
+            }
+          }
+        }
+        """
+
+        let response = try await graphQL(PullRequestDetailResponse.self,
+                                         query: query,
+                                         variables: ["owner": parts[0], "name": parts[1], "number": number],
+                                         token: token)
+        guard let pr = response.repository?.pullRequest else {
+            throw GraphQLError(message: "Pull request not found.")
+        }
+
+        return PullRequestInfo(nodeID: pr.id,
                                title: pr.title,
                                number: pr.number,
                                repoFullName: repoFullName,
-                               htmlURL: pr.htmlURL,
-                               headSHA: pr.head.sha,
-                               isDraft: pr.draft,
-                               isAutoMergeEnabled: pr.autoMerge != nil)
+                               htmlURL: pr.url,
+                               headSHA: pr.headRefOid,
+                               isDraft: pr.isDraft,
+                               status: CheckState(githubStatus: pr.statusCheckRollup?.state),
+                               isAutoMergeEnabled: pr.autoMergeRequest != nil,
+                               canEnableAutoMerge: pr.viewerCanEnableAutoMerge,
+                               canDisableAutoMerge: pr.viewerCanDisableAutoMerge,
+                               isMergeQueueEnabled: pr.isMergeQueueEnabled,
+                               isInMergeQueue: pr.isInMergeQueue,
+                               mergeStateStatus: pr.mergeStateStatus)
     }
 
     func fetchPRCheckState(token: String, pr: PullRequestInfo) async throws -> CheckState {
@@ -135,6 +198,20 @@ final class GitHubAPI {
         """
         struct Response: Decodable { let enablePullRequestAutoMerge: EnableResult? }
         struct EnableResult: Decodable { let pullRequest: PullRequestNode }
+        struct PullRequestNode: Decodable { let id: String }
+        _ = try await graphQL(Response.self, query: query, variables: ["id": pullRequestID], token: token)
+    }
+
+    func disableAutoMerge(token: String, pullRequestID: String) async throws {
+        let query = """
+        mutation($id: ID!) {
+          disablePullRequestAutoMerge(input: { pullRequestId: $id }) {
+            pullRequest { id }
+          }
+        }
+        """
+        struct Response: Decodable { let disablePullRequestAutoMerge: DisableResult? }
+        struct DisableResult: Decodable { let pullRequest: PullRequestNode }
         struct PullRequestNode: Decodable { let id: String }
         _ = try await graphQL(Response.self, query: query, variables: ["id": pullRequestID], token: token)
     }
@@ -268,6 +345,34 @@ private struct SearchItem: Decodable {
         case htmlURL = "html_url"
         case updatedAt = "updated_at"
     }
+}
+
+private struct PullRequestDetailResponse: Decodable {
+    let repository: PullRequestRepository?
+}
+
+private struct PullRequestRepository: Decodable {
+    let pullRequest: PullRequestNode?
+}
+
+private struct PullRequestNode: Decodable {
+    let id: String
+    let title: String
+    let number: Int
+    let url: URL
+    let headRefOid: String
+    let isDraft: Bool
+    let autoMergeRequest: AutoMergeRequest?
+    let viewerCanEnableAutoMerge: Bool
+    let viewerCanDisableAutoMerge: Bool
+    let isMergeQueueEnabled: Bool
+    let isInMergeQueue: Bool
+    let mergeStateStatus: String
+    let statusCheckRollup: StatusCheckRollup?
+}
+
+private struct StatusCheckRollup: Decodable {
+    let state: String
 }
 
 private struct PullResponse: Decodable {

@@ -309,10 +309,32 @@ private struct PRRow: View {
         pr.status == .success && !pr.isDraft
     }
 
+    private var mergeButtonState: MergeButtonState {
+        if isMerging {
+            return .working
+        }
+        if pr.status == .failure || pr.status == .error {
+            return .checksFailed
+        }
+        if pr.isInMergeQueue {
+            return .queued
+        }
+        if isReady {
+            return .merge
+        }
+        if pr.isAutoMergeEnabled {
+            return .disableAutoMerge
+        }
+        if pr.canEnableAutoMerge {
+            return .enableAutoMerge
+        }
+        return .waitingForChecks
+    }
+
     private var mergeButton: some View {
         Button(action: handleMergeButtonClick) {
             HStack(spacing: 6) {
-                if isMerging {
+                if mergeButtonState == .working {
                     ProgressView()
                         .controlSize(.small)
                         .tint(mergeProgressTint)
@@ -328,7 +350,7 @@ private struct PRRow: View {
                     .font(.caption.weight(.bold))
                     .lineLimit(1)
             }
-            .frame(width: 150, height: 30)
+            .frame(width: 168, height: 30)
             .foregroundStyle(mergeForeground)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -343,80 +365,99 @@ private struct PRRow: View {
             .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
-        .disabled(isMerging)
-        .opacity(isMerging ? 0.75 : 1)
+        .disabled(mergeButtonState == .working)
+        .opacity(mergeButtonState == .working ? 0.75 : 1)
         .animation(.easeInOut(duration: 0.12), value: isMergeButtonHovering)
         .onHover { hovering in
-            isMergeButtonHovering = hovering && !isMerging
+            isMergeButtonHovering = hovering && mergeButtonState.hasHoverEffect
         }
     }
 
     private func handleMergeButtonClick() {
-        guard !pr.isAutoMergeEnabled else { return }
+        guard mergeButtonState.isClickable else { return }
         onMerge()
     }
 
     private var mergeButtonTitle: String {
-        if isMerging {
-            return "Merging..."
-        }
-        if pr.isAutoMergeEnabled {
-            return "auto-merge"
-        }
-        return isReady ? "Merge" : "Merge when ready"
+        mergeButtonState.title
     }
 
     private var mergeIconName: String {
-        if pr.isAutoMergeEnabled {
-            return "checkmark.circle"
-        }
-        return isReady ? "checkmark" : "clock"
+        mergeButtonState.iconName
     }
 
     private var mergeFill: Color {
-        if pr.isAutoMergeEnabled {
+        switch mergeButtonState {
+        case .disableAutoMerge:
             return isMergeButtonHovering
-                ? Color(red: 0.94, green: 0.99, blue: 0.96)
-                : Color.white
-        }
-        if isReady {
+                ? Color(red: 1.0, green: 0.95, blue: 0.94)
+                : Color(red: 1.0, green: 0.98, blue: 0.97)
+        case .merge:
             return isMergeButtonHovering
                 ? Color(red: 0.16, green: 0.56, blue: 0.29)
                 : Color(red: 0.13, green: 0.49, blue: 0.25)
+        case .enableAutoMerge:
+            return isMergeButtonHovering
+                ? Color(red: 0.91, green: 0.96, blue: 1.0)
+                : Color(red: 0.95, green: 0.98, blue: 1.0)
+        case .queued:
+            return isMergeButtonHovering
+                ? Color(red: 0.94, green: 0.99, blue: 0.96)
+                : Color.white
+        case .checksFailed:
+            return Color(red: 1.0, green: 0.96, blue: 0.96)
+        case .waitingForChecks, .working:
+            return Color.white
         }
-        return isMergeButtonHovering
-            ? Color(red: 0.91, green: 0.96, blue: 1.0)
-            : Color(red: 0.95, green: 0.98, blue: 1.0)
     }
 
     private var mergeForeground: Color {
-        if pr.isAutoMergeEnabled {
-            return Color(red: 0.10, green: 0.43, blue: 0.24)
-        }
-        if isReady {
+        switch mergeButtonState {
+        case .merge:
             return Color.white
+        case .disableAutoMerge:
+            return Color(red: 0.58, green: 0.18, blue: 0.14)
+        case .enableAutoMerge:
+            return Color(red: 0.14, green: 0.36, blue: 0.62)
+        case .queued:
+            return Color(red: 0.10, green: 0.43, blue: 0.24)
+        case .checksFailed:
+            return Color(red: 0.72, green: 0.16, blue: 0.16)
+        case .waitingForChecks, .working:
+            return Color.secondary
         }
-        return Color(red: 0.14, green: 0.36, blue: 0.62)
     }
 
     private var mergeStroke: Color {
-        if pr.isAutoMergeEnabled {
-            return Color(red: 0.30, green: 0.63, blue: 0.42).opacity(isMergeButtonHovering ? 0.55 : 0.32)
-        }
-        if isReady {
+        switch mergeButtonState {
+        case .disableAutoMerge:
+            return Color(red: 0.78, green: 0.34, blue: 0.28).opacity(isMergeButtonHovering ? 0.64 : 0.38)
+        case .merge:
             return Color(red: 0.06, green: 0.38, blue: 0.16).opacity(isMergeButtonHovering ? 0.62 : 0.45)
+        case .enableAutoMerge:
+            return Color(red: 0.50, green: 0.68, blue: 0.86).opacity(isMergeButtonHovering ? 0.68 : 0.45)
+        case .queued:
+            return Color(red: 0.30, green: 0.63, blue: 0.42).opacity(isMergeButtonHovering ? 0.55 : 0.32)
+        case .checksFailed:
+            return Color(red: 0.78, green: 0.22, blue: 0.20).opacity(0.34)
+        case .waitingForChecks, .working:
+            return Color.black.opacity(0.12)
         }
-        return Color(red: 0.50, green: 0.68, blue: 0.86).opacity(isMergeButtonHovering ? 0.68 : 0.45)
     }
 
     private var mergeShadow: Color {
-        if pr.isAutoMergeEnabled {
-            return Color.green.opacity(isMergeButtonHovering ? 0.14 : 0.07)
-        }
-        if isReady {
+        switch mergeButtonState {
+        case .disableAutoMerge:
+            return Color.red.opacity(isMergeButtonHovering ? 0.13 : 0.06)
+        case .merge:
             return Color.green.opacity(isMergeButtonHovering ? 0.26 : 0.18)
+        case .enableAutoMerge:
+            return Color.black.opacity(isMergeButtonHovering ? 0.10 : 0.06)
+        case .queued:
+            return Color.green.opacity(isMergeButtonHovering ? 0.14 : 0.07)
+        case .checksFailed, .waitingForChecks, .working:
+            return Color.black.opacity(0.04)
         }
-        return Color.black.opacity(isMergeButtonHovering ? 0.10 : 0.06)
     }
 
     private var mergeProgressTint: Color {
@@ -458,6 +499,72 @@ private struct PRRow: View {
             )
         }
         return AnyShapeStyle(Color.white.opacity(isHovering ? 0.95 : 0.9))
+    }
+}
+
+private enum MergeButtonState {
+    case merge
+    case enableAutoMerge
+    case disableAutoMerge
+    case queued
+    case checksFailed
+    case waitingForChecks
+    case working
+
+    var title: String {
+        switch self {
+        case .merge:
+            return "Merge"
+        case .enableAutoMerge:
+            return "Enable auto-merge"
+        case .disableAutoMerge:
+            return "Disable auto-merge"
+        case .queued:
+            return "Queued"
+        case .checksFailed:
+            return "Checks failed"
+        case .waitingForChecks:
+            return "Waiting for checks"
+        case .working:
+            return "Working..."
+        }
+    }
+
+    var iconName: String {
+        switch self {
+        case .merge:
+            return "checkmark"
+        case .enableAutoMerge:
+            return "bolt"
+        case .disableAutoMerge:
+            return "xmark"
+        case .queued:
+            return "checkmark.circle"
+        case .checksFailed:
+            return "xmark"
+        case .waitingForChecks:
+            return "clock"
+        case .working:
+            return "clock"
+        }
+    }
+
+    var isClickable: Bool {
+        switch self {
+        case .merge, .enableAutoMerge, .disableAutoMerge:
+            return true
+        case .queued, .checksFailed, .waitingForChecks, .working:
+            return false
+        }
+    }
+
+    var hasHoverEffect: Bool {
+        switch self {
+        case .merge, .enableAutoMerge, .disableAutoMerge, .queued:
+            return true
+        case .checksFailed, .waitingForChecks, .working:
+            return false
+        }
     }
 }
 
