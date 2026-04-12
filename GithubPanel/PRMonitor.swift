@@ -97,15 +97,20 @@ final class PRMonitor: ObservableObject {
                     let pr = try await self.api.fetchPullRequest(token: token,
                                                                  repoFullName: summary.repoFullName,
                                                                  number: summary.number)
-                    let state = try await self.api.fetchPRCheckState(token: token, pr: pr)
                     return PullRequestRow(id: summary.id,
                                           nodeID: pr.nodeID,
                                           title: summary.title,
                                           number: summary.number,
                                           repoFullName: summary.repoFullName,
                                           htmlURL: summary.htmlURL,
-                                          status: state,
+                                          status: pr.status,
                                           isDraft: pr.isDraft,
+                                          isAutoMergeEnabled: pr.isAutoMergeEnabled,
+                                          canEnableAutoMerge: pr.canEnableAutoMerge,
+                                          canDisableAutoMerge: pr.canDisableAutoMerge,
+                                          isMergeQueueEnabled: pr.isMergeQueueEnabled,
+                                          isInMergeQueue: pr.isInMergeQueue,
+                                          mergeStateStatus: pr.mergeStateStatus,
                                           updatedAt: summary.updatedAt)
                 }
             }
@@ -142,32 +147,39 @@ final class PRMonitor: ObservableObject {
     func requestMerge(for row: PullRequestRow) async {
         guard let token = tokenStore.loadToken() else { return }
         do {
-            if row.status == .success && !row.isDraft {
-                do {
-                    let merged = try await api.mergePullRequest(token: token, repoFullName: row.repoFullName, number: row.number)
-                    if merged {
-                        await MainActor.run {
-                            prRows.removeAll { $0.id == row.id }
-                            lastStates.removeValue(forKey: row.id)
-                        }
-                        return
-                    }
-                } catch {
-                    try await fallbackQueueOrAutomerge(token: token, row: row, error: error)
-                }
-            } else {
-                try await fallbackQueueOrAutomerge(token: token, row: row, error: nil)
+            if row.isInMergeQueue || row.status == .failure || row.status == .error {
+                return
             }
+
+            if row.status == .success && !row.isDraft {
+                if row.isMergeQueueEnabled {
+                    try await api.enqueuePullRequest(token: token, pullRequestID: row.nodeID)
+                    refresh()
+                    return
+                }
+
+                let merged = try await api.mergePullRequest(token: token, repoFullName: row.repoFullName, number: row.number)
+                if merged {
+                    await MainActor.run {
+                        prRows.removeAll { $0.id == row.id }
+                        lastStates.removeValue(forKey: row.id)
+                    }
+                }
+                return
+            }
+
+            if row.isAutoMergeEnabled {
+                guard row.canDisableAutoMerge else { return }
+                try await api.disableAutoMerge(token: token, pullRequestID: row.nodeID)
+                refresh()
+                return
+            }
+
+            guard row.canEnableAutoMerge else { return }
+            try await api.enableAutoMerge(token: token, pullRequestID: row.nodeID)
+            refresh()
         } catch {
             lastError = error.localizedDescription
-        }
-    }
-
-    private func fallbackQueueOrAutomerge(token: String, row: PullRequestRow, error: Error?) async throws {
-        do {
-            try await api.enableAutoMerge(token: token, pullRequestID: row.nodeID)
-        } catch {
-            try await api.enqueuePullRequest(token: token, pullRequestID: row.nodeID)
         }
     }
 }
