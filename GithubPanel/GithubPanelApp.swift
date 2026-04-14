@@ -16,9 +16,7 @@ struct GithubPanelApp: App {
                 AppVisibility.toggle()
             }
             KeyboardShortcuts.onKeyUp(for: .refreshPullRequests) {
-                Task { @MainActor in
-                    await monitor.refreshNow()
-                }
+                Self.refreshPullRequests(using: monitor)
             }
         }
     }
@@ -31,6 +29,15 @@ struct GithubPanelApp: App {
         Settings {
             SettingsView()
                 .environmentObject(monitor)
+        }
+        .commands {
+            CommandMenu("Pull Requests") {
+                Button("Refresh Pull Requests") {
+                    Self.refreshPullRequests(using: monitor)
+                }
+                .globalKeyboardShortcut(.refreshPullRequests)
+                .disabled(!monitor.hasToken || monitor.isLoading)
+            }
         }
     }
 
@@ -45,6 +52,12 @@ struct GithubPanelApp: App {
         #endif
 
         return PRMonitor()
+    }
+
+    private static func refreshPullRequests(using monitor: PRMonitor) {
+        Task { @MainActor in
+            await monitor.refreshNow()
+        }
     }
 }
 
