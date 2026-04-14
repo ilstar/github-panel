@@ -391,8 +391,8 @@ private struct PRRow: View {
         switch mergeButtonState {
         case .disableAutoMerge:
             return isMergeButtonHovering
-                ? Color(red: 1.0, green: 0.95, blue: 0.94)
-                : Color(red: 1.0, green: 0.98, blue: 0.97)
+                ? Color(red: 0.91, green: 0.96, blue: 1.0)
+                : Color(red: 0.95, green: 0.98, blue: 1.0)
         case .merge:
             return isMergeButtonHovering
                 ? Color(red: 0.16, green: 0.56, blue: 0.29)
@@ -417,7 +417,7 @@ private struct PRRow: View {
         case .merge:
             return Color.white
         case .disableAutoMerge:
-            return Color(red: 0.58, green: 0.18, blue: 0.14)
+            return Color(red: 0.14, green: 0.36, blue: 0.62)
         case .enableAutoMerge:
             return Color(red: 0.14, green: 0.36, blue: 0.62)
         case .queued:
@@ -432,7 +432,7 @@ private struct PRRow: View {
     private var mergeStroke: Color {
         switch mergeButtonState {
         case .disableAutoMerge:
-            return Color(red: 0.78, green: 0.34, blue: 0.28).opacity(isMergeButtonHovering ? 0.64 : 0.38)
+            return Color(red: 0.50, green: 0.68, blue: 0.86).opacity(isMergeButtonHovering ? 0.68 : 0.45)
         case .merge:
             return Color(red: 0.06, green: 0.38, blue: 0.16).opacity(isMergeButtonHovering ? 0.62 : 0.45)
         case .enableAutoMerge:
@@ -449,7 +449,7 @@ private struct PRRow: View {
     private var mergeShadow: Color {
         switch mergeButtonState {
         case .disableAutoMerge:
-            return Color.red.opacity(isMergeButtonHovering ? 0.13 : 0.06)
+            return Color.black.opacity(isMergeButtonHovering ? 0.10 : 0.06)
         case .merge:
             return Color.green.opacity(isMergeButtonHovering ? 0.26 : 0.18)
         case .enableAutoMerge:
