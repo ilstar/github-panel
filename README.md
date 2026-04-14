@@ -55,6 +55,28 @@ To run it and see Swift `print(...)` output in the terminal, launch the app bina
 
 Launching with `open GithubPanel.app` works for normal app testing, but `print(...)` output will not usually appear in your current terminal because macOS starts the app separately.
 
+## Mock PR States
+Debug builds can show fixture PRs for visual testing instead of calling GitHub. Build with the command above, then launch with:
+
+```bash
+open -n /Users/fred/Documents/github-panel/build/DerivedData/Build/Products/Debug/GithubPanel.app --args --mock-github-prs
+```
+
+The mock list includes PRs for ready-to-merge, enable auto-merge, disable auto-merge, merge queue, queued, failed, errored, waiting, draft, and unknown states. A `Mock GitHub PRs` banner appears at the top of the app when mock data is active.
+
+To make normal launches of the debug app use mock data:
+
+```bash
+defaults write com.githubpanel.app GithubPanel.useMockGitHubPRs -bool true
+open -n /Users/fred/Documents/github-panel/build/DerivedData/Build/Products/Debug/GithubPanel.app
+```
+
+To turn the persistent mock setting off:
+
+```bash
+defaults delete com.githubpanel.app GithubPanel.useMockGitHubPRs
+```
+
 To clean the command-line build output:
 
 ```bash
