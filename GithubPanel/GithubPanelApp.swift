@@ -7,12 +7,16 @@ struct GithubPanelApp: App {
     @StateObject private var monitor: PRMonitor
 
     init() {
-        _monitor = StateObject(wrappedValue: Self.makeMonitor())
+        let monitor = Self.makeMonitor()
+        _monitor = StateObject(wrappedValue: monitor)
 
         if !ProcessInfo.processInfo.isRunningTests {
             NotificationManager.shared.configure()
             KeyboardShortcuts.onKeyUp(for: .toggleApp) {
                 AppVisibility.toggle()
+            }
+            KeyboardShortcuts.onKeyUp(for: .refreshPullRequests) {
+                Self.refreshPullRequests(using: monitor)
             }
         }
     }
@@ -21,6 +25,15 @@ struct GithubPanelApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(monitor)
+        }
+        .commands {
+            CommandMenu("Pull Requests") {
+                Button("Refresh Pull Requests") {
+                    Self.refreshPullRequests(using: monitor)
+                }
+                .globalKeyboardShortcut(.refreshPullRequests)
+                .disabled(!monitor.hasToken || monitor.isLoading)
+            }
         }
         Settings {
             SettingsView()
@@ -39,6 +52,12 @@ struct GithubPanelApp: App {
         #endif
 
         return PRMonitor()
+    }
+
+    private static func refreshPullRequests(using monitor: PRMonitor) {
+        Task { @MainActor in
+            await monitor.refreshNow()
+        }
     }
 }
 
