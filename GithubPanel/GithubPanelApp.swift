@@ -26,10 +26,6 @@ struct GithubPanelApp: App {
             ContentView()
                 .environmentObject(monitor)
         }
-        Settings {
-            SettingsView()
-                .environmentObject(monitor)
-        }
         .commands {
             CommandMenu("Pull Requests") {
                 Button("Refresh Pull Requests") {
@@ -38,6 +34,10 @@ struct GithubPanelApp: App {
                 .globalKeyboardShortcut(.refreshPullRequests)
                 .disabled(!monitor.hasToken || monitor.isLoading)
             }
+        }
+        Settings {
+            SettingsView()
+                .environmentObject(monitor)
         }
     }
 
