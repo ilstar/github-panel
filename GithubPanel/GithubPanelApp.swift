@@ -7,12 +7,18 @@ struct GithubPanelApp: App {
     @StateObject private var monitor: PRMonitor
 
     init() {
-        _monitor = StateObject(wrappedValue: Self.makeMonitor())
+        let monitor = Self.makeMonitor()
+        _monitor = StateObject(wrappedValue: monitor)
 
         if !ProcessInfo.processInfo.isRunningTests {
             NotificationManager.shared.configure()
             KeyboardShortcuts.onKeyUp(for: .toggleApp) {
                 AppVisibility.toggle()
+            }
+            KeyboardShortcuts.onKeyUp(for: .refreshPullRequests) {
+                Task { @MainActor in
+                    await monitor.refreshNow()
+                }
             }
         }
     }
