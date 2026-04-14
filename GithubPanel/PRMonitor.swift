@@ -47,6 +47,7 @@ final class PRMonitor: ObservableObject {
     @Published var hasToken: Bool = false
     @Published var lastError: String?
     @Published var lastRefreshAt: Date?
+    let isUsingMockData: Bool
     @Published var refreshInterval: TimeInterval {
         didSet {
             defaults.set(refreshInterval, forKey: DefaultsKeys.refreshInterval)
@@ -73,13 +74,15 @@ final class PRMonitor: ObservableObject {
          notificationPoster: NotificationPosting = NotificationManager.shared,
          defaults: DefaultsStoring = UserDefaults.standard,
          timerScheduler: TimerScheduling = SystemTimerScheduler(),
-         dateProvider: DateProviding = SystemDateProvider()) {
+         dateProvider: DateProviding = SystemDateProvider(),
+         isUsingMockData: Bool = false) {
         self.api = api
         self.tokenStore = tokenStore
         self.notificationPoster = notificationPoster
         self.defaults = defaults
         self.timerScheduler = timerScheduler
         self.dateProvider = dateProvider
+        self.isUsingMockData = isUsingMockData
         let stored = defaults.double(forKey: DefaultsKeys.refreshInterval)
         if stored == 0 {
             refreshInterval = 60

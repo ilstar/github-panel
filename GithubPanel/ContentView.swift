@@ -20,6 +20,10 @@ struct ContentView: View {
             background
 
             VStack(alignment: .leading, spacing: 18) {
+                if monitor.isUsingMockData {
+                    mockDataBanner
+                }
+
                 if !monitor.hasToken {
                     tokenCallout
 
@@ -38,6 +42,22 @@ struct ContentView: View {
         .onReceive(minuteTicker) { tick in
             now = tick
         }
+    }
+
+    private var mockDataBanner: some View {
+        Text("Mock GitHub PRs")
+            .font(.caption.weight(.semibold))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color(red: 0.95, green: 0.98, blue: 1.0))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(Color(red: 0.50, green: 0.68, blue: 0.86).opacity(0.45), lineWidth: 1)
+            )
+            .foregroundStyle(Color(red: 0.14, green: 0.36, blue: 0.62))
     }
 
     private var tokenCallout: some View {
