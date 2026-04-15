@@ -8,6 +8,14 @@ final class PRMonitorTests: XCTestCase {
         XCTAssertNotNil(NSImage(named: EmptyPullRequestsBackground.imageName))
     }
 
+    func testEmptyMockGitHubAPIHasNoPullRequests() async throws {
+        let api = MockGitHubAPI(isEmpty: true)
+
+        let summaries = try await api.fetchOpenPRs(token: "token", username: "mock-user")
+
+        XCTAssertTrue(summaries.isEmpty)
+    }
+
     func testInitialRefreshIntervalUsesDefaultOrStoredValue() {
         let defaultMonitor = makeMonitor(defaults: FakeDefaults())
         XCTAssertEqual(defaultMonitor.refreshInterval, 60)
