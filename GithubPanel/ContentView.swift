@@ -327,7 +327,7 @@ private struct PRRow: View {
     }
 
     private var isReady: Bool {
-        pr.status == .success && !pr.isDraft
+        pr.canMergeImmediately
     }
 
     private var mergeButtonState: MergeButtonState {

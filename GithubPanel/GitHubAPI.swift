@@ -64,6 +64,12 @@ struct PullRequestRow: Identifiable {
     let isInMergeQueue: Bool
     let mergeStateStatus: String
     let updatedAt: Date
+
+    var canMergeImmediately: Bool {
+        status == .success
+        && !isDraft
+        && ["CLEAN", "HAS_HOOKS"].contains(mergeStateStatus)
+    }
 }
 
 enum CheckState: String {

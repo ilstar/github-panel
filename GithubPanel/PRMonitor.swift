@@ -211,7 +211,7 @@ final class PRMonitor: ObservableObject {
                 return
             }
 
-            if row.status == .success && !row.isDraft {
+            if row.canMergeImmediately {
                 if row.isMergeQueueEnabled {
                     try await api.enqueuePullRequest(token: token, pullRequestID: row.nodeID)
                     await refreshNow()

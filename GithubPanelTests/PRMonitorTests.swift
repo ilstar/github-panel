@@ -164,6 +164,28 @@ final class PRMonitorTests: XCTestCase {
         XCTAssertEqual(monitor.prRows.first?.isInMergeQueue, true)
     }
 
+    func testBlockedSuccessfulRowEnablesAutoMergeInsteadOfDirectMerge() async {
+        let api = FakeGitHubAPI()
+        api.user = GitHubUser(login: "fred")
+        api.summaries = [summary(number: 1)]
+        api.pullRequests["acme/widgets#1"] = info(number: 1,
+                                                  status: .success,
+                                                  autoMerge: true,
+                                                  canDisableAutoMerge: true,
+                                                  mergeStateStatus: "BLOCKED")
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+        let item = row(number: 1,
+                       status: .success,
+                       canEnableAutoMerge: true,
+                       mergeStateStatus: "BLOCKED")
+
+        await monitor.requestMerge(for: item)
+
+        XCTAssertTrue(api.mergePullRequestCalls.isEmpty)
+        XCTAssertEqual(api.enableCalls, ["node-1"])
+        XCTAssertEqual(monitor.prRows.first?.isAutoMergeEnabled, true)
+    }
+
     func testEnableAutoMergeAndDisableAutoMergeRefresh() async {
         let enableAPI = FakeGitHubAPI()
         enableAPI.user = GitHubUser(login: "fred")
@@ -239,6 +261,7 @@ private final class FakeGitHubAPI: GitHubAPIClient {
     var pullRequests: [String: PullRequestInfo] = [:]
     var error: Error?
     var mergeResult = true
+    private let lock = NSLock()
 
     private(set) var fetchCurrentUserTokens: [String] = []
     private(set) var fetchPullRequestCalls: [(repoFullName: String, number: Int)] = []
@@ -260,8 +283,10 @@ private final class FakeGitHubAPI: GitHubAPIClient {
 
     func fetchPullRequest(token: String, repoFullName: String, number: Int) async throws -> PullRequestInfo {
         if let error { throw error }
-        fetchPullRequestCalls.append((repoFullName, number))
-        return pullRequests["\(repoFullName)#\(number)"] ?? info(number: number, status: .unknown)
+        return lock.withLock {
+            fetchPullRequestCalls.append((repoFullName, number))
+            return pullRequests["\(repoFullName)#\(number)"] ?? info(number: number, status: .unknown)
+        }
     }
 
     func fetchPRCheckState(token: String, pr: PullRequestInfo) async throws -> CheckState {
@@ -397,7 +422,8 @@ private func info(number: Int,
                   canDisableAutoMerge: Bool = false,
                   mergeQueue: Bool = false,
                   inMergeQueue: Bool = false,
-                  isDraft: Bool = false) -> PullRequestInfo {
+                  isDraft: Bool = false,
+                  mergeStateStatus: String = "CLEAN") -> PullRequestInfo {
     PullRequestInfo(nodeID: "node-\(number)",
                     title: "PR \(number)",
                     number: number,
@@ -411,7 +437,7 @@ private func info(number: Int,
                     canDisableAutoMerge: canDisableAutoMerge,
                     isMergeQueueEnabled: mergeQueue,
                     isInMergeQueue: inMergeQueue,
-                    mergeStateStatus: "CLEAN")
+                    mergeStateStatus: mergeStateStatus)
 }
 
 private func row(number: Int,
@@ -421,7 +447,8 @@ private func row(number: Int,
                  canDisableAutoMerge: Bool = false,
                  mergeQueue: Bool = false,
                  inMergeQueue: Bool = false,
-                 isDraft: Bool = false) -> PullRequestRow {
+                 isDraft: Bool = false,
+                 mergeStateStatus: String = "CLEAN") -> PullRequestRow {
     PullRequestRow(id: "acme/widgets#\(number)",
                    nodeID: "node-\(number)",
                    title: "PR \(number)",
@@ -435,6 +462,6 @@ private func row(number: Int,
                    canDisableAutoMerge: canDisableAutoMerge,
                    isMergeQueueEnabled: mergeQueue,
                    isInMergeQueue: inMergeQueue,
-                   mergeStateStatus: "CLEAN",
+                   mergeStateStatus: mergeStateStatus,
                    updatedAt: Date(timeIntervalSince1970: TimeInterval(number)))
 }
