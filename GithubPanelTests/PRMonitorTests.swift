@@ -1,8 +1,13 @@
 import XCTest
+import AppKit
 @testable import GithubPanel
 
 @MainActor
 final class PRMonitorTests: XCTestCase {
+    func testEmptyPullRequestsBackgroundAssetIsAvailable() {
+        XCTAssertNotNil(NSImage(named: EmptyPullRequestsBackground.imageName))
+    }
+
     func testInitialRefreshIntervalUsesDefaultOrStoredValue() {
         let defaultMonitor = makeMonitor(defaults: FakeDefaults())
         XCTAssertEqual(defaultMonitor.refreshInterval, 60)
