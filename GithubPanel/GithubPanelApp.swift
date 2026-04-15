@@ -42,7 +42,7 @@ struct GithubPanelApp: App {
     private static func makeMonitor() -> PRMonitor {
         #if DEBUG
         if ProcessInfo.processInfo.usesMockGitHubPRs {
-            return PRMonitor(api: MockGitHubAPI(),
+            return PRMonitor(api: MockGitHubAPI(isEmpty: ProcessInfo.processInfo.usesEmptyMockGitHubPRs),
                              tokenStore: MockTokenStore(),
                              isUsingMockData: true)
         }
@@ -66,14 +66,20 @@ private extension ProcessInfo {
     #if DEBUG
     var usesMockGitHubPRs: Bool {
         arguments.contains("--mock-github-prs")
+        || usesEmptyMockGitHubPRs
         || environment["GITHUB_PANEL_MOCK_PRS"] == "1"
         || UserDefaults.standard.bool(forKey: "GithubPanel.useMockGitHubPRs")
+    }
+
+    var usesEmptyMockGitHubPRs: Bool {
+        arguments.contains("--mock-empty-github-prs")
+        || environment["GITHUB_PANEL_MOCK_EMPTY_PRS"] == "1"
     }
     #endif
 }
 
 #if DEBUG
-private final class MockTokenStore: TokenStoring {
+final class MockTokenStore: TokenStoring {
     private var token: String? = "mock-github-token"
 
     var hasToken: Bool {
@@ -93,13 +99,13 @@ private final class MockTokenStore: TokenStoring {
     }
 }
 
-private final class MockGitHubAPI: GitHubAPIClient {
+final class MockGitHubAPI: GitHubAPIClient {
     private let user = GitHubUser(login: "mock-user")
     private var pullRequests: [String: PullRequestInfo]
     private let summaries: [PullRequestSummary]
 
-    init(now: Date = Date()) {
-        let rows = Self.makePullRequests(now: now)
+    init(now: Date = Date(), isEmpty: Bool = false) {
+        let rows = isEmpty ? [] : Self.makePullRequests(now: now)
         self.pullRequests = Dictionary(uniqueKeysWithValues: rows.map { ("\($0.repoFullName)#\($0.number)", $0) })
         self.summaries = rows.map {
             PullRequestSummary(id: "\($0.repoFullName)#\($0.number)",

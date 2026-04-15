@@ -1,6 +1,10 @@
 import SwiftUI
 import AppKit
 
+enum EmptyPullRequestsBackground {
+    static let imageName = "NoPullRequestsBackground"
+}
+
 struct ContentView: View {
     @EnvironmentObject private var monitor: PRMonitor
     @State private var tokenInput: String = ""
@@ -118,7 +122,7 @@ struct ContentView: View {
                     ScrollView {
                         LazyVStack(spacing: 10) {
                             if monitor.prRows.isEmpty {
-                                emptyState
+                                emptyStateSpacer
                             } else {
                                 ForEach(monitor.prRows) { pr in
                                     PRRow(
@@ -189,33 +193,36 @@ struct ContentView: View {
         }
     }
 
-    private var emptyState: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("No open pull requests found for your account.")
-                .foregroundStyle(.secondary)
-            Text("Only PRs authored by your GitHub user are shown.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.white.opacity(0.8))
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.black.opacity(0.08), lineWidth: 1)
-        )
+    private var emptyStateSpacer: some View {
+        Color.clear
+            .frame(maxWidth: .infinity, minHeight: 220)
+            .accessibilityHidden(true)
     }
 
     private var background: some View {
-        LinearGradient(colors: [
-            Color.white,
-            Color(red: 0.96, green: 0.96, blue: 0.97)
-        ], startPoint: .top, endPoint: .bottom)
-            .ignoresSafeArea()
+        ZStack {
+            LinearGradient(colors: [
+                Color.white,
+                Color(red: 0.96, green: 0.96, blue: 0.97)
+            ], startPoint: .top, endPoint: .bottom)
+
+            if showsEmptyPullRequestBackground {
+                GeometryReader { proxy in
+                    Image(EmptyPullRequestsBackground.imageName)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                        .clipped()
+                        .accessibilityHidden(true)
+                }
+                .transition(.opacity)
+            }
+        }
+        .ignoresSafeArea()
+    }
+
+    private var showsEmptyPullRequestBackground: Bool {
+        monitor.hasToken && monitor.prRows.isEmpty && monitor.lastError == nil
     }
 
     private func saveToken() {
@@ -234,7 +241,7 @@ struct ContentView: View {
         Task {
             await monitor.requestMerge(for: pr)
             await MainActor.run {
-                mergeInFlight.remove(pr.id)
+                _ = mergeInFlight.remove(pr.id)
             }
         }
     }
