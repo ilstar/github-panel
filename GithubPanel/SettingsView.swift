@@ -80,10 +80,9 @@ struct SettingsView: View {
 
     private var shortcutSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Shortcuts")
+            Text("Shortcut")
                 .font(.headline)
             KeyboardShortcuts.Recorder("Show/Hide App", name: .toggleApp)
-            KeyboardShortcuts.Recorder("Refresh Pull Requests", name: .refreshPullRequests)
         }
     }
 

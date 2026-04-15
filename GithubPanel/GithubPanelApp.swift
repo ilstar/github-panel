@@ -15,9 +15,6 @@ struct GithubPanelApp: App {
             KeyboardShortcuts.onKeyUp(for: .toggleApp) {
                 AppVisibility.toggle()
             }
-            KeyboardShortcuts.onKeyUp(for: .refreshPullRequests) {
-                Self.refreshPullRequests(using: monitor)
-            }
         }
     }
 
@@ -31,7 +28,7 @@ struct GithubPanelApp: App {
                 Button("Refresh Pull Requests") {
                     Self.refreshPullRequests(using: monitor)
                 }
-                .globalKeyboardShortcut(.refreshPullRequests)
+                .keyboardShortcut("r", modifiers: .command)
                 .disabled(!monitor.hasToken || monitor.isLoading)
             }
         }
