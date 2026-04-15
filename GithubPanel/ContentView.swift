@@ -241,7 +241,7 @@ struct ContentView: View {
         Task {
             await monitor.requestMerge(for: pr)
             await MainActor.run {
-                mergeInFlight.remove(pr.id)
+                _ = mergeInFlight.remove(pr.id)
             }
         }
     }
