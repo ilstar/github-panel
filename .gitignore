@@ -32,5 +32,8 @@ xcuserdata/
 *.swp
 *.swo
 
+# Local build settings
+.env.local
+
 # Local tool permissions
 .claude/settings.local.json
