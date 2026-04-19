@@ -2,7 +2,7 @@ PROJECT := GithubPanel.xcodeproj
 SCHEME := GithubPanel
 CONFIGURATION := Debug
 DERIVED_DATA := build/DerivedData
-APP := $(DERIVED_DATA)/Build/Products/$(CONFIGURATION)/GithubPanel.app
+APP := $(CURDIR)/$(DERIVED_DATA)/Build/Products/$(CONFIGURATION)/GithubPanel.app
 
 -include .env
 -include .env.local
@@ -14,7 +14,7 @@ XCODEBUILD_SIGNING_OVERRIDES += CODE_SIGN_IDENTITY="$(GITHUB_PANEL_CODE_SIGN_IDE
 XCODEBUILD_SIGNING_OVERRIDES += CODE_SIGN_STYLE=Automatic
 endif
 
-.PHONY: build test open run mock clean build-and-open
+.PHONY: build test open run mock mock-empty clean build-and-open
 
 build:
 	xcodebuild \
@@ -42,6 +42,9 @@ run:
 
 mock:
 	open -n $(APP) --args --mock-github-prs
+
+mock-empty:
+	open -n $(APP) --args --mock-empty-github-prs
 
 clean:
 	xcodebuild \
