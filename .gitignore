@@ -31,3 +31,6 @@ xcuserdata/
 .idea/
 *.swp
 *.swo
+
+# Local tool permissions
+.claude/settings.local.json

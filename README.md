@@ -14,13 +14,13 @@ Mini macOS app to monitor your active GitHub pull request checks.
 - `public_repo` for public-only.
 
 ## Open in Xcode
-Open `/Users/fred/Documents/github-panel/GithubPanel.xcodeproj` and run the `GithubPanel` target.
+Open `GithubPanel.xcodeproj` and run the `GithubPanel` target.
 
 ## Build from Terminal or VS Code
 You can edit the app in VS Code or another editor and build it with `make`:
 
 ```bash
-cd /Users/fred/Documents/github-panel
+cd github-panel
 make build
 ```
 
@@ -39,7 +39,7 @@ make test
 The debug app is created at:
 
 ```bash
-/Users/fred/Documents/github-panel/build/DerivedData/Build/Products/Debug/GithubPanel.app
+build/DerivedData/Build/Products/Debug/GithubPanel.app
 ```
 
 To run it and see Swift `print(...)` output in the terminal, launch the app binary directly:
@@ -49,6 +49,11 @@ make run
 ```
 
 Launching with `open GithubPanel.app` works for normal app testing, but `print(...)` output will not usually appear in your current terminal because macOS starts the app separately.
+
+## Signing
+The checked-in project is configured for local development builds without a committed Apple Developer Team ID.
+
+For personal development, select your team in Xcode if you want Xcode-managed signing. For release builds, use your own Developer ID signing setup outside the repository.
 
 ## Mock PR States
 Debug builds can show fixture PRs for visual testing instead of calling GitHub. Build with the command above, then launch with:
