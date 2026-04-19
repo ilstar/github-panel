@@ -59,14 +59,14 @@ For personal development, add your Apple Developer Team ID to `.env.local`:
 GITHUB_PANEL_DEVELOPMENT_TEAM = YOUR_TEAM_ID
 ```
 
-Then use the local signed build targets:
+Then use the normal build commands:
 
 ```bash
-make test-local-signed
-make build-and-open-local-signed
+make test
+make build-and-open
 ```
 
-`.env.local` is ignored so your Team ID stays out of Git. For release builds, use your own Developer ID signing setup outside the repository.
+When `.env.local` sets `GITHUB_PANEL_DEVELOPMENT_TEAM`, `make` passes local signing settings to Xcode. Without `.env.local`, builds use the repo's default local signing behavior. `.env.local` is ignored so your Team ID stays out of Git. For release builds, use your own Developer ID signing setup outside the repository.
 
 ## Mock PR States
 Debug builds can show fixture PRs for visual testing instead of calling GitHub. Build with the command above, then launch with:
