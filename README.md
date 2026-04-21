@@ -39,6 +39,31 @@ Run the unit tests with:
 make test
 ```
 
+Create a release DMG with:
+
+```bash
+make dmg VERSION=1.0
+```
+
+The DMG is created at:
+
+```bash
+build/dist/GithubPanel-1.0.dmg
+```
+
+Create or update a GitHub release with the DMG attached:
+
+```bash
+make release VERSION=1.0 RELEASE_NOTES="Release 1.0"
+```
+
+This requires the GitHub CLI to be installed and authenticated with `gh auth login`.
+By default, `make release` uses the tag `v1.0` when `VERSION=1.0`. Override the release metadata when needed:
+
+```bash
+make release VERSION=1.1.0 RELEASE_TAG=v1.1.0 RELEASE_TITLE="GithubPanel 1.1.0" GH_RELEASE_FLAGS="--draft"
+```
+
 The debug app is created at:
 
 ```bash
