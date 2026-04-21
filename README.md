@@ -69,7 +69,43 @@ make test
 make build-and-open
 ```
 
-When `.env.local` sets `GITHUB_PANEL_DEVELOPMENT_TEAM`, `make` passes local signing settings to Xcode. Without `.env.local`, builds use the repo's default local signing behavior. `.env.local` is ignored so your Team ID stays out of Git. For release builds, use your own Developer ID signing setup outside the repository.
+When `.env.local` sets `GITHUB_PANEL_DEVELOPMENT_TEAM`, `make` passes local signing settings to Xcode. Without `.env.local`, builds use the repo's default local signing behavior. `.env.local` is ignored so your Team ID stays out of Git.
+
+## Release and Notarization
+Release builds are signed with `Developer ID Application`, packaged as a zip, submitted to Apple's notary service, stapled, and repackaged.
+
+Before running a release build, install a `Developer ID Application` certificate for your team in Keychain.
+
+Add release settings to `.env.local`:
+
+```makefile
+GITHUB_PANEL_DEVELOPMENT_TEAM = YOUR_TEAM_ID
+GITHUB_PANEL_RELEASE_DEVELOPMENT_TEAM = YOUR_TEAM_ID
+GITHUB_PANEL_NOTARY_KEYCHAIN_PROFILE = githubpanel-notary
+GITHUB_PANEL_NOTARY_APPLE_ID = you@example.com
+```
+
+`GITHUB_PANEL_RELEASE_DEVELOPMENT_TEAM` defaults to `GITHUB_PANEL_DEVELOPMENT_TEAM` if omitted.
+
+Store notary credentials once:
+
+```bash
+make notary-store-credentials
+```
+
+Build the signed release zip:
+
+```bash
+make release
+```
+
+Submit, staple, validate, and package the notarized zip:
+
+```bash
+make notarize
+```
+
+The release artifacts are created under `build/Release/`.
 
 ## Mock PR States
 Debug builds can show fixture PRs for visual testing instead of calling GitHub. Build with the command above, then launch with:
