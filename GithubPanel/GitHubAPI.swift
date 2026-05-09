@@ -3,6 +3,7 @@ import Foundation
 protocol GitHubAPIClient {
     func fetchCurrentUser(token: String) async throws -> GitHubUser
     func fetchOpenPRs(token: String, username: String) async throws -> [PullRequestSummary]
+    func fetchClosedPRs(token: String, username: String, page: Int, perPage: Int) async throws -> PullRequestHistoryPage
     func fetchPullRequest(token: String, repoFullName: String, number: Int) async throws -> PullRequestInfo
     func fetchPRCheckState(token: String, pr: PullRequestInfo) async throws -> CheckState
     func enqueuePullRequest(token: String, pullRequestID: String) async throws
@@ -46,6 +47,55 @@ struct PullRequestSummary: Identifiable {
     let repoFullName: String
     let htmlURL: URL
     let updatedAt: Date
+}
+
+struct PullRequestHistoryPage {
+    let rows: [PullRequestHistoryRow]
+    let page: Int
+    let perPage: Int
+    let totalCount: Int
+
+    var hasPreviousPage: Bool {
+        page > 1
+    }
+
+    var hasNextPage: Bool {
+        page * perPage < totalCount
+    }
+}
+
+struct PullRequestHistoryRow: Identifiable {
+    let id: String
+    let title: String
+    let number: Int
+    let repoFullName: String
+    let htmlURL: URL
+    let updatedAt: Date
+    let closedAt: Date?
+    let mergedAt: Date?
+
+    var outcome: PullRequestHistoryOutcome {
+        mergedAt == nil ? .closed : .merged
+    }
+}
+
+enum PullRequestHistoryOutcome: Equatable {
+    case merged
+    case closed
+
+    var title: String {
+        switch self {
+        case .merged: return "Merged"
+        case .closed: return "Closed"
+        }
+    }
+
+    var iconName: String {
+        switch self {
+        case .merged: return "arrow.triangle.merge"
+        case .closed: return "xmark.circle.fill"
+        }
+    }
 }
 
 struct PullRequestRow: Identifiable {
@@ -131,9 +181,7 @@ final class GitHubAPI: GitHubAPIClient {
         let request = makeRequest(path: "/search/issues?q=\(encoded)", token: token)
         let response = try await decode(SearchResponse.self, request: request)
         return response.items.compactMap { item in
-            let components = item.repositoryURL.pathComponents
-            guard components.count >= 4 else { return nil }
-            let repoFullName = "\(components[2])/\(components[3])"
+            guard let repoFullName = repoFullName(from: item) else { return nil }
             return PullRequestSummary(id: "\(repoFullName)#\(item.number)",
                                       title: item.title,
                                       number: item.number,
@@ -141,6 +189,30 @@ final class GitHubAPI: GitHubAPIClient {
                                       htmlURL: item.htmlURL,
                                       updatedAt: item.updatedAt)
         }
+    }
+
+    func fetchClosedPRs(token: String, username: String, page: Int, perPage: Int) async throws -> PullRequestHistoryPage {
+        let query = "is:pr author:\(username) is:closed sort:updated-desc"
+        let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
+        let safePage = max(1, page)
+        let safePerPage = max(1, min(perPage, 100))
+        let request = makeRequest(path: "/search/issues?q=\(encoded)&page=\(safePage)&per_page=\(safePerPage)", token: token)
+        let response = try await decode(SearchResponse.self, request: request)
+        let rows = response.items.compactMap { item -> PullRequestHistoryRow? in
+            guard let repoFullName = repoFullName(from: item) else { return nil }
+            return PullRequestHistoryRow(id: "\(repoFullName)#\(item.number)",
+                                         title: item.title,
+                                         number: item.number,
+                                         repoFullName: repoFullName,
+                                         htmlURL: item.htmlURL,
+                                         updatedAt: item.updatedAt,
+                                         closedAt: item.closedAt,
+                                         mergedAt: item.pullRequest?.mergedAt)
+        }
+        return PullRequestHistoryPage(rows: rows,
+                                      page: safePage,
+                                      perPage: safePerPage,
+                                      totalCount: response.totalCount)
     }
 
     func fetchPullRequest(token: String, repoFullName: String, number: Int) async throws -> PullRequestInfo {
@@ -277,6 +349,12 @@ final class GitHubAPI: GitHubAPIClient {
         return request
     }
 
+    private func repoFullName(from item: SearchItem) -> String? {
+        let components = item.repositoryURL.pathComponents
+        guard components.count >= 4 else { return nil }
+        return "\(components[2])/\(components[3])"
+    }
+
     private func decode<T: Decodable>(_ type: T.Type, request: URLRequest) async throws -> T {
         let (data, response) = try await transport.data(for: request)
         guard let http = response as? HTTPURLResponse else {
@@ -357,7 +435,13 @@ struct GitHubAPIError: Decodable, LocalizedError {
 }
 
 private struct SearchResponse: Decodable {
+    let totalCount: Int
     let items: [SearchItem]
+
+    enum CodingKeys: String, CodingKey {
+        case totalCount = "total_count"
+        case items
+    }
 }
 
 private struct SearchItem: Decodable {
@@ -366,6 +450,8 @@ private struct SearchItem: Decodable {
     let title: String
     let htmlURL: URL
     let updatedAt: Date
+    let closedAt: Date?
+    let pullRequest: SearchPullRequest?
 
     enum CodingKeys: String, CodingKey {
         case number
@@ -373,6 +459,16 @@ private struct SearchItem: Decodable {
         case title
         case htmlURL = "html_url"
         case updatedAt = "updated_at"
+        case closedAt = "closed_at"
+        case pullRequest = "pull_request"
+    }
+}
+
+private struct SearchPullRequest: Decodable {
+    let mergedAt: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case mergedAt = "merged_at"
     }
 }
 

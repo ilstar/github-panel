@@ -11,6 +11,7 @@ struct ContentView: View {
     @State private var isSaving = false
     @State private var now = Date()
     @State private var selectedPRID: String?
+    @State private var selectedHistoryID: String?
     @State private var mergeInFlight: Set<String> = []
     private let minuteTicker = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
     private let relativeFormatter: RelativeDateTimeFormatter = {
@@ -45,6 +46,12 @@ struct ContentView: View {
         }
         .onReceive(minuteTicker) { tick in
             now = tick
+        }
+        .onChange(of: monitor.lastRefreshAt) { _ in
+            now = Date()
+        }
+        .onChange(of: monitor.lastHistoryRefreshAt) { _ in
+            now = Date()
         }
     }
 
@@ -101,13 +108,38 @@ struct ContentView: View {
 
     private var prSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Open Pull Requests")
+            HStack(alignment: .center) {
+                Text("Pull Requests")
                     .font(.title3.weight(.semibold))
+
+                Picker("", selection: $monitor.selectedTab) {
+                    ForEach(PullRequestTab.allCases) { tab in
+                        Text(tab.title).tag(tab)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 190)
+                .labelsHidden()
+
                 Spacer()
                 refreshPill
             }
+            .onChange(of: monitor.selectedTab) { tab in
+                if tab == .history {
+                    monitor.loadHistoryIfNeeded()
+                }
+            }
 
+            if monitor.selectedTab == .open {
+                openPullRequestsSection
+            } else {
+                historySection
+            }
+        }
+    }
+
+    private var openPullRequestsSection: some View {
+        Group {
             if let error = monitor.lastError {
                 Text(error)
                     .font(.caption)
@@ -118,58 +150,124 @@ struct ContentView: View {
             }
 
             if monitor.hasToken {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(spacing: 10) {
-                            if monitor.prRows.isEmpty {
-                                emptyStateSpacer
-                            } else {
-                                ForEach(monitor.prRows) { pr in
-                                    PRRow(
-                                        pr: pr,
-                                        isSelected: selectedPRID == pr.id,
-                                        relativeFormatter: relativeFormatter,
-                                        now: now,
-                                        isMerging: mergeInFlight.contains(pr.id),
-                                        onMerge: {
-                                            merge(pr: pr)
-                                        }
-                                    )
-                                    .id(pr.id)
-                                    .onTapGesture {
-                                        selectedPRID = pr.id
-                                        NSWorkspace.shared.open(pr.htmlURL)
+                openPullRequestsList
+            } else {
+                Text("Add a GitHub token to begin.")
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var openPullRequestsList: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 10) {
+                    if monitor.prRows.isEmpty {
+                        emptyStateSpacer
+                    } else {
+                        ForEach(monitor.prRows) { pr in
+                            PRRow(
+                                pr: pr,
+                                isSelected: selectedPRID == pr.id,
+                                relativeFormatter: relativeFormatter,
+                                now: now,
+                                isMerging: mergeInFlight.contains(pr.id),
+                                onMerge: {
+                                    merge(pr: pr)
+                                }
+                            )
+                            .id(pr.id)
+                            .onTapGesture {
+                                selectedPRID = pr.id
+                                NSWorkspace.shared.open(pr.htmlURL)
+                            }
+                        }
+                    }
+                }
+                .padding(.top, 6)
+                .padding(.bottom, 8)
+            }
+            .scrollIndicators(.hidden)
+            .background(
+                KeyEventHandlingView { event in
+                    handleKeyEvent(event)
+                }
+                .frame(width: 0, height: 0)
+            )
+            .onAppear {
+                if selectedPRID == nil {
+                    selectedPRID = monitor.prRows.first?.id
+                }
+            }
+            .onChange(of: monitor.prRows.map { $0.id }) { newIDs in
+                if selectedPRID == nil || !newIDs.contains(selectedPRID ?? "") {
+                    selectedPRID = newIDs.first
+                }
+            }
+            .onChange(of: monitor.lastRefreshAt) { _ in
+                guard let first = monitor.prRows.first else { return }
+                selectedPRID = first.id
+                withAnimation {
+                    proxy.scrollTo(first.id, anchor: .top)
+                }
+            }
+        }
+    }
+
+    private var historySection: some View {
+        Group {
+            if let error = monitor.lastHistoryError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
+            if monitor.hasToken {
+                VStack(spacing: 10) {
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            LazyVStack(spacing: 10) {
+                                if monitor.historyRows.isEmpty {
+                                    emptyStateSpacer
+                                } else {
+                                    ForEach(monitor.historyRows) { pr in
+                                        PRHistoryRow(pr: pr,
+                                                     isSelected: selectedHistoryID == pr.id,
+                                                     relativeFormatter: relativeFormatter,
+                                                     now: now)
+                                            .id(pr.id)
+                                            .onTapGesture {
+                                                selectedHistoryID = pr.id
+                                                NSWorkspace.shared.open(pr.htmlURL)
+                                            }
                                     }
                                 }
                             }
+                            .padding(.top, 6)
+                            .padding(.bottom, 8)
                         }
-                        .padding(.top, 6)
-                        .padding(.bottom, 8)
-                    }
-                    .scrollIndicators(.hidden)
-                    .background(
-                        KeyEventHandlingView { event in
-                            handleKeyEvent(event)
+                        .scrollIndicators(.hidden)
+                        .onAppear {
+                            monitor.loadHistoryIfNeeded()
+                            if selectedHistoryID == nil {
+                                selectedHistoryID = monitor.historyRows.first?.id
+                            }
                         }
-                        .frame(width: 0, height: 0)
-                    )
-                    .onAppear {
-                        if selectedPRID == nil {
-                            selectedPRID = monitor.prRows.first?.id
+                        .onChange(of: monitor.historyRows.map { $0.id }) { newIDs in
+                            if selectedHistoryID == nil || !newIDs.contains(selectedHistoryID ?? "") {
+                                selectedHistoryID = newIDs.first
+                            }
                         }
-                    }
-                    .onChange(of: monitor.prRows.map { $0.id }) { newIDs in
-                        if selectedPRID == nil || !newIDs.contains(selectedPRID ?? "") {
-                            selectedPRID = newIDs.first
-                        }
-                    }
-                    .onChange(of: monitor.lastRefreshAt) { _ in
-                        guard let first = monitor.prRows.first else { return }
-                        selectedPRID = first.id
-                        withAnimation {
-                            proxy.scrollTo(first.id, anchor: .top)
+                        .onChange(of: monitor.lastHistoryRefreshAt) { _ in
+                            guard let first = monitor.historyRows.first else { return }
+                            selectedHistoryID = first.id
+                            withAnimation {
+                                proxy.scrollTo(first.id, anchor: .top)
+                            }
                         }
                     }
+
+                    historyPagination
                 }
             } else {
                 Text("Add a GitHub token to begin.")
@@ -179,17 +277,67 @@ struct ContentView: View {
     }
 
     private var lastUpdatedView: some View {
-        Text("Updated \(monitor.lastRefreshText(relativeTo: now))")
+        Text("Updated \(lastUpdatedText)")
             .font(.caption)
             .foregroundStyle(.secondary)
             .frame(width: 110, alignment: .trailing)
     }
 
+    private var lastUpdatedText: String {
+        if monitor.selectedTab == .history {
+            guard let lastHistoryRefreshAt = monitor.lastHistoryRefreshAt else {
+                return "Never"
+            }
+            return relativeFormatter.localizedString(for: lastHistoryRefreshAt, relativeTo: now)
+        }
+        return monitor.lastRefreshText(relativeTo: now)
+    }
+
     private var refreshPill: some View {
-        RefreshPill(isLoading: monitor.isLoading,
-                    isEnabled: monitor.hasToken && !monitor.isLoading,
+        RefreshPill(isLoading: monitor.selectedTab == .history ? monitor.isHistoryLoading : monitor.isLoading,
+                    isEnabled: refreshIsEnabled,
                     lastUpdatedView: lastUpdatedView) {
-            monitor.start()
+            refreshSelectedTab()
+        }
+    }
+
+    private var refreshIsEnabled: Bool {
+        guard monitor.hasToken else { return false }
+        return monitor.selectedTab == .history ? !monitor.isHistoryLoading : !monitor.isLoading
+    }
+
+    private var historyPagination: some View {
+        HStack(spacing: 8) {
+            Button {
+                Task { await monitor.loadPreviousHistoryPage() }
+            } label: {
+                Image(systemName: "chevron.left")
+                    .font(.caption.weight(.bold))
+                    .frame(width: 44, height: 36)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!monitor.canLoadPreviousHistoryPage)
+            .help("Previous page")
+
+            Text(monitor.historyRangeText)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 86)
+
+            Button {
+                Task { await monitor.loadNextHistoryPage() }
+            } label: {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.bold))
+                    .frame(width: 44, height: 36)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!monitor.canLoadNextHistoryPage)
+            .help("Next page")
+
+            Spacer()
         }
     }
 
@@ -222,7 +370,7 @@ struct ContentView: View {
     }
 
     private var showsEmptyPullRequestBackground: Bool {
-        monitor.hasToken && monitor.prRows.isEmpty && monitor.lastError == nil
+        monitor.selectedTab == .open && monitor.hasToken && monitor.prRows.isEmpty && monitor.lastError == nil
     }
 
     private func saveToken() {
@@ -243,6 +391,14 @@ struct ContentView: View {
             await MainActor.run {
                 _ = mergeInFlight.remove(pr.id)
             }
+        }
+    }
+
+    private func refreshSelectedTab() {
+        if monitor.selectedTab == .history {
+            Task { await monitor.refreshCurrentHistoryPage() }
+        } else {
+            monitor.start()
         }
     }
 
@@ -515,6 +671,115 @@ private struct PRRow: View {
         }
         .font(.title)
         .frame(width: 30)
+    }
+
+    private var cardFill: AnyShapeStyle {
+        if isSelected {
+            return AnyShapeStyle(
+                LinearGradient(colors: [
+                    Color(red: 0.93, green: 0.96, blue: 1.0),
+                    Color(red: 0.98, green: 0.99, blue: 1.0)
+                ], startPoint: .topLeading, endPoint: .bottomTrailing)
+            )
+        }
+        return AnyShapeStyle(Color.white.opacity(isHovering ? 0.95 : 0.9))
+    }
+}
+
+private struct PRHistoryRow: View {
+    let pr: PullRequestHistoryRow
+    let isSelected: Bool
+    let relativeFormatter: RelativeDateTimeFormatter
+    let now: Date
+
+    @State private var isHovering = false
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            outcomeIcon
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(pr.title)
+                    .font(.headline.weight(.semibold))
+                    .lineLimit(1)
+                    .help(pr.title)
+
+                Text("\(pr.repoFullName)#\(String(pr.number))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                HStack(spacing: 8) {
+                    outcomeBadge
+
+                    Text(outcomeDateText)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Spacer(minLength: 0)
+
+            Image(systemName: "arrow.up.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 26, height: 26)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.white.opacity(isHovering ? 0.95 : 0.7))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                )
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(cardFill)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.black.opacity(0.1), lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(isHovering ? 0.08 : 0.04), radius: 8, x: 0, y: 2)
+        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .animation(.easeInOut(duration: 0.15), value: isHovering)
+        .onHover { hovering in
+            isHovering = hovering
+        }
+    }
+
+    private var outcomeIcon: some View {
+        Image(systemName: pr.outcome.iconName)
+            .font(.title)
+            .foregroundStyle(outcomeColor)
+            .frame(width: 30)
+    }
+
+    private var outcomeBadge: some View {
+        Text(pr.outcome.title.uppercased())
+            .font(.caption2.weight(.semibold))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(
+                Capsule()
+                    .fill(outcomeColor.opacity(0.16))
+            )
+            .foregroundStyle(outcomeColor)
+    }
+
+    private var outcomeDateText: String {
+        let date = pr.mergedAt ?? pr.closedAt ?? pr.updatedAt
+        return "\(pr.outcome.title) \(relativeFormatter.localizedString(for: date, relativeTo: now))"
+    }
+
+    private var outcomeColor: Color {
+        switch pr.outcome {
+        case .merged:
+            return Color(red: 0.10, green: 0.43, blue: 0.24)
+        case .closed:
+            return Color(red: 0.72, green: 0.16, blue: 0.16)
+        }
     }
 
     private var cardFill: AnyShapeStyle {
