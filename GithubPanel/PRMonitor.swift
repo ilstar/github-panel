@@ -43,10 +43,16 @@ struct SystemTimerScheduler: TimerScheduling {
 @MainActor
 final class PRMonitor: ObservableObject {
     @Published var prRows: [PullRequestRow] = []
+    @Published var historyRows: [PullRequestHistoryRow] = []
     @Published var isLoading: Bool = false
+    @Published var isHistoryLoading: Bool = false
     @Published var hasToken: Bool = false
     @Published var lastError: String?
+    @Published var lastHistoryError: String?
     @Published var lastRefreshAt: Date?
+    @Published var lastHistoryRefreshAt: Date?
+    @Published var historyPage: Int = 1
+    @Published var historyTotalCount: Int = 0
     let isUsingMockData: Bool
     @Published var refreshInterval: TimeInterval {
         didSet {
@@ -63,6 +69,7 @@ final class PRMonitor: ObservableObject {
     private let dateProvider: DateProviding
     private var timer: RefreshTimer?
     private var lastStates: [String: CheckState] = [:]
+    private let historyPageSize = 10
     private let relativeFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .short
@@ -114,6 +121,9 @@ final class PRMonitor: ObservableObject {
         tokenStore.clearToken()
         hasToken = false
         prRows = []
+        historyRows = []
+        historyPage = 1
+        historyTotalCount = 0
         lastStates = [:]
     }
 
@@ -145,6 +155,66 @@ final class PRMonitor: ObservableObject {
             lastError = error.localizedDescription
         }
         isLoading = false
+    }
+
+    func loadHistoryIfNeeded() {
+        guard historyRows.isEmpty, !isHistoryLoading else { return }
+        Task {
+            await refreshHistory(page: historyPage)
+        }
+    }
+
+    func refreshCurrentHistoryPage() async {
+        await refreshHistory(page: historyPage)
+    }
+
+    func loadNextHistoryPage() async {
+        guard canLoadNextHistoryPage else { return }
+        await refreshHistory(page: historyPage + 1)
+    }
+
+    func loadPreviousHistoryPage() async {
+        guard canLoadPreviousHistoryPage else { return }
+        await refreshHistory(page: historyPage - 1)
+    }
+
+    var canLoadPreviousHistoryPage: Bool {
+        historyPage > 1 && !isHistoryLoading
+    }
+
+    var canLoadNextHistoryPage: Bool {
+        historyPage * historyPageSize < historyTotalCount && !isHistoryLoading
+    }
+
+    var historyRangeText: String {
+        guard !historyRows.isEmpty else {
+            return historyTotalCount == 0 ? "No history" : "Page \(historyPage)"
+        }
+        let start = ((historyPage - 1) * historyPageSize) + 1
+        let end = start + historyRows.count - 1
+        return "\(start)-\(end) of \(historyTotalCount)"
+    }
+
+    private func refreshHistory(page: Int) async {
+        guard let token = tokenStore.loadToken() else { return }
+        isHistoryLoading = true
+        lastHistoryError = nil
+        do {
+            let user = try await api.fetchCurrentUser(token: token)
+            let page = try await api.fetchClosedPRs(token: token,
+                                                    username: user.login,
+                                                    page: page,
+                                                    perPage: historyPageSize)
+            historyRows = page.rows
+            historyPage = page.page
+            historyTotalCount = page.totalCount
+            lastHistoryRefreshAt = dateProvider.now
+        } catch {
+            historyRows = []
+            historyTotalCount = 0
+            lastHistoryError = error.localizedDescription
+        }
+        isHistoryLoading = false
     }
 
     private func buildRows(token: String, summaries: [PullRequestSummary]) async throws -> [PullRequestRow] {

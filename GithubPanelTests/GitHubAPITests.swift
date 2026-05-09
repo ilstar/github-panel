@@ -22,6 +22,7 @@ final class GitHubAPITests: XCTestCase {
         let transport = MockHTTPTransport()
         transport.enqueue(json: """
         {
+          "total_count": 2,
           "items": [
             {
               "number": 42,
@@ -52,6 +53,56 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertEqual(request.url?.path, "/search/issues")
         XCTAssertTrue(request.url?.query?.contains("author:fred") == true)
         XCTAssertTrue(request.url?.query?.contains("sort:updated-desc") == true)
+    }
+
+    func testFetchClosedPRsDecodesPaginationAndOutcomeDates() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: """
+        {
+          "total_count": 17,
+          "items": [
+            {
+              "number": 12,
+              "repository_url": "https://api.github.com/repos/acme/widgets",
+              "title": "Merged change",
+              "html_url": "https://github.com/acme/widgets/pull/12",
+              "updated_at": "2026-04-12T12:34:56Z",
+              "closed_at": "2026-04-12T12:34:56Z",
+              "pull_request": {
+                "merged_at": "2026-04-12T12:34:56Z"
+              }
+            },
+            {
+              "number": 13,
+              "repository_url": "https://api.github.com/repos/acme/widgets",
+              "title": "Closed change",
+              "html_url": "https://github.com/acme/widgets/pull/13",
+              "updated_at": "2026-04-13T12:34:56Z",
+              "closed_at": "2026-04-13T12:34:56Z",
+              "pull_request": {
+                "merged_at": null
+              }
+            }
+          ]
+        }
+        """)
+        let api = GitHubAPI(transport: transport)
+
+        let page = try await api.fetchClosedPRs(token: "token", username: "fred", page: 2, perPage: 10)
+
+        XCTAssertEqual(page.totalCount, 17)
+        XCTAssertEqual(page.page, 2)
+        XCTAssertEqual(page.perPage, 10)
+        XCTAssertFalse(page.hasNextPage)
+        XCTAssertEqual(page.rows.map(\.number), [12, 13])
+        XCTAssertEqual(page.rows[0].outcome, .merged)
+        XCTAssertEqual(page.rows[1].outcome, .closed)
+        let request = try XCTUnwrap(transport.requests.first)
+        XCTAssertEqual(request.url?.path, "/search/issues")
+        XCTAssertTrue(request.url?.query?.contains("author:fred") == true)
+        XCTAssertTrue(request.url?.query?.contains("is:closed") == true)
+        XCTAssertTrue(request.url?.query?.contains("page=2") == true)
+        XCTAssertTrue(request.url?.query?.contains("per_page=10") == true)
     }
 
     func testFetchPullRequestDecodesGraphQLDetail() async throws {

@@ -95,6 +95,56 @@ final class PRMonitorTests: XCTestCase {
         XCTAssertNil(monitor.lastRefreshAt)
     }
 
+    func testRefreshHistoryLoadsRequestedPageAndPaginationState() async {
+        let fixedDate = Date(timeIntervalSince1970: 2000)
+        let api = FakeGitHubAPI()
+        api.user = GitHubUser(login: "fred")
+        api.historyPages[1] = PullRequestHistoryPage(rows: (1...10).map { historyRow(number: $0) },
+                                                     page: 1,
+                                                     perPage: 10,
+                                                     totalCount: 12)
+        api.historyPages[2] = PullRequestHistoryPage(rows: (11...12).map { historyRow(number: $0) },
+                                                     page: 2,
+                                                     perPage: 10,
+                                                     totalCount: 12)
+        let monitor = makeMonitor(api: api,
+                                  tokenStore: FakeTokenStore(token: "token"),
+                                  dateProvider: FakeDateProvider(now: fixedDate))
+
+        await monitor.refreshCurrentHistoryPage()
+
+        XCTAssertFalse(monitor.isHistoryLoading)
+        XCTAssertNil(monitor.lastHistoryError)
+        XCTAssertEqual(monitor.lastHistoryRefreshAt, fixedDate)
+        XCTAssertEqual(monitor.historyRows.map(\.number), Array(1...10))
+        XCTAssertEqual(monitor.historyRangeText, "1-10 of 12")
+        XCTAssertFalse(monitor.canLoadPreviousHistoryPage)
+        XCTAssertTrue(monitor.canLoadNextHistoryPage)
+
+        await monitor.loadNextHistoryPage()
+
+        XCTAssertEqual(monitor.historyPage, 2)
+        XCTAssertEqual(monitor.historyRows.map(\.number), [11, 12])
+        XCTAssertEqual(monitor.historyRangeText, "11-12 of 12")
+        XCTAssertTrue(monitor.canLoadPreviousHistoryPage)
+        XCTAssertFalse(monitor.canLoadNextHistoryPage)
+        XCTAssertEqual(api.fetchClosedPRCalls.map(\.page), [1, 2])
+    }
+
+    func testRefreshHistoryErrorStoresSeparateError() async {
+        let api = FakeGitHubAPI()
+        api.error = TestError(message: "history boom")
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+        monitor.historyRows = [historyRow(number: 1)]
+
+        await monitor.refreshCurrentHistoryPage()
+
+        XCTAssertFalse(monitor.isHistoryLoading)
+        XCTAssertTrue(monitor.historyRows.isEmpty)
+        XCTAssertEqual(monitor.lastHistoryError, "history boom")
+        XCTAssertNil(monitor.lastError)
+    }
+
     func testNotificationPostsOnlyWhenPendingBecomesTerminalAndCleansStaleState() async {
         let api = FakeGitHubAPI()
         api.user = GitHubUser(login: "fred")
@@ -129,12 +179,18 @@ final class PRMonitorTests: XCTestCase {
         let monitor = makeMonitor(tokenStore: tokenStore)
         monitor.hasToken = true
         monitor.prRows = [row(number: 1, status: .pending)]
+        monitor.historyRows = [historyRow(number: 1)]
+        monitor.historyTotalCount = 1
+        monitor.historyPage = 2
 
         monitor.clearToken()
 
         XCTAssertNil(tokenStore.token)
         XCTAssertFalse(monitor.hasToken)
         XCTAssertTrue(monitor.prRows.isEmpty)
+        XCTAssertTrue(monitor.historyRows.isEmpty)
+        XCTAssertEqual(monitor.historyTotalCount, 0)
+        XCTAssertEqual(monitor.historyPage, 1)
     }
 
     func testDirectSuccessfulMergeRemovesRow() async {
@@ -271,6 +327,7 @@ private func makeMonitor(api: FakeGitHubAPI = FakeGitHubAPI(),
 private final class FakeGitHubAPI: GitHubAPIClient {
     var user = GitHubUser(login: "fred")
     var summaries: [PullRequestSummary] = []
+    var historyPages: [Int: PullRequestHistoryPage] = [:]
     var pullRequests: [String: PullRequestInfo] = [:]
     var error: Error?
     var mergeResult = true
@@ -278,6 +335,7 @@ private final class FakeGitHubAPI: GitHubAPIClient {
 
     private(set) var fetchCurrentUserTokens: [String] = []
     private(set) var fetchPullRequestCalls: [(repoFullName: String, number: Int)] = []
+    private(set) var fetchClosedPRCalls: [(page: Int, perPage: Int)] = []
     private(set) var enqueueCalls: [String] = []
     private(set) var enableCalls: [String] = []
     private(set) var disableCalls: [String] = []
@@ -292,6 +350,15 @@ private final class FakeGitHubAPI: GitHubAPIClient {
     func fetchOpenPRs(token: String, username: String) async throws -> [PullRequestSummary] {
         if let error { throw error }
         return summaries
+    }
+
+    func fetchClosedPRs(token: String, username: String, page: Int, perPage: Int) async throws -> PullRequestHistoryPage {
+        if let error { throw error }
+        fetchClosedPRCalls.append((page, perPage))
+        return historyPages[page] ?? PullRequestHistoryPage(rows: [],
+                                                            page: page,
+                                                            perPage: perPage,
+                                                            totalCount: 0)
     }
 
     func fetchPullRequest(token: String, repoFullName: String, number: Int) async throws -> PullRequestInfo {
@@ -426,6 +493,18 @@ private func summary(number: Int, updatedAt: Date = Date(timeIntervalSince1970: 
                        repoFullName: "acme/widgets",
                        htmlURL: URL(string: "https://github.com/acme/widgets/pull/\(number)")!,
                        updatedAt: updatedAt)
+}
+
+private func historyRow(number: Int,
+                        mergedAt: Date? = Date(timeIntervalSince1970: 100)) -> PullRequestHistoryRow {
+    PullRequestHistoryRow(id: "acme/widgets#\(number)",
+                          title: "PR \(number)",
+                          number: number,
+                          repoFullName: "acme/widgets",
+                          htmlURL: URL(string: "https://github.com/acme/widgets/pull/\(number)")!,
+                          updatedAt: Date(timeIntervalSince1970: TimeInterval(number)),
+                          closedAt: Date(timeIntervalSince1970: TimeInterval(number)),
+                          mergedAt: mergedAt)
 }
 
 private func info(number: Int,

@@ -103,6 +103,7 @@ final class MockGitHubAPI: GitHubAPIClient {
     private let user = GitHubUser(login: "mock-user")
     private var pullRequests: [String: PullRequestInfo]
     private let summaries: [PullRequestSummary]
+    private let history: [PullRequestHistoryRow]
 
     init(now: Date = Date(), isEmpty: Bool = false) {
         let rows = isEmpty ? [] : Self.makePullRequests(now: now)
@@ -115,6 +116,7 @@ final class MockGitHubAPI: GitHubAPIClient {
                                htmlURL: $0.htmlURL,
                                updatedAt: now.addingTimeInterval(TimeInterval(-$0.number * 70)))
         }
+        self.history = isEmpty ? [] : Self.makeHistory(now: now)
     }
 
     func fetchCurrentUser(token: String) async throws -> GitHubUser {
@@ -123,6 +125,17 @@ final class MockGitHubAPI: GitHubAPIClient {
 
     func fetchOpenPRs(token: String, username: String) async throws -> [PullRequestSummary] {
         summaries
+    }
+
+    func fetchClosedPRs(token: String, username: String, page: Int, perPage: Int) async throws -> PullRequestHistoryPage {
+        let safePage = max(1, page)
+        let safePerPage = max(1, perPage)
+        let start = (safePage - 1) * safePerPage
+        let rows = start >= history.count ? [] : Array(history.dropFirst(start).prefix(safePerPage))
+        return PullRequestHistoryPage(rows: rows,
+                                      page: safePage,
+                                      perPage: safePerPage,
+                                      totalCount: history.count)
     }
 
     func fetchPullRequest(token: String, repoFullName: String, number: Int) async throws -> PullRequestInfo {
@@ -207,6 +220,22 @@ final class MockGitHubAPI: GitHubAPIClient {
                         title: "Unknown check state",
                         status: .unknown)
         ]
+    }
+
+    private static func makeHistory(now: Date) -> [PullRequestHistoryRow] {
+        (1...24).map { index in
+            let number = 200 - index
+            let mergedAt = index % 4 == 0 ? nil : now.addingTimeInterval(TimeInterval(-index * 86_400))
+            let closedAt = mergedAt ?? now.addingTimeInterval(TimeInterval(-index * 86_400))
+            return PullRequestHistoryRow(id: "mock/github-panel#\(number)",
+                                         title: index % 4 == 0 ? "Closed: explored alternate flow \(number)" : "Merged: shipped update \(number)",
+                                         number: number,
+                                         repoFullName: "mock/github-panel",
+                                         htmlURL: URL(string: "https://github.com/mock/github-panel/pull/\(number)")!,
+                                         updatedAt: closedAt,
+                                         closedAt: closedAt,
+                                         mergedAt: mergedAt)
+        }
     }
 
     private static func pullRequest(number: Int,
