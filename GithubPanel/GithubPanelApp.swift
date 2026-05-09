@@ -25,6 +25,18 @@ struct GithubPanelApp: App {
         }
         .commands {
             CommandMenu("Pull Requests") {
+                Button("Open Pull Requests") {
+                    Self.selectPullRequestTab(.open, using: monitor)
+                }
+                .keyboardShortcut("1", modifiers: .command)
+
+                Button("History") {
+                    Self.selectPullRequestTab(.history, using: monitor)
+                }
+                .keyboardShortcut("2", modifiers: .command)
+
+                Divider()
+
                 Button("Refresh Pull Requests") {
                     Self.refreshPullRequests(using: monitor)
                 }
@@ -54,6 +66,15 @@ struct GithubPanelApp: App {
     private static func refreshPullRequests(using monitor: PRMonitor) {
         Task { @MainActor in
             await monitor.refreshNow()
+        }
+    }
+
+    private static func selectPullRequestTab(_ tab: PullRequestTab, using monitor: PRMonitor) {
+        Task { @MainActor in
+            monitor.selectedTab = tab
+            if tab == .history {
+                monitor.loadHistoryIfNeeded()
+            }
         }
     }
 }

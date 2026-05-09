@@ -12,7 +12,6 @@ struct ContentView: View {
     @State private var now = Date()
     @State private var selectedPRID: String?
     @State private var selectedHistoryID: String?
-    @State private var selectedTab: PullRequestTab = .open
     @State private var mergeInFlight: Set<String> = []
     private let minuteTicker = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
     private let relativeFormatter: RelativeDateTimeFormatter = {
@@ -113,7 +112,7 @@ struct ContentView: View {
                 Text("Pull Requests")
                     .font(.title3.weight(.semibold))
 
-                Picker("", selection: $selectedTab) {
+                Picker("", selection: $monitor.selectedTab) {
                     ForEach(PullRequestTab.allCases) { tab in
                         Text(tab.title).tag(tab)
                     }
@@ -125,13 +124,13 @@ struct ContentView: View {
                 Spacer()
                 refreshPill
             }
-            .onChange(of: selectedTab) { tab in
+            .onChange(of: monitor.selectedTab) { tab in
                 if tab == .history {
                     monitor.loadHistoryIfNeeded()
                 }
             }
 
-            if selectedTab == .open {
+            if monitor.selectedTab == .open {
                 openPullRequestsSection
             } else {
                 historySection
@@ -285,7 +284,7 @@ struct ContentView: View {
     }
 
     private var lastUpdatedText: String {
-        if selectedTab == .history {
+        if monitor.selectedTab == .history {
             guard let lastHistoryRefreshAt = monitor.lastHistoryRefreshAt else {
                 return "Never"
             }
@@ -295,7 +294,7 @@ struct ContentView: View {
     }
 
     private var refreshPill: some View {
-        RefreshPill(isLoading: selectedTab == .history ? monitor.isHistoryLoading : monitor.isLoading,
+        RefreshPill(isLoading: monitor.selectedTab == .history ? monitor.isHistoryLoading : monitor.isLoading,
                     isEnabled: refreshIsEnabled,
                     lastUpdatedView: lastUpdatedView) {
             refreshSelectedTab()
@@ -304,7 +303,7 @@ struct ContentView: View {
 
     private var refreshIsEnabled: Bool {
         guard monitor.hasToken else { return false }
-        return selectedTab == .history ? !monitor.isHistoryLoading : !monitor.isLoading
+        return monitor.selectedTab == .history ? !monitor.isHistoryLoading : !monitor.isLoading
     }
 
     private var historyPagination: some View {
@@ -314,7 +313,8 @@ struct ContentView: View {
             } label: {
                 Image(systemName: "chevron.left")
                     .font(.caption.weight(.bold))
-                    .frame(width: 28, height: 28)
+                    .frame(width: 44, height: 36)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .disabled(!monitor.canLoadPreviousHistoryPage)
@@ -330,7 +330,8 @@ struct ContentView: View {
             } label: {
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.bold))
-                    .frame(width: 28, height: 28)
+                    .frame(width: 44, height: 36)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .disabled(!monitor.canLoadNextHistoryPage)
@@ -369,7 +370,7 @@ struct ContentView: View {
     }
 
     private var showsEmptyPullRequestBackground: Bool {
-        selectedTab == .open && monitor.hasToken && monitor.prRows.isEmpty && monitor.lastError == nil
+        monitor.selectedTab == .open && monitor.hasToken && monitor.prRows.isEmpty && monitor.lastError == nil
     }
 
     private func saveToken() {
@@ -394,7 +395,7 @@ struct ContentView: View {
     }
 
     private func refreshSelectedTab() {
-        if selectedTab == .history {
+        if monitor.selectedTab == .history {
             Task { await monitor.refreshCurrentHistoryPage() }
         } else {
             monitor.start()
@@ -682,20 +683,6 @@ private struct PRRow: View {
             )
         }
         return AnyShapeStyle(Color.white.opacity(isHovering ? 0.95 : 0.9))
-    }
-}
-
-private enum PullRequestTab: String, CaseIterable, Identifiable {
-    case open
-    case history
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .open: return "Open"
-        case .history: return "History"
-        }
     }
 }
 

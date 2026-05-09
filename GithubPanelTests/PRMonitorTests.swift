@@ -26,6 +26,16 @@ final class PRMonitorTests: XCTestCase {
         XCTAssertEqual(storedMonitor.refreshInterval, 300)
     }
 
+    func testSelectedTabDefaultsToOpenAndCanSwitchToHistory() {
+        let monitor = makeMonitor()
+
+        XCTAssertEqual(monitor.selectedTab, .open)
+
+        monitor.selectedTab = .history
+
+        XCTAssertEqual(monitor.selectedTab, .history)
+    }
+
     func testChangingRefreshIntervalPersistsAndReschedulesTimer() {
         let defaults = FakeDefaults()
         let scheduler = FakeTimerScheduler()

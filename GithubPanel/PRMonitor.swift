@@ -44,6 +44,7 @@ struct SystemTimerScheduler: TimerScheduling {
 final class PRMonitor: ObservableObject {
     @Published var prRows: [PullRequestRow] = []
     @Published var historyRows: [PullRequestHistoryRow] = []
+    @Published var selectedTab: PullRequestTab = .open
     @Published var isLoading: Bool = false
     @Published var isHistoryLoading: Bool = false
     @Published var hasToken: Bool = false
@@ -308,6 +309,20 @@ final class PRMonitor: ObservableObject {
             await refreshNow()
         } catch {
             lastError = error.localizedDescription
+        }
+    }
+}
+
+enum PullRequestTab: String, CaseIterable, Identifiable {
+    case open
+    case history
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .open: return "Open"
+        case .history: return "History"
         }
     }
 }
