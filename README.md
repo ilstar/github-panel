@@ -51,11 +51,19 @@ The DMG is created at:
 build/dist/GithubPanel-1.0.dmg
 ```
 
-That target is for local testing. For a DMG you can share with another Mac, use the notarized distribution target:
+This creates a Developer ID signed, notarized, stapled DMG suitable for sharing with another Mac. It uses the same distribution flow as:
 
 ```bash
 make notarized-dmg VERSION=1.0
 ```
+
+For a quick unsigned DMG that stays on your development Mac, use:
+
+```bash
+make local-dmg VERSION=1.0
+```
+
+Do not send `local-dmg` output to another Mac. Gatekeeper may block it with "Apple could not verify" because it is intentionally not notarized.
 
 Create or update a GitHub release with the DMG attached:
 
