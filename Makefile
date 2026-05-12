@@ -27,7 +27,7 @@ XCODEBUILD_SIGNING_OVERRIDES += CODE_SIGN_IDENTITY="$(GITHUB_PANEL_CODE_SIGN_IDE
 XCODEBUILD_SIGNING_OVERRIDES += CODE_SIGN_STYLE=Automatic
 endif
 
-.PHONY: build test test-release-targets open run mock mock-empty clean dmg notarized-dmg require-distribution-signing release github-release build-and-open
+.PHONY: build test test-release-targets open run mock mock-empty clean local-dmg dmg notarized-dmg require-distribution-signing release github-release build-and-open
 
 build:
 	xcodebuild \
@@ -50,8 +50,13 @@ test: test-release-targets
 test-release-targets:
 	@mkdir -p "$(CURDIR)/build/test"
 	@$(MAKE) --no-print-directory -n dmg VERSION=9.9.9 > "$(CURDIR)/build/test/dmg-dry-run.txt"
-	@grep -q 'hdiutil create' "$(CURDIR)/build/test/dmg-dry-run.txt"
-	@grep -q 'GithubPanel-9.9.9.dmg' "$(CURDIR)/build/test/dmg-dry-run.txt"
+	@grep -q 'notarytool submit' "$(CURDIR)/build/test/dmg-dry-run.txt"
+	@grep -q 'stapler staple' "$(CURDIR)/build/test/dmg-dry-run.txt"
+	@grep -q 'spctl --assess --type open' "$(CURDIR)/build/test/dmg-dry-run.txt"
+	@$(MAKE) --no-print-directory -n local-dmg VERSION=9.9.9 > "$(CURDIR)/build/test/local-dmg-dry-run.txt"
+	@grep -q 'hdiutil create' "$(CURDIR)/build/test/local-dmg-dry-run.txt"
+	@grep -q 'GithubPanel-9.9.9.dmg' "$(CURDIR)/build/test/local-dmg-dry-run.txt"
+	@grep -q 'local testing' "$(CURDIR)/build/test/local-dmg-dry-run.txt"
 	@$(MAKE) --no-print-directory -n release VERSION=9.9.9 RELEASE_NOTES="Dry run" > "$(CURDIR)/build/test/release-dry-run.txt"
 	@grep -q 'notarytool submit' "$(CURDIR)/build/test/release-dry-run.txt"
 	@grep -q 'stapler staple' "$(CURDIR)/build/test/release-dry-run.txt"
@@ -77,8 +82,8 @@ clean:
 		-derivedDataPath $(DERIVED_DATA) \
 		clean
 
-dmg: CONFIGURATION := Release
-dmg: build
+local-dmg: CONFIGURATION := Release
+local-dmg: build
 	@rm -rf "$(DMG_STAGING)" "$(DMG_PATH)"
 	@mkdir -p "$(DMG_STAGING)" "$(DIST_DIR)"
 	cp -R "$(APP)" "$(DMG_STAGING)/"
@@ -90,7 +95,9 @@ dmg: build
 		-format UDZO \
 		"$(DMG_PATH)"
 	@echo "Created $(DMG_PATH)"
-	@echo "This DMG is for local testing. Use 'make notarized-dmg VERSION=$(VERSION)' for sharing outside this Mac."
+	@echo "This DMG is for local testing only. Use 'make dmg VERSION=$(VERSION)' for sharing outside this Mac."
+
+dmg: notarized-dmg
 
 notarized-dmg: CONFIGURATION := Release
 notarized-dmg: require-distribution-signing build
