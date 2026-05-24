@@ -7,25 +7,31 @@ struct SettingsView: View {
     @State private var isSaving = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Settings")
-                .font(.title2)
-                .bold()
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Settings")
+                    .font(.title2)
+                    .bold()
 
-            tokenSection
+                tokenSection
 
-            Divider()
+                Divider()
 
-            refreshSection
+                refreshSection
 
-            Divider()
+                Divider()
 
-            shortcutSection
+                hooksSection
 
-            Spacer()
+                Divider()
+
+                shortcutSection
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(20)
-        .frame(minWidth: 420, minHeight: 260)
+        .frame(minWidth: 520, minHeight: 640)
+
     }
 
     private var tokenSection: some View {
@@ -84,6 +90,46 @@ struct SettingsView: View {
                 .font(.headline)
             KeyboardShortcuts.Recorder("Show/Hide App", name: .toggleApp)
         }
+    }
+
+    private var hooksSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Hooks")
+                .font(.headline)
+            Text("Scripts run after a PR moves from pending to a completed check state.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("All Succeeded")
+                    .font(.subheadline)
+                    .bold()
+                scriptEditor(text: $monitor.allSucceededHookScript)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Any Failures")
+                    .font(.subheadline)
+                    .bold()
+                scriptEditor(text: $monitor.anyFailuresHookScript)
+            }
+
+            Text("Environment: GITHUB_PANEL_PR_NUMBER, GITHUB_PANEL_PR_ID, GITHUB_PANEL_PR_NODE_ID, GITHUB_PANEL_REPO_FULL_NAME, GITHUB_PANEL_PR_URL, GITHUB_PANEL_PR_STATUS, GITHUB_PANEL_HOOK_SCENARIO, GITHUB_PANEL_PR_HEAD_SHA.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func scriptEditor(text: Binding<String>) -> some View {
+        TextEditor(text: text)
+            .font(.system(.body, design: .monospaced))
+            .frame(minHeight: 82)
+            .padding(4)
+            .overlay {
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.secondary.opacity(0.25))
+            }
     }
 
     private func saveToken() {

@@ -105,6 +105,7 @@ struct PullRequestRow: Identifiable {
     let number: Int
     let repoFullName: String
     let htmlURL: URL
+    let headSHA: String
     let status: CheckState
     let isDraft: Bool
     let isAutoMergeEnabled: Bool
