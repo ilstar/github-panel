@@ -47,6 +47,22 @@ final class PRMonitorTests: XCTestCase {
         XCTAssertEqual(scheduler.intervals, [600])
     }
 
+    func testHookScriptsLoadFromDefaultsAndPersistChanges() {
+        let defaults = FakeDefaults()
+        defaults.stringValues["GithubPanel.hooks.allSucceededScript"] = "say passed"
+        defaults.stringValues["GithubPanel.hooks.anyFailuresScript"] = "say failed"
+        let monitor = makeMonitor(defaults: defaults)
+
+        XCTAssertEqual(monitor.allSucceededHookScript, "say passed")
+        XCTAssertEqual(monitor.anyFailuresHookScript, "say failed")
+
+        monitor.allSucceededHookScript = "echo ok"
+        monitor.anyFailuresHookScript = "echo nope"
+
+        XCTAssertEqual(defaults.stringValues["GithubPanel.hooks.allSucceededScript"], "echo ok")
+        XCTAssertEqual(defaults.stringValues["GithubPanel.hooks.anyFailuresScript"], "echo nope")
+    }
+
     func testStartUpdatesTokenPresenceAndSchedulesTimer() {
         let tokenStore = FakeTokenStore(token: "token")
         let scheduler = FakeTimerScheduler()
@@ -182,6 +198,62 @@ final class PRMonitorTests: XCTestCase {
         await monitor.refreshNow()
 
         XCTAssertEqual(notifications.posts.count, 1)
+    }
+
+    func testHooksRunWhenPendingBecomesSuccessfulOrFailed() async throws {
+        let api = FakeGitHubAPI()
+        api.user = GitHubUser(login: "fred")
+        api.summaries = [summary(number: 1), summary(number: 2)]
+        api.pullRequests["acme/widgets#1"] = info(number: 1, status: .pending)
+        api.pullRequests["acme/widgets#2"] = info(number: 2, status: .pending)
+        let defaults = FakeDefaults()
+        defaults.stringValues["GithubPanel.hooks.allSucceededScript"] = "echo success"
+        defaults.stringValues["GithubPanel.hooks.anyFailuresScript"] = "echo failure"
+        let hooks = FakeHookRunner()
+        let monitor = makeMonitor(api: api,
+                                  tokenStore: FakeTokenStore(token: "token"),
+                                  defaults: defaults,
+                                  hookRunner: hooks)
+
+        await monitor.refreshNow()
+        XCTAssertTrue(hooks.runs.isEmpty)
+
+        api.pullRequests["acme/widgets#1"] = info(number: 1, status: .success)
+        api.pullRequests["acme/widgets#2"] = info(number: 2, status: .failure)
+        await monitor.refreshNow()
+
+        XCTAssertEqual(hooks.runs.map(\.script).sorted(), ["echo failure", "echo success"])
+        XCTAssertEqual(Set(hooks.runs.map(\.context.scenario)), [.allSucceeded, .anyFailures])
+        let successRun = try XCTUnwrap(hooks.runs.first { $0.context.scenario == .allSucceeded })
+        XCTAssertEqual(successRun.context.number, 1)
+        XCTAssertEqual(successRun.context.environment["GITHUB_PANEL_PR_NUMBER"], "1")
+        XCTAssertEqual(successRun.context.environment["GITHUB_PANEL_REPO_OWNER"], "acme")
+        XCTAssertEqual(successRun.context.environment["GITHUB_PANEL_REPO_NAME"], "widgets")
+        XCTAssertEqual(successRun.context.environment["GITHUB_PANEL_PR_HEAD_SHA"], "sha-1")
+    }
+
+    func testHooksIgnoreUnknownAndAlreadyTerminalStates() async {
+        let api = FakeGitHubAPI()
+        api.user = GitHubUser(login: "fred")
+        api.summaries = [summary(number: 1), summary(number: 2)]
+        api.pullRequests["acme/widgets#1"] = info(number: 1, status: .success)
+        api.pullRequests["acme/widgets#2"] = info(number: 2, status: .pending)
+        let defaults = FakeDefaults()
+        defaults.stringValues["GithubPanel.hooks.allSucceededScript"] = "echo success"
+        defaults.stringValues["GithubPanel.hooks.anyFailuresScript"] = "echo failure"
+        let hooks = FakeHookRunner()
+        let monitor = makeMonitor(api: api,
+                                  tokenStore: FakeTokenStore(token: "token"),
+                                  defaults: defaults,
+                                  hookRunner: hooks)
+
+        await monitor.refreshNow()
+
+        api.pullRequests["acme/widgets#1"] = info(number: 1, status: .failure)
+        api.pullRequests["acme/widgets#2"] = info(number: 2, status: .unknown)
+        await monitor.refreshNow()
+
+        XCTAssertTrue(hooks.runs.isEmpty)
     }
 
     func testClearTokenResetsState() {
@@ -325,13 +397,15 @@ private func makeMonitor(api: FakeGitHubAPI = FakeGitHubAPI(),
                          notificationPoster: FakeNotificationPoster = FakeNotificationPoster(),
                          defaults: FakeDefaults = FakeDefaults(),
                          timerScheduler: FakeTimerScheduler = FakeTimerScheduler(),
-                         dateProvider: FakeDateProvider = FakeDateProvider(now: Date(timeIntervalSince1970: 0))) -> PRMonitor {
+                         dateProvider: FakeDateProvider = FakeDateProvider(now: Date(timeIntervalSince1970: 0)),
+                         hookRunner: FakeHookRunner = FakeHookRunner()) -> PRMonitor {
     PRMonitor(api: api,
               tokenStore: tokenStore,
               notificationPoster: notificationPoster,
               defaults: defaults,
               timerScheduler: timerScheduler,
-              dateProvider: dateProvider)
+              dateProvider: dateProvider,
+              hookRunner: hookRunner)
 }
 
 private final class FakeGitHubAPI: GitHubAPIClient {
@@ -455,13 +529,36 @@ private final class FakeNotificationPoster: NotificationPosting {
 
 private final class FakeDefaults: DefaultsStoring {
     var values: [String: Double] = [:]
+    var stringValues: [String: String] = [:]
 
     func double(forKey defaultName: String) -> Double {
         values[defaultName] ?? 0
     }
 
+    func string(forKey defaultName: String) -> String? {
+        stringValues[defaultName]
+    }
+
     func set(_ value: Double, forKey defaultName: String) {
         values[defaultName] = value
+    }
+
+    func set(_ value: String, forKey defaultName: String) {
+        stringValues[defaultName] = value
+    }
+}
+
+private final class FakeHookRunner: PullRequestHookRunning {
+    struct Run {
+        let script: String
+        let context: PullRequestHookContext
+    }
+
+    private(set) var runs: [Run] = []
+
+    func run(script: String, context: PullRequestHookContext) {
+        guard !script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        runs.append(Run(script: script, context: context))
     }
 }
 
@@ -557,6 +654,7 @@ private func row(number: Int,
                    number: number,
                    repoFullName: "acme/widgets",
                    htmlURL: URL(string: "https://github.com/acme/widgets/pull/\(number)")!,
+                   headSHA: "sha-\(number)",
                    status: status,
                    isDraft: isDraft,
                    isAutoMergeEnabled: autoMerge,

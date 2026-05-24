@@ -3,10 +3,16 @@ import Combine
 
 protocol DefaultsStoring {
     func double(forKey defaultName: String) -> Double
+    func string(forKey defaultName: String) -> String?
     func set(_ value: Double, forKey defaultName: String)
+    func set(_ value: String, forKey defaultName: String)
 }
 
-extension UserDefaults: DefaultsStoring {}
+extension UserDefaults: DefaultsStoring {
+    func set(_ value: String, forKey defaultName: String) {
+        set(value as Any, forKey: defaultName)
+    }
+}
 
 protocol DateProviding {
     var now: Date { get }
@@ -14,6 +20,70 @@ protocol DateProviding {
 
 struct SystemDateProvider: DateProviding {
     var now: Date { Date() }
+}
+
+enum PullRequestHookScenario: String {
+    case anyFailures = "any_failures"
+    case allSucceeded = "all_succeeded"
+}
+
+struct PullRequestHookContext {
+    let scenario: PullRequestHookScenario
+    let status: CheckState
+    let id: String
+    let nodeID: String
+    let number: Int
+    let title: String
+    let repoFullName: String
+    let htmlURL: URL
+    let headSHA: String
+
+    var environment: [String: String] {
+        let repoParts = repoFullName.split(separator: "/", maxSplits: 1).map(String.init)
+        var values = [
+            "GITHUB_PANEL_HOOK_SCENARIO": scenario.rawValue,
+            "GITHUB_PANEL_PR_STATUS": status.rawValue,
+            "GITHUB_PANEL_PR_ID": id,
+            "GITHUB_PANEL_PR_NODE_ID": nodeID,
+            "GITHUB_PANEL_PR_NUMBER": String(number),
+            "GITHUB_PANEL_PR_TITLE": title,
+            "GITHUB_PANEL_REPO_FULL_NAME": repoFullName,
+            "GITHUB_PANEL_PR_URL": htmlURL.absoluteString,
+            "GITHUB_PANEL_PR_HEAD_SHA": headSHA
+        ]
+        if repoParts.count == 2 {
+            values["GITHUB_PANEL_REPO_OWNER"] = repoParts[0]
+            values["GITHUB_PANEL_REPO_NAME"] = repoParts[1]
+        }
+        return values
+    }
+}
+
+protocol PullRequestHookRunning {
+    func run(script: String, context: PullRequestHookContext)
+}
+
+struct SystemPullRequestHookRunner: PullRequestHookRunning {
+    func run(script: String, context: PullRequestHookContext) {
+        let trimmed = script.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        DispatchQueue.global(qos: .utility).async {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            process.arguments = ["-lc", trimmed]
+            var environment = ProcessInfo.processInfo.environment
+            context.environment.forEach { environment[$0.key] = $0.value }
+            process.environment = environment
+
+            do {
+                try process.run()
+                process.waitUntilExit()
+            } catch {
+                NSLog("GithubPanel hook failed to start: \(error.localizedDescription)")
+            }
+        }
+    }
 }
 
 protocol RefreshTimer {
@@ -61,6 +131,16 @@ final class PRMonitor: ObservableObject {
             scheduleTimer()
         }
     }
+    @Published var allSucceededHookScript: String {
+        didSet {
+            defaults.set(allSucceededHookScript, forKey: DefaultsKeys.allSucceededHookScript)
+        }
+    }
+    @Published var anyFailuresHookScript: String {
+        didSet {
+            defaults.set(anyFailuresHookScript, forKey: DefaultsKeys.anyFailuresHookScript)
+        }
+    }
 
     private let api: GitHubAPIClient
     private let tokenStore: TokenStoring
@@ -68,6 +148,7 @@ final class PRMonitor: ObservableObject {
     private let defaults: DefaultsStoring
     private let timerScheduler: TimerScheduling
     private let dateProvider: DateProviding
+    private let hookRunner: PullRequestHookRunning
     private var timer: RefreshTimer?
     private var lastStates: [String: CheckState] = [:]
     private let historyPageSize = 10
@@ -83,6 +164,7 @@ final class PRMonitor: ObservableObject {
          defaults: DefaultsStoring = UserDefaults.standard,
          timerScheduler: TimerScheduling = SystemTimerScheduler(),
          dateProvider: DateProviding = SystemDateProvider(),
+         hookRunner: PullRequestHookRunning = SystemPullRequestHookRunner(),
          isUsingMockData: Bool = false) {
         self.api = api
         self.tokenStore = tokenStore
@@ -90,6 +172,7 @@ final class PRMonitor: ObservableObject {
         self.defaults = defaults
         self.timerScheduler = timerScheduler
         self.dateProvider = dateProvider
+        self.hookRunner = hookRunner
         self.isUsingMockData = isUsingMockData
         let stored = defaults.double(forKey: DefaultsKeys.refreshInterval)
         if stored == 0 {
@@ -97,6 +180,8 @@ final class PRMonitor: ObservableObject {
         } else {
             refreshInterval = stored
         }
+        allSucceededHookScript = defaults.string(forKey: DefaultsKeys.allSucceededHookScript) ?? ""
+        anyFailuresHookScript = defaults.string(forKey: DefaultsKeys.anyFailuresHookScript) ?? ""
     }
 
     func start() {
@@ -234,6 +319,7 @@ final class PRMonitor: ObservableObject {
                                           number: summary.number,
                                           repoFullName: summary.repoFullName,
                                           htmlURL: summary.htmlURL,
+                                          headSHA: pr.headSHA,
                                           status: pr.status,
                                           isDraft: pr.isDraft,
                                           isAutoMergeEnabled: pr.isAutoMergeEnabled,
@@ -267,12 +353,45 @@ final class PRMonitor: ObservableObject {
                                                           repoFullName: pr.repoFullName,
                                                           number: pr.number,
                                                           htmlURL: pr.htmlURL)
+                runHookIfConfigured(for: pr)
             }
             lastStates[pr.id] = pr.status
         }
 
         // Remove states for PRs that are no longer in the list.
         lastStates = lastStates.filter { seen.contains($0.key) }
+    }
+
+    private func runHookIfConfigured(for pr: PullRequestRow) {
+        guard let scenario = hookScenario(for: pr.status) else { return }
+        let script: String
+        switch scenario {
+        case .anyFailures:
+            script = anyFailuresHookScript
+        case .allSucceeded:
+            script = allSucceededHookScript
+        }
+        let context = PullRequestHookContext(scenario: scenario,
+                                             status: pr.status,
+                                             id: pr.id,
+                                             nodeID: pr.nodeID,
+                                             number: pr.number,
+                                             title: pr.title,
+                                             repoFullName: pr.repoFullName,
+                                             htmlURL: pr.htmlURL,
+                                             headSHA: pr.headSHA)
+        hookRunner.run(script: script, context: context)
+    }
+
+    private func hookScenario(for state: CheckState) -> PullRequestHookScenario? {
+        switch state {
+        case .success:
+            return .allSucceeded
+        case .failure, .error:
+            return .anyFailures
+        case .pending, .unknown:
+            return nil
+        }
     }
 
     func requestMerge(for row: PullRequestRow) async {
@@ -329,4 +448,6 @@ enum PullRequestTab: String, CaseIterable, Identifiable {
 
 private enum DefaultsKeys {
     static let refreshInterval = "GithubPanel.refreshInterval"
+    static let allSucceededHookScript = "GithubPanel.hooks.allSucceededScript"
+    static let anyFailuresHookScript = "GithubPanel.hooks.anyFailuresScript"
 }
