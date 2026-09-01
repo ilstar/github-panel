@@ -23,6 +23,7 @@
 		1A1110442B12345600000001 /* PRMonitorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110452B12345600000001 /* PRMonitorTests.swift */; };
 		1A1110462B12345600000001 /* KeychainStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110472B12345600000001 /* KeychainStoreTests.swift */; };
 		1A1110532B12345600000001 /* AppIconAssetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110542B12345600000001 /* AppIconAssetTests.swift */; };
+		1A1110552B12345600000001 /* ContentViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110562B12345600000001 /* ContentViewTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -54,6 +55,7 @@
 		1A1110472B12345600000001 /* KeychainStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStoreTests.swift; sourceTree = "<group>"; };
 		1A1110492B12345600000001 /* GithubPanelTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = GithubPanelTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A1110542B12345600000001 /* AppIconAssetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIconAssetTests.swift; sourceTree = "<group>"; };
+		1A1110562B12345600000001 /* ContentViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentViewTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -98,6 +100,7 @@
 			children = (
 				1A1110542B12345600000001 /* AppIconAssetTests.swift */,
 				1A1110412B12345600000001 /* CheckStateTests.swift */,
+				1A1110562B12345600000001 /* ContentViewTests.swift */,
 				1A1110432B12345600000001 /* GitHubAPITests.swift */,
 				1A1110452B12345600000001 /* PRMonitorTests.swift */,
 				1A1110472B12345600000001 /* KeychainStoreTests.swift */,
@@ -243,6 +246,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				1A1110402B12345600000001 /* CheckStateTests.swift in Sources */,
+				1A1110552B12345600000001 /* ContentViewTests.swift in Sources */,
 				1A1110422B12345600000001 /* GitHubAPITests.swift in Sources */,
 				1A1110442B12345600000001 /* PRMonitorTests.swift in Sources */,
 				1A1110462B12345600000001 /* KeychainStoreTests.swift in Sources */,

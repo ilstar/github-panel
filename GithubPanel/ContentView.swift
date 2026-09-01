@@ -13,7 +13,7 @@ struct ContentView: View {
     @State private var selectedPRID: String?
     @State private var selectedHistoryID: String?
     @State private var mergeInFlight: Set<String> = []
-    private let minuteTicker = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
+    private let minuteTicker = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
     private let relativeFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .short
@@ -875,6 +875,26 @@ private struct DraftBadge: View {
     }
 }
 
+struct RefreshAnimationStopPlan: Equatable {
+    let cycle: Double
+    let delay: TimeInterval
+}
+
+enum RefreshAnimation {
+    static let spinDuration: TimeInterval = 1.6
+
+    static func shouldUpdateTimeline(isLoading: Bool, isSettling: Bool) -> Bool {
+        isLoading || isSettling
+    }
+
+    static func stopPlan(elapsed: TimeInterval) -> RefreshAnimationStopPlan {
+        let cycles = max(0, elapsed / spinDuration)
+        let stopCycle = ceil(cycles)
+        let delay = max(0, (stopCycle * spinDuration) - elapsed)
+        return RefreshAnimationStopPlan(cycle: stopCycle, delay: delay)
+    }
+}
+
 private struct RefreshPill: View {
     let isLoading: Bool
     let isEnabled: Bool
@@ -883,7 +903,8 @@ private struct RefreshPill: View {
 
     @State private var spinStart = Date()
     @State private var stopAtCycle: Double?
-    private let spinDuration = 1.6
+    @State private var isSettling = false
+    @State private var settleTask: Task<Void, Never>?
 
     init(isLoading: Bool,
          isEnabled: Bool,
@@ -898,11 +919,12 @@ private struct RefreshPill: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
-                TimelineView(.animation) { context in
-                    Image(systemName: "arrow.clockwise")
-                        .font(.body.weight(.semibold))
-                        .rotationEffect(.degrees(rotationAngle(at: context.date)))
-                        .opacity(isLoading || stopAtCycle != nil ? 1 : 1)
+                if RefreshAnimation.shouldUpdateTimeline(isLoading: isLoading, isSettling: isSettling) {
+                    TimelineView(.animation) { context in
+                        refreshIcon(rotation: rotationAngle(at: context.date))
+                    }
+                } else {
+                    refreshIcon(rotation: 0)
                 }
                 Text("Refresh")
                     .font(.subheadline.weight(.semibold))
@@ -928,12 +950,32 @@ private struct RefreshPill: View {
         .onChange(of: isLoading) { loading in
             let now = Date()
             if loading {
+                settleTask?.cancel()
                 spinStart = now
                 stopAtCycle = nil
+                isSettling = false
             } else {
-                let cycles = max(0, now.timeIntervalSince(spinStart) / spinDuration)
-                stopAtCycle = ceil(cycles)
+                let plan = RefreshAnimation.stopPlan(elapsed: now.timeIntervalSince(spinStart))
+                stopAtCycle = plan.cycle
+                guard plan.delay > 0 else {
+                    finishSettling()
+                    return
+                }
+
+                isSettling = true
+                settleTask = Task { @MainActor in
+                    do {
+                        try await Task.sleep(nanoseconds: UInt64(plan.delay * 1_000_000_000))
+                    } catch {
+                        return
+                    }
+                    finishSettling()
+                }
             }
+        }
+        .onDisappear {
+            settleTask?.cancel()
+            finishSettling()
         }
     }
 
@@ -942,12 +984,24 @@ private struct RefreshPill: View {
             return 0
         }
         let elapsed = max(0, date.timeIntervalSince(spinStart))
-        let cycles = elapsed / spinDuration
+        let cycles = elapsed / RefreshAnimation.spinDuration
         if let stopAtCycle, cycles >= stopAtCycle {
             return 0
         }
         let fraction = cycles.truncatingRemainder(dividingBy: 1)
         return fraction * 360
+    }
+
+    private func refreshIcon(rotation: Double) -> some View {
+        Image(systemName: "arrow.clockwise")
+            .font(.body.weight(.semibold))
+            .rotationEffect(.degrees(rotation))
+    }
+
+    private func finishSettling() {
+        isSettling = false
+        stopAtCycle = nil
+        settleTask = nil
     }
 }
 
