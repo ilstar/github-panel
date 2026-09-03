@@ -51,6 +51,20 @@ The DMG is created at:
 build/dist/GithubPanel-1.0.dmg
 ```
 
+This creates a Developer ID signed, notarized, stapled DMG suitable for sharing with another Mac. It uses the same distribution flow as:
+
+```bash
+make notarized-dmg VERSION=1.0
+```
+
+For a quick unsigned DMG that stays on your development Mac, use:
+
+```bash
+make local-dmg VERSION=1.0
+```
+
+Do not send `local-dmg` output to another Mac. Gatekeeper may block it with "Apple could not verify" because it is intentionally not notarized.
+
 Create or update a GitHub release with the DMG attached:
 
 ```bash
@@ -94,7 +108,28 @@ make test
 make build-and-open
 ```
 
-When `.env.local` sets `GITHUB_PANEL_DEVELOPMENT_TEAM`, `make` passes local signing settings to Xcode. Without `.env.local`, builds use the repo's default local signing behavior. `.env.local` is ignored so your Team ID stays out of Git. For release builds, use your own Developer ID signing setup outside the repository.
+When `.env.local` sets `GITHUB_PANEL_DEVELOPMENT_TEAM`, `make` passes local signing settings to Xcode. Without `.env.local`, builds use the repo's default local signing behavior. `.env.local` is ignored so your Team ID stays out of Git.
+
+For distribution builds, add your Developer ID Application identity and a notarytool keychain profile to `.env.local`:
+
+```makefile
+GITHUB_PANEL_DEVELOPER_ID_APPLICATION = Developer ID Application: Your Name (TEAMID)
+GITHUB_PANEL_NOTARY_PROFILE = githubpanel-notary
+```
+
+Create the notary profile once with:
+
+```bash
+xcrun notarytool store-credentials githubpanel-notary
+```
+
+Then build the shareable DMG:
+
+```bash
+make notarized-dmg VERSION=1.0
+```
+
+`make release` uses the notarized DMG so uploaded releases pass Gatekeeper on other Macs.
 
 ## Mock PR States
 Debug builds can show fixture PRs for visual testing instead of calling GitHub. Build with the command above, then launch with:
