@@ -20,6 +20,8 @@ final class UpdaterConfigurationTests: XCTestCase {
 
         XCTAssertTrue(source.contains("CommandGroup(replacing: .appSettings)"))
         XCTAssertFalse(source.contains("CommandMenu(\"GithubPanel\")"))
+        XCTAssertTrue(source.contains("SettingsLink()"))
+        XCTAssertTrue(source.contains(".commandsReplaced"))
 
         let settingsIndex = try XCTUnwrap(source.range(of: "SettingsLink()")?.lowerBound)
         let updateIndex = try XCTUnwrap(source.range(of: "Button(\"Check for Updates…\")")?.lowerBound)

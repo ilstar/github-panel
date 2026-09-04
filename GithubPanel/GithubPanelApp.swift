@@ -34,23 +34,6 @@ struct GithubPanelApp: App {
                 .environmentObject(monitor)
         }
         .commands {
-            CommandGroup(replacing: .appSettings) {
-                if #available(macOS 14.0, *) {
-                    SettingsLink()
-                        .keyboardShortcut(",", modifiers: .command)
-                } else {
-                    Button("Settings…") {
-                        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-                    }
-                    .keyboardShortcut(",", modifiers: .command)
-                }
-
-                Button("Check for Updates…") {
-                    updaterController.checkForUpdates(nil)
-                }
-                .disabled(!updaterController.updater.canCheckForUpdates)
-            }
-
             CommandMenu("Pull Requests") {
                 Button("Open Pull Requests") {
                     Self.selectPullRequestTab(.open, using: monitor)
@@ -74,6 +57,24 @@ struct GithubPanelApp: App {
         Settings {
             SettingsView()
                 .environmentObject(monitor)
+        }
+        .commandsReplaced {
+            CommandGroup(replacing: .appSettings) {
+                if #available(macOS 14.0, *) {
+                    SettingsLink()
+                        .keyboardShortcut(",", modifiers: .command)
+                } else {
+                    Button("Settings…") {
+                        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                    }
+                    .keyboardShortcut(",", modifiers: .command)
+                }
+
+                Button("Check for Updates…") {
+                    updaterController.checkForUpdates(nil)
+                }
+                .disabled(!updaterController.updater.canCheckForUpdates)
+            }
         }
     }
 
