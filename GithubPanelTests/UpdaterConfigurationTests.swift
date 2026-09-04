@@ -18,7 +18,7 @@ final class UpdaterConfigurationTests: XCTestCase {
     func testUpdateCheckUsesTheExistingApplicationMenu() throws {
         let source = try loadSourceFile("GithubPanel/GithubPanelApp.swift")
 
-        XCTAssertTrue(source.contains("CommandGroup(after: .appSettings)"))
+        XCTAssertTrue(source.contains("CommandGroup(before: .systemServices)"))
         XCTAssertFalse(source.contains("CommandMenu(\"GithubPanel\")"))
     }
 
