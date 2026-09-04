@@ -18,8 +18,12 @@ final class UpdaterConfigurationTests: XCTestCase {
     func testUpdateCheckUsesTheExistingApplicationMenu() throws {
         let source = try loadSourceFile("GithubPanel/GithubPanelApp.swift")
 
-        XCTAssertTrue(source.contains("CommandGroup(before: .systemServices)"))
+        XCTAssertTrue(source.contains("CommandGroup(replacing: .appSettings)"))
         XCTAssertFalse(source.contains("CommandMenu(\"GithubPanel\")"))
+
+        let settingsIndex = try XCTUnwrap(source.range(of: "SettingsLink()")?.lowerBound)
+        let updateIndex = try XCTUnwrap(source.range(of: "Button(\"Check for Updates…\")")?.lowerBound)
+        XCTAssertLessThan(settingsIndex, updateIndex)
     }
 
     private func loadInfoPlist() throws -> [String: Any] {

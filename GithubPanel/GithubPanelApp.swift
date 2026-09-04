@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import UserNotifications
 import KeyboardShortcuts
 import Sparkle
@@ -33,7 +34,17 @@ struct GithubPanelApp: App {
                 .environmentObject(monitor)
         }
         .commands {
-            CommandGroup(before: .systemServices) {
+            CommandGroup(replacing: .appSettings) {
+                if #available(macOS 14.0, *) {
+                    SettingsLink()
+                        .keyboardShortcut(",", modifiers: .command)
+                } else {
+                    Button("Settings…") {
+                        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                    }
+                    .keyboardShortcut(",", modifiers: .command)
+                }
+
                 Button("Check for Updates…") {
                     updaterController.checkForUpdates(nil)
                 }
