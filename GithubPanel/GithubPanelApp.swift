@@ -1,20 +1,29 @@
 import SwiftUI
 import UserNotifications
 import KeyboardShortcuts
+import Sparkle
 
 @main
 struct GithubPanelApp: App {
     @StateObject private var monitor: PRMonitor
+    private let updaterController: SPUStandardUpdaterController
 
     init() {
         let monitor = Self.makeMonitor()
         _monitor = StateObject(wrappedValue: monitor)
+        updaterController = SPUStandardUpdaterController(startingUpdater: false,
+                                                         updaterDelegate: nil,
+                                                         userDriverDelegate: nil)
 
         if !ProcessInfo.processInfo.isRunningTests {
             NotificationManager.shared.configure()
             KeyboardShortcuts.onKeyUp(for: .toggleApp) {
                 AppVisibility.toggle()
             }
+        }
+
+        if Self.shouldStartUpdater {
+            updaterController.startUpdater()
         }
     }
 
@@ -24,6 +33,13 @@ struct GithubPanelApp: App {
                 .environmentObject(monitor)
         }
         .commands {
+            CommandMenu("GithubPanel") {
+                Button("Check for Updates…") {
+                    updaterController.checkForUpdates(nil)
+                }
+                .disabled(!updaterController.updater.canCheckForUpdates)
+            }
+
             CommandMenu("Pull Requests") {
                 Button("Open Pull Requests") {
                     Self.selectPullRequestTab(.open, using: monitor)
@@ -61,6 +77,14 @@ struct GithubPanelApp: App {
         #endif
 
         return PRMonitor()
+    }
+
+    private static var shouldStartUpdater: Bool {
+        #if DEBUG
+        false
+        #else
+        !ProcessInfo.processInfo.isRunningTests
+        #endif
     }
 
     private static func refreshPullRequests(using monitor: PRMonitor) {

@@ -42,7 +42,7 @@ make test
 Create a release DMG with:
 
 ```bash
-make dmg VERSION=1.0
+make dmg VERSION=1.3.0 BUILD_VERSION=4
 ```
 
 The DMG is created at:
@@ -68,14 +68,14 @@ Do not send `local-dmg` output to another Mac. Gatekeeper may block it with "App
 Create or update a GitHub release with the DMG attached:
 
 ```bash
-make release VERSION=1.0 RELEASE_NOTES="Release 1.0"
+make release VERSION=1.3.0 BUILD_VERSION=4 RELEASE_NOTES="Release 1.3.0"
 ```
 
-This requires the GitHub CLI to be installed and authenticated with `gh auth login`.
-By default, `make release` uses the tag `v1.0` when `VERSION=1.0`. Override the release metadata when needed:
+This requires the GitHub CLI to be installed and authenticated with `gh auth login`. It uploads both the notarized DMG and the signed Sparkle `appcast.xml`. `VERSION` is the user-facing version and `BUILD_VERSION` is the monotonically increasing bundle build number.
+By default, `make release` uses the tag `v1.3.0` when `VERSION=1.3.0`. Override the release metadata when needed:
 
 ```bash
-make release VERSION=1.1.0 RELEASE_TAG=v1.1.0 RELEASE_TITLE="GithubPanel 1.1.0" GH_RELEASE_FLAGS="--draft"
+make release VERSION=1.3.0 BUILD_VERSION=4 RELEASE_TAG=v1.3.0 RELEASE_TITLE="GithubPanel 1.3.0" GH_RELEASE_FLAGS="--draft"
 ```
 
 The debug app is created at:
@@ -99,6 +99,7 @@ For personal development, add your Apple Developer Team ID to `.env.local`:
 
 ```makefile
 GITHUB_PANEL_DEVELOPMENT_TEAM = YOUR_TEAM_ID
+GITHUB_PANEL_SPARKLE_BIN = /path/to/Sparkle/bin
 ```
 
 Then use the normal build commands:
@@ -130,6 +131,20 @@ make notarized-dmg VERSION=1.0
 ```
 
 `make release` uses the notarized DMG so uploaded releases pass Gatekeeper on other Macs.
+
+## Automatic updates
+
+GithubPanel uses Sparkle to check for updates in production builds. It downloads signed updates in the background and asks before relaunching to install one. The application menu also includes `Check for Updates…`.
+
+Generate the Sparkle signing key once using the tool included with the resolved Sparkle package:
+
+```bash
+/path/to/Sparkle/bin/generate_keys
+```
+
+Keep the private key in the macOS login Keychain. Only the generated public key belongs in `GithubPanel/Info.plist`. Set `GITHUB_PANEL_SPARKLE_BIN` in `.env.local` to the directory containing `generate_appcast` before running `make release`.
+
+Versions through v1.2.1 do not contain Sparkle and cannot update themselves. Install the first Sparkle-enabled release manually; later releases update from inside the app.
 
 ## Mock PR States
 Debug builds can show fixture PRs for visual testing instead of calling GitHub. Build with the command above, then launch with:
