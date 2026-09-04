@@ -15,6 +15,13 @@ final class UpdaterConfigurationTests: XCTestCase {
         XCTAssertTrue(plist["SUVerifyUpdateBeforeExtraction"] as? Bool == true)
     }
 
+    func testUpdateCheckUsesTheExistingApplicationMenu() throws {
+        let source = try loadSourceFile("GithubPanel/GithubPanelApp.swift")
+
+        XCTAssertTrue(source.contains("CommandGroup(after: .appInfo)"))
+        XCTAssertFalse(source.contains("CommandMenu(\"GithubPanel\")"))
+    }
+
     private func loadInfoPlist() throws -> [String: Any] {
         let repositoryRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -24,5 +31,12 @@ final class UpdaterConfigurationTests: XCTestCase {
         return try XCTUnwrap(
             PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
         )
+    }
+
+    private func loadSourceFile(_ path: String) throws -> String {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        return try String(contentsOf: repositoryRoot.appendingPathComponent(path), encoding: .utf8)
     }
 }

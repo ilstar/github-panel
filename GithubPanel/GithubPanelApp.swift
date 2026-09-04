@@ -33,7 +33,7 @@ struct GithubPanelApp: App {
                 .environmentObject(monitor)
         }
         .commands {
-            CommandMenu("GithubPanel") {
+            CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") {
                     updaterController.checkForUpdates(nil)
                 }
