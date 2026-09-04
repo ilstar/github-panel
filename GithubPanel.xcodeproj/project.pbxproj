@@ -18,12 +18,14 @@
 		1A1110252B12345600000001 /* AppVisibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110232B12345600000001 /* AppVisibility.swift */; };
 		1A11100C2B12345600000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1A11100D2B12345600000001 /* Assets.xcassets */; };
 		1A1110302B12345600000001 /* KeyboardShortcuts in Frameworks */ = {isa = PBXBuildFile; productRef = 1A1110322B12345600000001 /* KeyboardShortcuts */; };
+		1A1110602B12345600000001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 1A1110622B12345600000001 /* Sparkle */; };
 		1A1110402B12345600000001 /* CheckStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110412B12345600000001 /* CheckStateTests.swift */; };
 		1A1110422B12345600000001 /* GitHubAPITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110432B12345600000001 /* GitHubAPITests.swift */; };
 		1A1110442B12345600000001 /* PRMonitorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110452B12345600000001 /* PRMonitorTests.swift */; };
 		1A1110462B12345600000001 /* KeychainStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110472B12345600000001 /* KeychainStoreTests.swift */; };
 		1A1110532B12345600000001 /* AppIconAssetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110542B12345600000001 /* AppIconAssetTests.swift */; };
 		1A1110552B12345600000001 /* ContentViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110562B12345600000001 /* ContentViewTests.swift */; };
+		1A1110572B12345600000001 /* UpdaterConfigurationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110582B12345600000001 /* UpdaterConfigurationTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -56,6 +58,7 @@
 		1A1110492B12345600000001 /* GithubPanelTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = GithubPanelTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A1110542B12345600000001 /* AppIconAssetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIconAssetTests.swift; sourceTree = "<group>"; };
 		1A1110562B12345600000001 /* ContentViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentViewTests.swift; sourceTree = "<group>"; };
+		1A1110582B12345600000001 /* UpdaterConfigurationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdaterConfigurationTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -104,6 +107,7 @@
 				1A1110432B12345600000001 /* GitHubAPITests.swift */,
 				1A1110452B12345600000001 /* PRMonitorTests.swift */,
 				1A1110472B12345600000001 /* KeychainStoreTests.swift */,
+				1A1110582B12345600000001 /* UpdaterConfigurationTests.swift */,
 			);
 			path = GithubPanelTests;
 			sourceTree = "<group>";
@@ -126,6 +130,7 @@
 			name = GithubPanel;
 			packageProductDependencies = (
 				1A1110322B12345600000001 /* KeyboardShortcuts */,
+				1A1110622B12345600000001 /* Sparkle */,
 			);
 			productName = GithubPanel;
 			productReference = 1A11100E2B12345600000001 /* GithubPanel.app */;
@@ -177,6 +182,7 @@
 			mainGroup = 1A1110102B12345600000001;
 			packageReferences = (
 				1A1110332B12345600000001 /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */,
+				1A1110632B12345600000001 /* XCRemoteSwiftPackageReference "Sparkle" */,
 			);
 			productRefGroup = 1A1110122B12345600000001 /* Products */;
 			projectDirPath = "";
@@ -212,6 +218,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				1A1110302B12345600000001 /* KeyboardShortcuts in Frameworks */,
+				1A1110602B12345600000001 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -251,6 +258,7 @@
 				1A1110442B12345600000001 /* PRMonitorTests.swift in Sources */,
 				1A1110462B12345600000001 /* KeychainStoreTests.swift in Sources */,
 				1A1110532B12345600000001 /* AppIconAssetTests.swift in Sources */,
+				1A1110572B12345600000001 /* UpdaterConfigurationTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -270,6 +278,11 @@
 			package = 1A1110332B12345600000001 /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */;
 			productName = KeyboardShortcuts;
 		};
+		1A1110622B12345600000001 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 1A1110632B12345600000001 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
 /* End XCSwiftPackageProductDependency section */
 
 /* Begin XCRemoteSwiftPackageReference section */
@@ -279,6 +292,14 @@
 			requirement = {
 				kind = upToNextMajorVersion;
 				minimumVersion = 2.4.0;
+			};
+		};
+		1A1110632B12345600000001 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.9.6;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
@@ -291,7 +312,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = "";
 				ENABLE_TESTABILITY = YES;
@@ -302,6 +323,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = 1.2.1;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.githubpanel.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -318,7 +340,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -328,6 +350,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = 1.2.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.githubpanel.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;
