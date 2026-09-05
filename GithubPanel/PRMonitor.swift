@@ -152,6 +152,11 @@ final class PRMonitor: ObservableObject {
     private var credentialSession = UUID()
     private var cachedLogin: String?
     private var timer: RefreshTimer?
+    private var activeRefreshTask: Task<Void, Never>?
+    private var activeRefreshID: UUID?
+    private var refreshQueued = false
+    private var refreshRevision = 0
+    private var historyLoadedSuccessfully = false
     private var lastStates: [String: CheckState] = [:]
     private let historyPageSize = 10
     private let relativeFormatter: RelativeDateTimeFormatter = {
@@ -210,8 +215,8 @@ final class PRMonitor: ObservableObject {
         invalidateLogin()
         tokenStore.clearToken()
         hasToken = false
-        prRows = []
-        historyRows = []
+        setPRRows([])
+        setHistoryRows([])
         historyPage = 1
         historyTotalCount = 0
         lastStates = [:]
@@ -220,6 +225,11 @@ final class PRMonitor: ObservableObject {
     private func invalidateLogin() {
         credentialSession = UUID()
         cachedLogin = nil
+        activeRefreshTask?.cancel()
+        activeRefreshTask = nil
+        activeRefreshID = nil
+        refreshQueued = false
+        historyLoadedSuccessfully = false
         isLoading = false
         isHistoryLoading = false
     }
@@ -238,44 +248,29 @@ final class PRMonitor: ObservableObject {
     }
 
     func refreshNow() async {
-        guard let token = tokenStore.loadToken() else { return }
-        let session = credentialSession
-        isLoading = true
-        lastError = nil
-        do {
-            let result = try await api.fetchOpenPRs(token: token)
-            guard session == credentialSession else { return }
-            cachedLogin = result.login
-            prRows = result.rows
-            updateNotificationsForRows()
-            lastRefreshAt = dateProvider.now
-        } catch {
-            guard session == credentialSession else { return }
-            prRows = []
-            lastError = error.localizedDescription
-        }
-        isLoading = false
+        guard tokenStore.loadToken() != nil else { return }
+        let task = startRefreshIfNeeded()
+        await task.value
     }
 
     func loadHistoryIfNeeded() {
-        guard historyRows.isEmpty, !isHistoryLoading else { return }
         Task {
-            await refreshHistory(page: historyPage)
+            await refreshHistory(page: historyPage, onlyIfNeeded: true)
         }
     }
 
     func refreshCurrentHistoryPage() async {
-        await refreshHistory(page: historyPage)
+        await refreshHistory(page: historyPage, onlyIfNeeded: false)
     }
 
     func loadNextHistoryPage() async {
         guard canLoadNextHistoryPage else { return }
-        await refreshHistory(page: historyPage + 1)
+        await refreshHistory(page: historyPage + 1, onlyIfNeeded: false)
     }
 
     func loadPreviousHistoryPage() async {
         guard canLoadPreviousHistoryPage else { return }
-        await refreshHistory(page: historyPage - 1)
+        await refreshHistory(page: historyPage - 1, onlyIfNeeded: false)
     }
 
     var canLoadPreviousHistoryPage: Bool {
@@ -295,8 +290,10 @@ final class PRMonitor: ObservableObject {
         return "\(start)-\(end) of \(historyTotalCount)"
     }
 
-    private func refreshHistory(page: Int) async {
+    private func refreshHistory(page: Int, onlyIfNeeded: Bool) async {
         guard let token = tokenStore.loadToken() else { return }
+        guard !isHistoryLoading else { return }
+        guard !onlyIfNeeded || !historyLoadedSuccessfully else { return }
         let session = credentialSession
         isHistoryLoading = true
         lastHistoryError = nil
@@ -314,23 +311,95 @@ final class PRMonitor: ObservableObject {
                                                     page: page,
                                                     perPage: historyPageSize)
             guard session == credentialSession else { return }
-            historyRows = page.rows
+            setHistoryRows(page.rows)
             historyPage = page.page
             historyTotalCount = page.totalCount
+            historyLoadedSuccessfully = true
             lastHistoryRefreshAt = dateProvider.now
         } catch {
             guard session == credentialSession else { return }
-            historyRows = []
+            setHistoryRows([])
             historyTotalCount = 0
+            historyLoadedSuccessfully = false
             lastHistoryError = error.localizedDescription
         }
         isHistoryLoading = false
     }
 
-    private func updateNotificationsForRows() {
+    private func startRefreshIfNeeded() -> Task<Void, Never> {
+        if let activeRefreshTask {
+            return activeRefreshTask
+        }
+
+        let session = credentialSession
+        let refreshID = UUID()
+        isLoading = true
+        lastError = nil
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.runRefresh(session: session, refreshID: refreshID)
+        }
+        activeRefreshTask = task
+        activeRefreshID = refreshID
+        return task
+    }
+
+    private func runRefresh(session: UUID, refreshID: UUID) async {
+        while true {
+            guard let token = tokenStore.loadToken() else { break }
+            let requestRevision = refreshRevision
+
+            do {
+                let result = try await api.fetchOpenPRs(token: token)
+                guard session == credentialSession else { return }
+                if requestRevision == refreshRevision {
+                    cachedLogin = result.login
+                    updateNotificationsForRows(result.rows)
+                    setPRRows(result.rows)
+                    lastRefreshAt = dateProvider.now
+                }
+            } catch {
+                guard session == credentialSession else { return }
+                if requestRevision == refreshRevision {
+                    setPRRows([])
+                    lastError = error.localizedDescription
+                }
+            }
+
+            guard session == credentialSession else { return }
+            guard refreshQueued else { break }
+            refreshQueued = false
+        }
+
+        guard session == credentialSession, activeRefreshID == refreshID else { return }
+        activeRefreshTask = nil
+        activeRefreshID = nil
+        isLoading = false
+    }
+
+    private func requireFreshRefresh(for session: UUID) async {
+        guard session == credentialSession else { return }
+        refreshRevision += 1
+        if activeRefreshTask != nil {
+            refreshQueued = true
+        }
+        await refreshNow()
+    }
+
+    private func setPRRows(_ rows: [PullRequestRow]) {
+        guard prRows != rows else { return }
+        prRows = rows
+    }
+
+    private func setHistoryRows(_ rows: [PullRequestHistoryRow]) {
+        guard historyRows != rows else { return }
+        historyRows = rows
+    }
+
+    private func updateNotificationsForRows(_ rows: [PullRequestRow]) {
         var seen: Set<String> = []
 
-        for pr in prRows {
+        for pr in rows {
             seen.insert(pr.id)
             if let previous = lastStates[pr.id],
                previous == .pending,
@@ -383,6 +452,7 @@ final class PRMonitor: ObservableObject {
 
     func requestMerge(for row: PullRequestRow) async {
         guard let token = tokenStore.loadToken() else { return }
+        let session = credentialSession
         do {
             if row.isInMergeQueue || row.status == .failure || row.status == .error {
                 return
@@ -391,14 +461,16 @@ final class PRMonitor: ObservableObject {
             if row.canMergeImmediately {
                 if row.isMergeQueueEnabled {
                     try await api.enqueuePullRequest(token: token, pullRequestID: row.nodeID)
-                    await refreshNow()
+                    await requireFreshRefresh(for: session)
                     return
                 }
 
                 let merged = try await api.mergePullRequest(token: token, repoFullName: row.repoFullName, number: row.number)
+                guard session == credentialSession else { return }
                 if merged {
-                    prRows.removeAll { $0.id == row.id }
+                    setPRRows(prRows.filter { $0.id != row.id })
                     lastStates.removeValue(forKey: row.id)
+                    await requireFreshRefresh(for: session)
                 }
                 return
             }
@@ -406,14 +478,15 @@ final class PRMonitor: ObservableObject {
             if row.isAutoMergeEnabled {
                 guard row.canDisableAutoMerge else { return }
                 try await api.disableAutoMerge(token: token, pullRequestID: row.nodeID)
-                await refreshNow()
+                await requireFreshRefresh(for: session)
                 return
             }
 
             guard row.canEnableAutoMerge else { return }
             try await api.enableAutoMerge(token: token, pullRequestID: row.nodeID)
-            await refreshNow()
+            await requireFreshRefresh(for: session)
         } catch {
+            guard session == credentialSession else { return }
             lastError = error.localizedDescription
         }
     }

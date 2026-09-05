@@ -159,57 +159,48 @@ struct ContentView: View {
     }
 
     private var openPullRequestsList: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 10) {
-                    if monitor.prRows.isEmpty {
-                        emptyStateSpacer
-                    } else {
-                        ForEach(monitor.prRows) { pr in
-                            PRRow(
-                                pr: pr,
-                                isSelected: selectedPRID == pr.id,
-                                relativeFormatter: relativeFormatter,
-                                now: now,
-                                isMerging: mergeInFlight.contains(pr.id),
-                                onMerge: {
-                                    merge(pr: pr)
-                                }
-                            )
-                            .id(pr.id)
-                            .onTapGesture {
-                                selectedPRID = pr.id
-                                NSWorkspace.shared.open(pr.htmlURL)
+        ScrollView {
+            LazyVStack(spacing: 10) {
+                if monitor.prRows.isEmpty {
+                    emptyStateSpacer
+                } else {
+                    ForEach(monitor.prRows) { pr in
+                        PRRow(
+                            pr: pr,
+                            isSelected: selectedPRID == pr.id,
+                            relativeFormatter: relativeFormatter,
+                            now: now,
+                            isMerging: mergeInFlight.contains(pr.id),
+                            onMerge: {
+                                merge(pr: pr)
                             }
+                        )
+                        .id(pr.id)
+                        .onTapGesture {
+                            selectedPRID = pr.id
+                            NSWorkspace.shared.open(pr.htmlURL)
                         }
                     }
                 }
-                .padding(.top, 6)
-                .padding(.bottom, 8)
             }
-            .scrollIndicators(.hidden)
-            .background(
-                KeyEventHandlingView { event in
-                    handleKeyEvent(event)
-                }
-                .frame(width: 0, height: 0)
-            )
-            .onAppear {
-                if selectedPRID == nil {
-                    selectedPRID = monitor.prRows.first?.id
-                }
+            .padding(.top, 6)
+            .padding(.bottom, 8)
+        }
+        .scrollIndicators(.hidden)
+        .background(
+            KeyEventHandlingView { event in
+                handleKeyEvent(event)
             }
-            .onChange(of: monitor.prRows.map { $0.id }) { newIDs in
-                if selectedPRID == nil || !newIDs.contains(selectedPRID ?? "") {
-                    selectedPRID = newIDs.first
-                }
+            .frame(width: 0, height: 0)
+        )
+        .onAppear {
+            if selectedPRID == nil {
+                selectedPRID = monitor.prRows.first?.id
             }
-            .onChange(of: monitor.lastRefreshAt) { _ in
-                guard let first = monitor.prRows.first else { return }
-                selectedPRID = first.id
-                withAnimation {
-                    proxy.scrollTo(first.id, anchor: .top)
-                }
+        }
+        .onChange(of: monitor.prRows.map { $0.id }) { newIDs in
+            if selectedPRID == nil || !newIDs.contains(selectedPRID ?? "") {
+                selectedPRID = newIDs.first
             }
         }
     }
@@ -258,7 +249,7 @@ struct ContentView: View {
                                 selectedHistoryID = newIDs.first
                             }
                         }
-                        .onChange(of: monitor.lastHistoryRefreshAt) { _ in
+                        .onChange(of: monitor.historyPage) { _ in
                             guard let first = monitor.historyRows.first else { return }
                             selectedHistoryID = first.id
                             withAnimation {

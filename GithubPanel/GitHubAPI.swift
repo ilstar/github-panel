@@ -40,7 +40,7 @@ struct PullRequestHistoryPage {
     }
 }
 
-struct PullRequestHistoryRow: Identifiable {
+struct PullRequestHistoryRow: Identifiable, Equatable {
     let id: String
     let title: String
     let number: Int
@@ -74,7 +74,7 @@ enum PullRequestHistoryOutcome: Equatable {
     }
 }
 
-struct PullRequestRow: Identifiable {
+struct PullRequestRow: Identifiable, Equatable {
     let id: String
     let nodeID: String
     let title: String

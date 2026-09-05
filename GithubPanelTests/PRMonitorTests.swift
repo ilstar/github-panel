@@ -1,5 +1,6 @@
 import XCTest
 import AppKit
+import Combine
 @testable import GithubPanel
 
 @MainActor
@@ -90,6 +91,271 @@ final class PRMonitorTests: XCTestCase {
         XCTAssertEqual(monitor.lastRefreshAt, fixedDate)
         XCTAssertEqual(monitor.prRows.map(\.number), [7, 3])
         XCTAssertEqual(api.fetchOpenPRTokens.count, 1)
+    }
+
+    func testConcurrentOpenRefreshesShareOneRequest() async {
+        let gate = SuspendedOpenRequests()
+        let api = FakeGitHubAPI()
+        api.openHandler = { _ in try await gate.next() }
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+
+        let first = Task { await monitor.refreshNow() }
+        await gate.waitForRequestCount(1)
+        let second = Task { await monitor.refreshNow() }
+        await Task.yield()
+
+        let requestCount = await gate.requestCount
+        XCTAssertEqual(requestCount, 1)
+        XCTAssertTrue(monitor.isLoading)
+
+        await gate.resumeNext(returning: OpenPullRequests(login: "fred", rows: [row(number: 1, status: .success)]))
+        await first.value
+        await second.value
+
+        XCTAssertFalse(monitor.isLoading)
+        XCTAssertEqual(monitor.prRows.map(\.number), [1])
+    }
+
+    func testMutationDuringRefreshQueuesOneFreshRequestAndDiscardsStaleRows() async {
+        let gate = SuspendedOpenRequests()
+        let api = FakeGitHubAPI()
+        api.openHandler = { _ in try await gate.next() }
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+        let item = row(number: 1, status: .success, mergeQueue: true)
+        let mutationGate = MutationCalls()
+        api.enqueueHandler = { id in await mutationGate.record(id) }
+
+        let refresh = Task { await monitor.refreshNow() }
+        await gate.waitForRequestCount(1)
+        let mutation = Task { await monitor.requestMerge(for: item) }
+        await mutationGate.waitForCount(1)
+
+        XCTAssertEqual(api.enqueueCalls, ["node-1"])
+        await gate.resumeNext(returning: OpenPullRequests(login: "fred", rows: [item]))
+        await gate.waitForRequestCount(2)
+        XCTAssertTrue(monitor.prRows.isEmpty)
+        XCTAssertTrue(monitor.isLoading)
+
+        let freshRow = row(number: 1,
+                           status: .success,
+                           mergeQueue: true,
+                           inMergeQueue: true,
+                           mergeStateStatus: "QUEUED")
+        await gate.resumeNext(returning: OpenPullRequests(login: "fred", rows: [freshRow]))
+        await mutation.value
+        await refresh.value
+
+        XCTAssertFalse(monitor.isLoading)
+        XCTAssertEqual(monitor.prRows, [freshRow])
+        let requestCount = await gate.requestCount
+        XCTAssertEqual(requestCount, 2)
+    }
+
+    func testMultipleMutationsCoalesceIntoOneFollowUpRequest() async {
+        let gate = SuspendedOpenRequests()
+        let api = FakeGitHubAPI()
+        api.openHandler = { _ in try await gate.next() }
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+        let firstRow = row(number: 1, status: .pending, canEnableAutoMerge: true)
+        let secondRow = row(number: 2, status: .pending, canEnableAutoMerge: true)
+        let mutationGate = MutationCalls()
+        api.enableHandler = { id in await mutationGate.record(id) }
+
+        let refresh = Task { await monitor.refreshNow() }
+        await gate.waitForRequestCount(1)
+        let firstMutation = Task { await monitor.requestMerge(for: firstRow) }
+        let secondMutation = Task { await monitor.requestMerge(for: secondRow) }
+        await mutationGate.waitForCount(2)
+
+        XCTAssertEqual(api.enableCalls.sorted(), ["node-1", "node-2"])
+        await gate.resumeNext(returning: OpenPullRequests(login: "fred", rows: [firstRow, secondRow]))
+        await gate.waitForRequestCount(2)
+        await gate.resumeNext(returning: OpenPullRequests(login: "fred",
+                                                         rows: [row(number: 1, status: .pending, autoMerge: true),
+                                                                row(number: 2, status: .pending, autoMerge: true)]))
+        await firstMutation.value
+        await secondMutation.value
+        await refresh.value
+
+        let requestCount = await gate.requestCount
+        XCTAssertEqual(requestCount, 2)
+        XCTAssertFalse(monitor.isLoading)
+    }
+
+    func testFailedOpenRefreshReleasesTaskForRetry() async {
+        let api = FakeGitHubAPI()
+        api.error = TestError(message: "offline")
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+
+        await monitor.refreshNow()
+
+        XCTAssertFalse(monitor.isLoading)
+        XCTAssertEqual(monitor.lastError, "offline")
+
+        api.error = nil
+        api.rows = [row(number: 1, status: .success)]
+        await monitor.refreshNow()
+
+        XCTAssertFalse(monitor.isLoading)
+        XCTAssertNil(monitor.lastError)
+        XCTAssertEqual(api.fetchOpenPRTokens.count, 2)
+    }
+
+    func testCredentialChangeDetachesOldRefreshWithoutClearingNewLoadingState() async {
+        let gate = SuspendedOpenRequests()
+        let api = FakeGitHubAPI()
+        api.openHandler = { _ in try await gate.next() }
+        let store = FakeTokenStore(token: "old")
+        let monitor = makeMonitor(api: api, tokenStore: store)
+
+        let oldRefresh = Task { await monitor.refreshNow() }
+        await gate.waitForRequestCount(1)
+        monitor.clearToken()
+        store.token = "new"
+        let newRefresh = Task { await monitor.refreshNow() }
+        await gate.waitForRequestCount(2)
+
+        await gate.resumeNext(returning: OpenPullRequests(login: "old-user", rows: [row(number: 1, status: .success)]))
+        await oldRefresh.value
+        XCTAssertTrue(monitor.isLoading)
+        XCTAssertTrue(monitor.prRows.isEmpty)
+
+        await gate.resumeNext(returning: OpenPullRequests(login: "new-user", rows: [row(number: 2, status: .success)]))
+        await newRefresh.value
+
+        XCTAssertFalse(monitor.isLoading)
+        XCTAssertEqual(monitor.prRows.map(\.number), [2])
+    }
+
+    func testSuccessfulEmptyHistoryLoadsOnlyOnceWhenUsingIfNeeded() async {
+        let gate = SuspendedHistoryRequests()
+        let api = FakeGitHubAPI()
+        api.historyHandler = { _, _, page, perPage in
+            try await gate.next(page: page, perPage: perPage)
+        }
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+        let loaded = expectation(description: "History loaded")
+        let cancellable = monitor.$lastHistoryRefreshAt.dropFirst().sink { _ in loaded.fulfill() }
+
+        monitor.loadHistoryIfNeeded()
+        await gate.waitForRequestCount(1)
+        monitor.loadHistoryIfNeeded()
+        let initialRequestCount = await gate.requestCount
+        XCTAssertEqual(initialRequestCount, 1)
+
+        await gate.resumeNext(returning: PullRequestHistoryPage(rows: [], page: 1, perPage: 10, totalCount: 0))
+        await fulfillment(of: [loaded], timeout: 2)
+        _ = cancellable
+        await Task.yield()
+
+        monitor.loadHistoryIfNeeded()
+        await Task.yield()
+        let finalRequestCount = await gate.requestCount
+        XCTAssertEqual(finalRequestCount, 1)
+        XCTAssertTrue(monitor.historyRows.isEmpty)
+    }
+
+    func testIdenticalHistoryRowsDoNotPublishAgainButRefreshTimestampAdvances() async {
+        let api = FakeGitHubAPI()
+        api.historyPages[1] = PullRequestHistoryPage(rows: [historyRow(number: 1)],
+                                                     page: 1,
+                                                     perPage: 10,
+                                                     totalCount: 1)
+        let dateProvider = FakeDateProvider(now: Date(timeIntervalSince1970: 1000))
+        let monitor = makeMonitor(api: api,
+                                  tokenStore: FakeTokenStore(token: "token"),
+                                  dateProvider: dateProvider)
+        let publications = PublicationCounter()
+        let cancellable = monitor.$historyRows.dropFirst().sink { _ in publications.count += 1 }
+
+        await monitor.refreshCurrentHistoryPage()
+        dateProvider.now = Date(timeIntervalSince1970: 2000)
+        await monitor.refreshCurrentHistoryPage()
+
+        _ = cancellable
+        XCTAssertEqual(publications.count, 1)
+        XCTAssertEqual(monitor.lastHistoryRefreshAt, Date(timeIntervalSince1970: 2000))
+    }
+
+    func testFailedHistoryLoadRetriesAndExplicitRefreshReloads() async {
+        let api = FakeGitHubAPI()
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+        api.historyHandler = { _, _, _, _ in throw TestError(message: "history offline") }
+
+        await monitor.refreshCurrentHistoryPage()
+
+        XCTAssertFalse(monitor.isHistoryLoading)
+        XCTAssertEqual(monitor.lastHistoryError, "history offline")
+
+        api.historyHandler = nil
+        api.historyPages[1] = PullRequestHistoryPage(rows: [historyRow(number: 1)],
+                                                     page: 1,
+                                                     perPage: 10,
+                                                     totalCount: 1)
+        await monitor.refreshCurrentHistoryPage()
+        XCTAssertNil(monitor.lastHistoryError)
+        XCTAssertEqual(api.fetchClosedPRCalls.count, 2)
+
+        await monitor.refreshCurrentHistoryPage()
+        XCTAssertEqual(api.fetchClosedPRCalls.count, 3)
+    }
+
+    func testCredentialChangeResetsSuccessfulHistoryLoadState() async {
+        let api = FakeGitHubAPI()
+        let store = FakeTokenStore(token: "old")
+        let monitor = makeMonitor(api: api, tokenStore: store)
+
+        await monitor.refreshCurrentHistoryPage()
+        XCTAssertEqual(api.fetchClosedPRCalls.count, 1)
+
+        let gate = SuspendedHistoryRequests()
+        api.historyHandler = { _, _, page, perPage in
+            try await gate.next(page: page, perPage: perPage)
+        }
+        monitor.saveToken("new")
+        monitor.loadHistoryIfNeeded()
+        await gate.waitForRequestCount(1)
+
+        XCTAssertEqual(api.fetchClosedPRCalls.count, 2)
+        await gate.resumeNext(returning: PullRequestHistoryPage(rows: [], page: 1, perPage: 10, totalCount: 0))
+    }
+
+    func testIdenticalRowsDoNotPublishAgainButRefreshTimestampAdvances() async {
+        let api = FakeGitHubAPI()
+        api.rows = [row(number: 1, status: .success)]
+        let dateProvider = FakeDateProvider(now: Date(timeIntervalSince1970: 1000))
+        let monitor = makeMonitor(api: api,
+                                  tokenStore: FakeTokenStore(token: "token"),
+                                  dateProvider: dateProvider)
+        let publications = PublicationCounter()
+        let cancellable = monitor.$prRows.dropFirst().sink { _ in publications.count += 1 }
+
+        await monitor.refreshNow()
+        let firstTimestamp = monitor.lastRefreshAt
+        dateProvider.now = Date(timeIntervalSince1970: 2000)
+        await monitor.refreshNow()
+
+        _ = cancellable
+        XCTAssertEqual(publications.count, 1)
+        XCTAssertEqual(firstTimestamp, Date(timeIntervalSince1970: 1000))
+        XCTAssertEqual(monitor.lastRefreshAt, Date(timeIntervalSince1970: 2000))
+    }
+
+    func testChangedRowsOrOrderingPublishesOncePerChange() async {
+        let api = FakeGitHubAPI()
+        api.rows = [row(number: 1, status: .pending), row(number: 2, status: .success)]
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+        let publications = PublicationCounter()
+        let cancellable = monitor.$prRows.dropFirst().sink { _ in publications.count += 1 }
+
+        await monitor.refreshNow()
+        api.rows[0] = row(number: 1, status: .success)
+        await monitor.refreshNow()
+        api.rows.reverse()
+        await monitor.refreshNow()
+
+        _ = cancellable
+        XCTAssertEqual(publications.count, 3)
     }
 
     func testOpenRefreshSeedsLoginForHistory() async {
@@ -514,6 +780,7 @@ private final class FakeGitHubAPI: GitHubAPIClient {
     private(set) var fetchCurrentUserTokens: [String] = []
     var openHandler: ((String) async throws -> OpenPullRequests)?
     var userHandler: ((String) async throws -> GitHubUser)?
+    var historyHandler: ((String, String, Int, Int) async throws -> PullRequestHistoryPage)?
     private(set) var historyUsernames: [String] = []
     private(set) var fetchOpenPRTokens: [String] = []
     private(set) var fetchClosedPRCalls: [(page: Int, perPage: Int)] = []
@@ -521,6 +788,8 @@ private final class FakeGitHubAPI: GitHubAPIClient {
     private(set) var enableCalls: [String] = []
     private(set) var disableCalls: [String] = []
     private(set) var mergePullRequestCalls: [(repoFullName: String, number: Int)] = []
+    var enableHandler: ((String) async -> Void)?
+    var enqueueHandler: ((String) async -> Void)?
 
     func fetchCurrentUser(token: String) async throws -> GitHubUser {
         if let error { throw error }
@@ -541,6 +810,7 @@ private final class FakeGitHubAPI: GitHubAPIClient {
         if let error { throw error }
         historyUsernames.append(username)
         fetchClosedPRCalls.append((page, perPage))
+        if let historyHandler { return try await historyHandler(token, username, page, perPage) }
         return historyPages[page] ?? PullRequestHistoryPage(rows: [],
                                                             page: page,
                                                             perPage: perPage,
@@ -550,11 +820,13 @@ private final class FakeGitHubAPI: GitHubAPIClient {
     func enqueuePullRequest(token: String, pullRequestID: String) async throws {
         if let error { throw error }
         enqueueCalls.append(pullRequestID)
+        await enqueueHandler?(pullRequestID)
     }
 
     func enableAutoMerge(token: String, pullRequestID: String) async throws {
         if let error { throw error }
         enableCalls.append(pullRequestID)
+        await enableHandler?(pullRequestID)
     }
 
     func disableAutoMerge(token: String, pullRequestID: String) async throws {
@@ -652,8 +924,91 @@ private final class FakeHookRunner: PullRequestHookRunning {
     }
 }
 
-private struct FakeDateProvider: DateProviding {
-    let now: Date
+private final class FakeDateProvider: DateProviding {
+    var now: Date
+
+    init(now: Date) {
+        self.now = now
+    }
+}
+
+private final class PublicationCounter {
+    var count = 0
+}
+
+private actor SuspendedOpenRequests {
+    private(set) var requestCount = 0
+    private var continuations: [CheckedContinuation<OpenPullRequests, Error>] = []
+    private var requestWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func next() async throws -> OpenPullRequests {
+        requestCount += 1
+        let waiters = requestWaiters
+        requestWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        return try await withCheckedThrowingContinuation { continuation in
+            continuations.append(continuation)
+        }
+    }
+
+    func waitForRequestCount(_ expected: Int) async {
+        guard requestCount < expected else { return }
+        await withCheckedContinuation { continuation in
+            requestWaiters.append(continuation)
+        }
+    }
+
+    func resumeNext(returning response: OpenPullRequests) {
+        precondition(!continuations.isEmpty)
+        continuations.removeFirst().resume(returning: response)
+    }
+}
+
+private actor SuspendedHistoryRequests {
+    private(set) var requestCount = 0
+    private var continuations: [CheckedContinuation<PullRequestHistoryPage, Error>] = []
+    private var requestWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func next(page: Int, perPage: Int) async throws -> PullRequestHistoryPage {
+        requestCount += 1
+        let waiters = requestWaiters
+        requestWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        return try await withCheckedThrowingContinuation { continuation in
+            continuations.append(continuation)
+        }
+    }
+
+    func waitForRequestCount(_ expected: Int) async {
+        guard requestCount < expected else { return }
+        await withCheckedContinuation { continuation in
+            requestWaiters.append(continuation)
+        }
+    }
+
+    func resumeNext(returning response: PullRequestHistoryPage) {
+        precondition(!continuations.isEmpty)
+        continuations.removeFirst().resume(returning: response)
+    }
+}
+
+private actor MutationCalls {
+    private var count = 0
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func record(_ id: String) {
+        count += 1
+        let waiters = waiters
+        self.waiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+
+    func waitForCount(_ expected: Int) async {
+        guard count < expected else { return }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
 }
 
 private final class FakeTimerScheduler: TimerScheduling {
