@@ -158,21 +158,14 @@ final class MockTokenStore: TokenStoring {
 
 final class MockGitHubAPI: GitHubAPIClient {
     private let user = GitHubUser(login: "mock-user")
-    private var pullRequests: [String: PullRequestInfo]
-    private let summaries: [PullRequestSummary]
+    private var pullRequests: [String: PullRequestRow]
     private let history: [PullRequestHistoryRow]
 
     init(now: Date = Date(), isEmpty: Bool = false) {
-        let rows = isEmpty ? [] : Self.makePullRequests(now: now)
-        self.pullRequests = Dictionary(uniqueKeysWithValues: rows.map { ("\($0.repoFullName)#\($0.number)", $0) })
-        self.summaries = rows.map {
-            PullRequestSummary(id: "\($0.repoFullName)#\($0.number)",
-                               title: $0.title,
-                               number: $0.number,
-                               repoFullName: $0.repoFullName,
-                               htmlURL: $0.htmlURL,
-                               updatedAt: now.addingTimeInterval(TimeInterval(-$0.number * 70)))
+        let rows = isEmpty ? [] : Self.makePullRequests().map {
+            $0.copy(updatedAt: now.addingTimeInterval(TimeInterval(-$0.number * 70)))
         }
+        self.pullRequests = Dictionary(uniqueKeysWithValues: rows.map { ("\($0.repoFullName)#\($0.number)", $0) })
         self.history = isEmpty ? [] : Self.makeHistory(now: now)
     }
 
@@ -180,8 +173,9 @@ final class MockGitHubAPI: GitHubAPIClient {
         user
     }
 
-    func fetchOpenPRs(token: String, username: String) async throws -> [PullRequestSummary] {
-        summaries
+    func fetchOpenPRs(token: String) async throws -> OpenPullRequests {
+        let rows = pullRequests.values.sorted { $0.updatedAt > $1.updatedAt }
+        return OpenPullRequests(login: user.login, rows: Array(rows.prefix(10)))
     }
 
     func fetchClosedPRs(token: String, username: String, page: Int, perPage: Int) async throws -> PullRequestHistoryPage {
@@ -193,16 +187,6 @@ final class MockGitHubAPI: GitHubAPIClient {
                                       page: safePage,
                                       perPage: safePerPage,
                                       totalCount: history.count)
-    }
-
-    func fetchPullRequest(token: String, repoFullName: String, number: Int) async throws -> PullRequestInfo {
-        pullRequests["\(repoFullName)#\(number)"] ?? Self.pullRequest(number: number,
-                                                                      title: "Mock PR \(number)",
-                                                                      status: .unknown)
-    }
-
-    func fetchPRCheckState(token: String, pr: PullRequestInfo) async throws -> CheckState {
-        pr.status
     }
 
     func enqueuePullRequest(token: String, pullRequestID: String) async throws {
@@ -228,12 +212,12 @@ final class MockGitHubAPI: GitHubAPIClient {
         return true
     }
 
-    private func updatePullRequest(with nodeID: String, transform: (PullRequestInfo) -> PullRequestInfo) {
+    private func updatePullRequest(with nodeID: String, transform: (PullRequestRow) -> PullRequestRow) {
         guard let match = pullRequests.first(where: { $0.value.nodeID == nodeID }) else { return }
         pullRequests[match.key] = transform(match.value)
     }
 
-    private static func makePullRequests(now: Date) -> [PullRequestInfo] {
+    private static func makePullRequests() -> [PullRequestRow] {
         [
             pullRequest(number: 101,
                         title: "Ready: merge button",
@@ -304,44 +288,49 @@ final class MockGitHubAPI: GitHubAPIClient {
                                     canDisableAutoMerge: Bool = false,
                                     isMergeQueueEnabled: Bool = false,
                                     isInMergeQueue: Bool = false,
-                                    mergeStateStatus: String = "CLEAN") -> PullRequestInfo {
-        PullRequestInfo(nodeID: "mock-node-\(number)",
+                                    mergeStateStatus: String = "CLEAN") -> PullRequestRow {
+        PullRequestRow(id: "mock/github-panel#\(number)",
+                        nodeID: "mock-node-\(number)",
                         title: title,
                         number: number,
                         repoFullName: "mock/github-panel",
                         htmlURL: URL(string: "https://github.com/mock/github-panel/pull/\(number)")!,
                         headSHA: "mock-sha-\(number)",
-                        isDraft: isDraft,
                         status: status,
+                        isDraft: isDraft,
                         isAutoMergeEnabled: isAutoMergeEnabled,
                         canEnableAutoMerge: canEnableAutoMerge,
                         canDisableAutoMerge: canDisableAutoMerge,
                         isMergeQueueEnabled: isMergeQueueEnabled,
                         isInMergeQueue: isInMergeQueue,
-                        mergeStateStatus: mergeStateStatus)
+                        mergeStateStatus: mergeStateStatus,
+                        updatedAt: Date(timeIntervalSince1970: 0))
     }
 }
 
-private extension PullRequestInfo {
+private extension PullRequestRow {
     func copy(isAutoMergeEnabled: Bool? = nil,
               canEnableAutoMerge: Bool? = nil,
               canDisableAutoMerge: Bool? = nil,
               isInMergeQueue: Bool? = nil,
-              mergeStateStatus: String? = nil) -> PullRequestInfo {
-        PullRequestInfo(nodeID: nodeID,
+              mergeStateStatus: String? = nil,
+              updatedAt: Date? = nil) -> PullRequestRow {
+        PullRequestRow(id: id,
+                         nodeID: nodeID,
                         title: title,
                         number: number,
                         repoFullName: repoFullName,
                         htmlURL: htmlURL,
                         headSHA: headSHA,
-                        isDraft: isDraft,
                         status: status,
+                        isDraft: isDraft,
                         isAutoMergeEnabled: isAutoMergeEnabled ?? self.isAutoMergeEnabled,
                         canEnableAutoMerge: canEnableAutoMerge ?? self.canEnableAutoMerge,
                         canDisableAutoMerge: canDisableAutoMerge ?? self.canDisableAutoMerge,
                         isMergeQueueEnabled: isMergeQueueEnabled,
                         isInMergeQueue: isInMergeQueue ?? self.isInMergeQueue,
-                        mergeStateStatus: mergeStateStatus ?? self.mergeStateStatus)
+                        mergeStateStatus: mergeStateStatus ?? self.mergeStateStatus,
+                        updatedAt: updatedAt ?? self.updatedAt)
     }
 }
 #endif
