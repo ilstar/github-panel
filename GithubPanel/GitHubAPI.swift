@@ -2,10 +2,8 @@ import Foundation
 
 protocol GitHubAPIClient {
     func fetchCurrentUser(token: String) async throws -> GitHubUser
-    func fetchOpenPRs(token: String, username: String) async throws -> [PullRequestSummary]
+    func fetchOpenPRs(token: String) async throws -> OpenPullRequests
     func fetchClosedPRs(token: String, username: String, page: Int, perPage: Int) async throws -> PullRequestHistoryPage
-    func fetchPullRequest(token: String, repoFullName: String, number: Int) async throws -> PullRequestInfo
-    func fetchPRCheckState(token: String, pr: PullRequestInfo) async throws -> CheckState
     func enqueuePullRequest(token: String, pullRequestID: String) async throws
     func enableAutoMerge(token: String, pullRequestID: String) async throws
     func disableAutoMerge(token: String, pullRequestID: String) async throws
@@ -22,31 +20,9 @@ struct GitHubUser: Decodable {
     let login: String
 }
 
-struct PullRequestInfo: Identifiable {
-    let id = UUID()
-    let nodeID: String
-    let title: String
-    let number: Int
-    let repoFullName: String
-    let htmlURL: URL
-    let headSHA: String
-    let isDraft: Bool
-    let status: CheckState
-    let isAutoMergeEnabled: Bool
-    let canEnableAutoMerge: Bool
-    let canDisableAutoMerge: Bool
-    let isMergeQueueEnabled: Bool
-    let isInMergeQueue: Bool
-    let mergeStateStatus: String
-}
-
-struct PullRequestSummary: Identifiable {
-    let id: String
-    let title: String
-    let number: Int
-    let repoFullName: String
-    let htmlURL: URL
-    let updatedAt: Date
+struct OpenPullRequests {
+    let login: String
+    let rows: [PullRequestRow]
 }
 
 struct PullRequestHistoryPage {
@@ -176,20 +152,54 @@ final class GitHubAPI: GitHubAPIClient {
         return try await decode(GitHubUser.self, request: request)
     }
 
-    func fetchOpenPRs(token: String, username: String) async throws -> [PullRequestSummary] {
-        let query = "is:pr author:\(username) is:open sort:updated-desc"
-        let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
-        let request = makeRequest(path: "/search/issues?q=\(encoded)", token: token)
-        let response = try await decode(SearchResponse.self, request: request)
-        return response.items.compactMap { item in
-            guard let repoFullName = repoFullName(from: item) else { return nil }
-            return PullRequestSummary(id: "\(repoFullName)#\(item.number)",
-                                      title: item.title,
-                                      number: item.number,
-                                      repoFullName: repoFullName,
-                                      htmlURL: item.htmlURL,
-                                      updatedAt: item.updatedAt)
+    func fetchOpenPRs(token: String) async throws -> OpenPullRequests {
+        let query = """
+        query {
+          viewer {
+            login
+            pullRequests(first: 10, states: [OPEN], orderBy: {field: UPDATED_AT, direction: DESC}) {
+              nodes {
+                id
+                title
+                number
+                url
+                updatedAt
+                repository { nameWithOwner }
+                headRefOid
+                isDraft
+                autoMergeRequest { enabledAt }
+                viewerCanEnableAutoMerge
+                viewerCanDisableAutoMerge
+                isMergeQueueEnabled
+                isInMergeQueue
+                mergeStateStatus
+                statusCheckRollup { state }
+              }
+            }
+          }
         }
+        """
+        let response = try await graphQL(OpenPullRequestsResponse.self,
+                                         query: query, variables: [:], token: token)
+        let rows = response.viewer.pullRequests.nodes.map { pr in
+            PullRequestRow(id: "\(pr.repository.nameWithOwner)#\(pr.number)",
+                           nodeID: pr.id,
+                           title: pr.title,
+                           number: pr.number,
+                           repoFullName: pr.repository.nameWithOwner,
+                           htmlURL: pr.url,
+                           headSHA: pr.headRefOid,
+                           status: CheckState(githubStatus: pr.statusCheckRollup?.state),
+                           isDraft: pr.isDraft,
+                           isAutoMergeEnabled: pr.autoMergeRequest != nil,
+                           canEnableAutoMerge: pr.viewerCanEnableAutoMerge,
+                           canDisableAutoMerge: pr.viewerCanDisableAutoMerge,
+                           isMergeQueueEnabled: pr.isMergeQueueEnabled,
+                           isInMergeQueue: pr.isInMergeQueue,
+                           mergeStateStatus: pr.mergeStateStatus,
+                           updatedAt: pr.updatedAt)
+        }
+        return OpenPullRequests(login: response.viewer.login, rows: rows)
     }
 
     func fetchClosedPRs(token: String, username: String, page: Int, perPage: Int) async throws -> PullRequestHistoryPage {
@@ -214,66 +224,6 @@ final class GitHubAPI: GitHubAPIClient {
                                       page: safePage,
                                       perPage: safePerPage,
                                       totalCount: response.totalCount)
-    }
-
-    func fetchPullRequest(token: String, repoFullName: String, number: Int) async throws -> PullRequestInfo {
-        let parts = repoFullName.split(separator: "/", maxSplits: 1).map(String.init)
-        guard parts.count == 2 else { throw URLError(.badURL) }
-
-        let query = """
-        query($owner: String!, $name: String!, $number: Int!) {
-          repository(owner: $owner, name: $name) {
-            pullRequest(number: $number) {
-              id
-              title
-              number
-              url
-              headRefOid
-              isDraft
-              autoMergeRequest { enabledAt }
-              viewerCanEnableAutoMerge
-              viewerCanDisableAutoMerge
-              isMergeQueueEnabled
-              isInMergeQueue
-              mergeStateStatus
-              statusCheckRollup { state }
-            }
-          }
-        }
-        """
-
-        let response = try await graphQL(PullRequestDetailResponse.self,
-                                         query: query,
-                                         variables: ["owner": parts[0], "name": parts[1], "number": number],
-                                         token: token)
-        guard let pr = response.repository?.pullRequest else {
-            throw GraphQLError(message: "Pull request not found.")
-        }
-
-        return PullRequestInfo(nodeID: pr.id,
-                               title: pr.title,
-                               number: pr.number,
-                               repoFullName: repoFullName,
-                               htmlURL: pr.url,
-                               headSHA: pr.headRefOid,
-                               isDraft: pr.isDraft,
-                               status: CheckState(githubStatus: pr.statusCheckRollup?.state),
-                               isAutoMergeEnabled: pr.autoMergeRequest != nil,
-                               canEnableAutoMerge: pr.viewerCanEnableAutoMerge,
-                               canDisableAutoMerge: pr.viewerCanDisableAutoMerge,
-                               isMergeQueueEnabled: pr.isMergeQueueEnabled,
-                               isInMergeQueue: pr.isInMergeQueue,
-                               mergeStateStatus: pr.mergeStateStatus)
-    }
-
-    func fetchPRCheckState(token: String, pr: PullRequestInfo) async throws -> CheckState {
-        let path = "/repos/\(pr.repoFullName)/commits/\(pr.headSHA)/status"
-        let request = makeRequest(path: path, token: token)
-        let response = try await decode(StatusResponse.self, request: request)
-        if response.totalCount == 0 {
-            return .success
-        }
-        return CheckState(rawValue: response.state) ?? .unknown
     }
 
     func enqueuePullRequest(token: String, pullRequestID: String) async throws {
@@ -394,6 +344,7 @@ final class GitHubAPI: GitHubAPIClient {
             throw GraphQLError(message: "GraphQL HTTP \(http.statusCode): \(raw)")
         }
         let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
         let envelope: GraphQLResponse<T>
         do {
             envelope = try decoder.decode(GraphQLResponse<T>.self, from: data)
@@ -473,15 +424,27 @@ private struct SearchPullRequest: Decodable {
     }
 }
 
-private struct PullRequestDetailResponse: Decodable {
-    let repository: PullRequestRepository?
-}
+private struct OpenPullRequestsResponse: Decodable {
+    let viewer: Viewer
 
-private struct PullRequestRepository: Decodable {
-    let pullRequest: PullRequestNode?
+    struct Viewer: Decodable {
+        let login: String
+        let pullRequests: Connection
+    }
+
+    struct Connection: Decodable {
+        let nodes: [PullRequestNode]
+    }
 }
 
 private struct PullRequestNode: Decodable {
+    let updatedAt: Date
+    let repository: Repository
+
+    struct Repository: Decodable {
+        let nameWithOwner: String
+    }
+
     let id: String
     let title: String
     let number: Int
@@ -501,26 +464,6 @@ private struct StatusCheckRollup: Decodable {
     let state: String
 }
 
-private struct PullResponse: Decodable {
-    let nodeID: String
-    let title: String
-    let number: Int
-    let htmlURL: URL
-    let head: PullHead
-    let draft: Bool
-    let autoMerge: AutoMergeRequest?
-
-    enum CodingKeys: String, CodingKey {
-        case nodeID = "node_id"
-        case title
-        case number
-        case htmlURL = "html_url"
-        case head
-        case draft
-        case autoMerge = "auto_merge"
-    }
-}
-
 private struct AutoMergeRequest: Decodable {}
 
 private struct GraphQLResponse<T: Decodable>: Decodable {
@@ -536,18 +479,4 @@ struct GraphQLError: LocalizedError {
     let message: String
 
     var errorDescription: String? { message }
-}
-
-private struct PullHead: Decodable {
-    let sha: String
-}
-
-private struct StatusResponse: Decodable {
-    let state: String
-    let totalCount: Int
-
-    enum CodingKeys: String, CodingKey {
-        case state
-        case totalCount = "total_count"
-    }
 }

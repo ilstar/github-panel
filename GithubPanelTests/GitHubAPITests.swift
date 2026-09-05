@@ -18,41 +18,55 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/vnd.github+json")
     }
 
-    func testFetchOpenPRsDecodesAndSkipsInvalidRepoURLs() async throws {
+    func testFetchOpenPRsReturnsCompleteOrderedRowsInOneRequest() async throws {
         let transport = MockHTTPTransport()
-        transport.enqueue(json: """
-        {
-          "total_count": 2,
-          "items": [
-            {
-              "number": 42,
-              "repository_url": "https://api.github.com/repos/acme/widgets",
-              "title": "Ship it",
-              "html_url": "https://github.com/acme/widgets/pull/42",
-              "updated_at": "2026-04-12T12:34:56Z"
-            },
-            {
-              "number": 99,
-              "repository_url": "https://api.github.com/bad",
-              "title": "Skip me",
-              "html_url": "https://github.com/bad",
-              "updated_at": "2026-04-12T12:34:56Z"
-            }
-          ]
-        }
-        """)
-        let api = GitHubAPI(transport: transport)
+        transport.enqueue(json: openPRResponse)
+        let result = try await GitHubAPI(transport: transport).fetchOpenPRs(token: "token")
 
-        let prs = try await api.fetchOpenPRs(token: "token", username: "fred")
-
-        XCTAssertEqual(prs.count, 1)
-        XCTAssertEqual(prs[0].id, "acme/widgets#42")
-        XCTAssertEqual(prs[0].repoFullName, "acme/widgets")
-        XCTAssertEqual(prs[0].number, 42)
+        XCTAssertEqual(result.login, "octocat")
+        XCTAssertEqual(result.rows.map(\.number), [7, 3])
+        let pr = try XCTUnwrap(result.rows.first)
+        XCTAssertEqual(pr.id, "acme/widgets#7")
+        XCTAssertEqual(pr.nodeID, "PR_node")
+        XCTAssertEqual(pr.title, "Add tests")
+        XCTAssertEqual(pr.repoFullName, "acme/widgets")
+        XCTAssertEqual(pr.htmlURL.absoluteString, "https://github.com/acme/widgets/pull/7")
+        XCTAssertEqual(pr.updatedAt, ISO8601DateFormatter().date(from: "2026-04-12T12:34:56Z"))
+        XCTAssertEqual(pr.headSHA, "abc123")
+        XCTAssertEqual(pr.status, .pending)
+        XCTAssertFalse(pr.isDraft)
+        XCTAssertTrue(pr.isAutoMergeEnabled)
+        XCTAssertFalse(pr.canEnableAutoMerge)
+        XCTAssertTrue(pr.canDisableAutoMerge)
+        XCTAssertTrue(pr.isMergeQueueEnabled)
+        XCTAssertFalse(pr.isInMergeQueue)
+        XCTAssertEqual(pr.mergeStateStatus, "CLEAN")
+        let second = result.rows[1]
+        XCTAssertEqual(second.status, .success) // Preserve existing missing-rollup behavior.
+        XCTAssertTrue(second.isDraft)
+        XCTAssertFalse(second.isAutoMergeEnabled)
+        XCTAssertTrue(second.canEnableAutoMerge)
+        XCTAssertFalse(second.canDisableAutoMerge)
+        XCTAssertFalse(second.isMergeQueueEnabled)
+        XCTAssertTrue(second.isInMergeQueue)
+        XCTAssertEqual(second.mergeStateStatus, "QUEUED")
+        XCTAssertEqual(transport.requests.count, 1)
         let request = try XCTUnwrap(transport.requests.first)
-        XCTAssertEqual(request.url?.path, "/search/issues")
-        XCTAssertTrue(request.url?.query?.contains("author:fred") == true)
-        XCTAssertTrue(request.url?.query?.contains("sort:updated-desc") == true)
+        XCTAssertEqual(request.url?.path, "/graphql")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer token")
+        let body = try transport.graphQLBody(at: 0)
+        XCTAssertTrue(body.query.contains("first: 10, states: [OPEN]"))
+        XCTAssertTrue(body.query.contains("field: UPDATED_AT, direction: DESC"))
+        XCTAssertTrue(body.query.contains("repository { nameWithOwner }"))
+    }
+
+    func testFetchOpenPRsAllowsEmptyResults() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: #"{"data":{"viewer":{"login":"octocat","pullRequests":{"nodes":[]}}}}"#)
+        let result = try await GitHubAPI(transport: transport).fetchOpenPRs(token: "token")
+        XCTAssertEqual(result.login, "octocat")
+        XCTAssertTrue(result.rows.isEmpty)
+        XCTAssertEqual(transport.requests.count, 1)
     }
 
     func testFetchClosedPRsDecodesPaginationAndOutcomeDates() async throws {
@@ -105,66 +119,13 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertTrue(request.url?.query?.contains("per_page=10") == true)
     }
 
-    func testFetchPullRequestDecodesGraphQLDetail() async throws {
-        let transport = MockHTTPTransport()
-        transport.enqueue(json: """
-        {
-          "data": {
-            "repository": {
-              "pullRequest": {
-                "id": "PR_node",
-                "title": "Add tests",
-                "number": 7,
-                "url": "https://github.com/acme/widgets/pull/7",
-                "headRefOid": "abc123",
-                "isDraft": false,
-                "autoMergeRequest": {"enabledAt": "2026-04-12T12:00:00Z"},
-                "viewerCanEnableAutoMerge": false,
-                "viewerCanDisableAutoMerge": true,
-                "isMergeQueueEnabled": true,
-                "isInMergeQueue": false,
-                "mergeStateStatus": "CLEAN",
-                "statusCheckRollup": {"state": "PENDING"}
-              }
-            }
-          }
-        }
-        """)
-        let api = GitHubAPI(transport: transport)
-
-        let pr = try await api.fetchPullRequest(token: "token", repoFullName: "acme/widgets", number: 7)
-
-        XCTAssertEqual(pr.nodeID, "PR_node")
-        XCTAssertEqual(pr.title, "Add tests")
-        XCTAssertEqual(pr.headSHA, "abc123")
-        XCTAssertEqual(pr.status, .pending)
-        XCTAssertTrue(pr.isAutoMergeEnabled)
-        XCTAssertTrue(pr.canDisableAutoMerge)
-        XCTAssertTrue(pr.isMergeQueueEnabled)
-        let body = try transport.graphQLBody(at: 0)
-        XCTAssertEqual(body.variables["owner"] as? String, "acme")
-        XCTAssertEqual(body.variables["name"] as? String, "widgets")
-        XCTAssertEqual(body.variables["number"] as? Int, 7)
-    }
-
-    func testFetchPullRequestRejectsInvalidRepoName() async {
-        let api = GitHubAPI(transport: MockHTTPTransport())
-
-        do {
-            _ = try await api.fetchPullRequest(token: "token", repoFullName: "missing-slash", number: 1)
-            XCTFail("Expected badURL")
-        } catch {
-            XCTAssertEqual((error as? URLError)?.code, .badURL)
-        }
-    }
-
     func testGraphQLErrorsAreSurfaced() async throws {
         let transport = MockHTTPTransport()
         transport.enqueue(json: #"{"data":null,"errors":[{"message":"Nope"},{"message":"Still nope"}]}"#)
         let api = GitHubAPI(transport: transport)
 
         do {
-            _ = try await api.fetchPullRequest(token: "token", repoFullName: "acme/widgets", number: 7)
+            _ = try await api.fetchOpenPRs(token: "token")
             XCTFail("Expected GraphQLError")
         } catch let error as GraphQLError {
             XCTAssertEqual(error.errorDescription, "Nope Still nope")
@@ -185,20 +146,6 @@ final class GitHubAPITests: XCTestCase {
         } catch {
             XCTFail("Unexpected error: \(error)")
         }
-    }
-
-    func testFetchPRCheckStateMapsCommitStatus() async throws {
-        let pendingTransport = MockHTTPTransport()
-        pendingTransport.enqueue(json: #"{"state":"pending","total_count":2}"#)
-        let pendingAPI = GitHubAPI(transport: pendingTransport)
-        let pendingState = try await pendingAPI.fetchPRCheckState(token: "token", pr: sampleInfo(status: .unknown))
-        XCTAssertEqual(pendingState, .pending)
-
-        let emptyTransport = MockHTTPTransport()
-        emptyTransport.enqueue(json: #"{"state":"failure","total_count":0}"#)
-        let emptyAPI = GitHubAPI(transport: emptyTransport)
-        let emptyState = try await emptyAPI.fetchPRCheckState(token: "token", pr: sampleInfo(status: .unknown))
-        XCTAssertEqual(emptyState, .success)
     }
 
     func testMergePullRequestHandlesSuccessFailureAndFallbackDecode() async throws {
@@ -296,19 +243,17 @@ private extension URLRequest {
     }
 }
 
-private func sampleInfo(status: CheckState) -> PullRequestInfo {
-    PullRequestInfo(nodeID: "PR_node",
-                    title: "Title",
-                    number: 7,
-                    repoFullName: "acme/widgets",
-                    htmlURL: URL(string: "https://github.com/acme/widgets/pull/7")!,
-                    headSHA: "abc123",
-                    isDraft: false,
-                    status: status,
-                    isAutoMergeEnabled: false,
-                    canEnableAutoMerge: true,
-                    canDisableAutoMerge: false,
-                    isMergeQueueEnabled: false,
-                    isInMergeQueue: false,
-                    mergeStateStatus: "CLEAN")
-}
+private let openPRResponse = """
+{"data":{"viewer":{"login":"octocat","pullRequests":{"nodes":[
+  {"id":"PR_node","title":"Add tests","number":7,"url":"https://github.com/acme/widgets/pull/7",
+   "updatedAt":"2026-04-12T12:34:56Z","repository":{"nameWithOwner":"acme/widgets"},
+   "headRefOid":"abc123","isDraft":false,"autoMergeRequest":{"enabledAt":"2026-04-12T12:00:00Z"},
+   "viewerCanEnableAutoMerge":false,"viewerCanDisableAutoMerge":true,"isMergeQueueEnabled":true,
+   "isInMergeQueue":false,"mergeStateStatus":"CLEAN","statusCheckRollup":{"state":"PENDING"}},
+  {"id":"PR_other","title":"Draft","number":3,"url":"https://github.com/acme/widgets/pull/3",
+   "updatedAt":"2026-04-11T12:34:56Z","repository":{"nameWithOwner":"acme/widgets"},
+   "headRefOid":"def456","isDraft":true,"autoMergeRequest":null,
+   "viewerCanEnableAutoMerge":true,"viewerCanDisableAutoMerge":false,"isMergeQueueEnabled":false,
+   "isInMergeQueue":true,"mergeStateStatus":"QUEUED","statusCheckRollup":null}
+]}}}}
+"""

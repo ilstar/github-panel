@@ -11,9 +11,9 @@ final class PRMonitorTests: XCTestCase {
     func testEmptyMockGitHubAPIHasNoPullRequests() async throws {
         let api = MockGitHubAPI(isEmpty: true)
 
-        let summaries = try await api.fetchOpenPRs(token: "token", username: "mock-user")
+        let result = try await api.fetchOpenPRs(token: "token")
 
-        XCTAssertTrue(summaries.isEmpty)
+        XCTAssertTrue(result.rows.isEmpty)
     }
 
     func testInitialRefreshIntervalUsesDefaultOrStoredValue() {
@@ -74,16 +74,11 @@ final class PRMonitorTests: XCTestCase {
         XCTAssertEqual(scheduler.intervals, [60])
     }
 
-    func testRefreshSuccessBuildsOrderedLimitedRowsAndTimestamp() async {
+    func testRefreshSuccessPreservesAPIOrderAndTimestamp() async {
         let fixedDate = Date(timeIntervalSince1970: 1000)
         let api = FakeGitHubAPI()
         api.user = GitHubUser(login: "fred")
-        api.summaries = (1...12).map { index in
-            summary(number: index, updatedAt: Date(timeIntervalSince1970: TimeInterval(index)))
-        }
-        for item in api.summaries {
-            api.pullRequests[item.repoFullName + "#\(item.number)"] = info(number: item.number, status: .success)
-        }
+        api.rows = [row(number: 7, status: .success), row(number: 3, status: .pending)]
         let monitor = makeMonitor(api: api,
                                   tokenStore: FakeTokenStore(token: "token"),
                                   dateProvider: FakeDateProvider(now: fixedDate))
@@ -93,8 +88,108 @@ final class PRMonitorTests: XCTestCase {
         XCTAssertFalse(monitor.isLoading)
         XCTAssertNil(monitor.lastError)
         XCTAssertEqual(monitor.lastRefreshAt, fixedDate)
-        XCTAssertEqual(monitor.prRows.map(\.number), Array(1...10))
-        XCTAssertEqual(api.fetchPullRequestCalls.count, 10)
+        XCTAssertEqual(monitor.prRows.map(\.number), [7, 3])
+        XCTAssertEqual(api.fetchOpenPRTokens.count, 1)
+    }
+
+    func testOpenRefreshSeedsLoginForHistory() async {
+        let api = FakeGitHubAPI()
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+        await monitor.refreshNow()
+        await monitor.refreshCurrentHistoryPage()
+        await monitor.refreshCurrentHistoryPage()
+        XCTAssertTrue(api.fetchCurrentUserTokens.isEmpty)
+        XCTAssertEqual(api.historyUsernames, ["fred", "fred"])
+    }
+
+    func testSavingTokenInvalidatesCachedLogin() async {
+        let api = FakeGitHubAPI()
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "old"))
+        await monitor.refreshCurrentHistoryPage()
+        // The automatic open refresh fails; history must resolve the new identity itself.
+        api.openHandler = { _ in throw TestError(message: "offline") }
+        api.user = GitHubUser(login: "new-user")
+        monitor.saveToken("new")
+        await monitor.refreshCurrentHistoryPage()
+        XCTAssertEqual(api.fetchCurrentUserTokens, ["old", "new"])
+        XCTAssertEqual(api.historyUsernames, ["fred", "new-user"])
+    }
+
+    func testClearingTokenInvalidatesPreviouslyCachedLogin() async {
+        let api = FakeGitHubAPI()
+        let store = FakeTokenStore(token: "token")
+        let monitor = makeMonitor(api: api, tokenStore: store)
+        await monitor.refreshNow()
+        monitor.clearToken()
+        store.token = "token"
+        api.user = GitHubUser(login: "renamed-user")
+        await monitor.refreshCurrentHistoryPage()
+        XCTAssertEqual(api.fetchCurrentUserTokens, ["token"])
+        XCTAssertEqual(api.historyUsernames, ["renamed-user"])
+    }
+
+    func testFailedUserLookupIsNotCached() async {
+        let api = FakeGitHubAPI()
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+        api.userHandler = { _ in throw TestError(message: "offline") }
+        await monitor.refreshCurrentHistoryPage()
+        XCTAssertEqual(monitor.lastHistoryError, "offline")
+        api.userHandler = nil
+        await monitor.refreshCurrentHistoryPage()
+        XCTAssertNil(monitor.lastHistoryError)
+        XCTAssertEqual(api.fetchCurrentUserTokens, ["token", "token"])
+        XCTAssertEqual(api.historyUsernames, ["fred"])
+    }
+
+    func testLateOpenResponseCannotRestoreClearedSession() async {
+        let api = FakeGitHubAPI()
+        let store = FakeTokenStore(token: "old")
+        let monitor = makeMonitor(api: api, tokenStore: store)
+        let started = expectation(description: "Open request started")
+        var continuation: CheckedContinuation<OpenPullRequests, Error>?
+        api.openHandler = { _ in
+            try await withCheckedThrowingContinuation {
+                continuation = $0
+                started.fulfill()
+            }
+        }
+        let pending = Task { await monitor.refreshNow() }
+        await fulfillment(of: [started], timeout: 2)
+        monitor.clearToken()
+        continuation?.resume(returning: OpenPullRequests(login: "old-user", rows: [row(number: 1, status: .success)]))
+        await pending.value
+        XCTAssertTrue(monitor.prRows.isEmpty)
+        XCTAssertNil(monitor.lastRefreshAt)
+        XCTAssertFalse(monitor.isLoading)
+        store.token = "new"
+        api.user = GitHubUser(login: "new-user")
+        await monitor.refreshCurrentHistoryPage()
+        XCTAssertEqual(api.fetchCurrentUserTokens, ["new"])
+        XCTAssertEqual(api.historyUsernames, ["new-user"])
+    }
+
+    func testLateUserResponseCannotReplaceNewSessionLogin() async {
+        let api = FakeGitHubAPI()
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "old"))
+        let started = expectation(description: "User request started")
+        var continuation: CheckedContinuation<GitHubUser, Error>?
+        api.userHandler = { _ in
+            try await withCheckedThrowingContinuation {
+                continuation = $0
+                started.fulfill()
+            }
+        }
+        let pending = Task { await monitor.refreshCurrentHistoryPage() }
+        await fulfillment(of: [started], timeout: 2)
+        api.user = GitHubUser(login: "new-user")
+        monitor.saveToken("new")
+        await monitor.refreshNow()
+        continuation?.resume(returning: GitHubUser(login: "old-user"))
+        await pending.value
+        XCTAssertTrue(api.historyUsernames.isEmpty)
+        await monitor.refreshCurrentHistoryPage()
+        XCTAssertEqual(api.historyUsernames, ["new-user"])
+        XCTAssertEqual(api.fetchCurrentUserTokens, ["old"])
     }
 
     func testRefreshErrorClearsRowsAndStoresError() async {
@@ -155,6 +250,7 @@ final class PRMonitorTests: XCTestCase {
         XCTAssertTrue(monitor.canLoadPreviousHistoryPage)
         XCTAssertFalse(monitor.canLoadNextHistoryPage)
         XCTAssertEqual(api.fetchClosedPRCalls.map(\.page), [1, 2])
+        XCTAssertEqual(api.fetchCurrentUserTokens, ["token"])
     }
 
     func testRefreshHistoryErrorStoresSeparateError() async {
@@ -174,9 +270,9 @@ final class PRMonitorTests: XCTestCase {
     func testNotificationPostsOnlyWhenPendingBecomesTerminalAndCleansStaleState() async {
         let api = FakeGitHubAPI()
         api.user = GitHubUser(login: "fred")
-        api.summaries = [summary(number: 1), summary(number: 2)]
-        api.pullRequests["acme/widgets#1"] = info(number: 1, status: .pending)
-        api.pullRequests["acme/widgets#2"] = info(number: 2, status: .success)
+        api.rows = [row(number: 1, status: .unknown), row(number: 2, status: .unknown)]
+        api.rows[0] = row(number: 1, status: .pending)
+        api.rows[1] = row(number: 2, status: .success)
         let notifications = FakeNotificationPoster()
         let monitor = makeMonitor(api: api,
                                   tokenStore: FakeTokenStore(token: "token"),
@@ -185,16 +281,16 @@ final class PRMonitorTests: XCTestCase {
         await monitor.refreshNow()
         XCTAssertTrue(notifications.posts.isEmpty)
 
-        api.summaries = [summary(number: 1)]
-        api.pullRequests["acme/widgets#1"] = info(number: 1, status: .failure)
+        api.rows = [row(number: 1, status: .unknown)]
+        api.rows[0] = row(number: 1, status: .failure)
         await monitor.refreshNow()
 
         XCTAssertEqual(notifications.posts.count, 1)
         XCTAssertEqual(notifications.posts[0].state, .failure)
         XCTAssertEqual(notifications.posts[0].number, 1)
 
-        api.summaries = [summary(number: 2)]
-        api.pullRequests["acme/widgets#2"] = info(number: 2, status: .success)
+        api.rows = [row(number: 2, status: .unknown)]
+        api.rows[0] = row(number: 2, status: .success)
         await monitor.refreshNow()
 
         XCTAssertEqual(notifications.posts.count, 1)
@@ -203,9 +299,9 @@ final class PRMonitorTests: XCTestCase {
     func testHooksRunWhenPendingBecomesSuccessfulOrFailed() async throws {
         let api = FakeGitHubAPI()
         api.user = GitHubUser(login: "fred")
-        api.summaries = [summary(number: 1), summary(number: 2)]
-        api.pullRequests["acme/widgets#1"] = info(number: 1, status: .pending)
-        api.pullRequests["acme/widgets#2"] = info(number: 2, status: .pending)
+        api.rows = [row(number: 1, status: .unknown), row(number: 2, status: .unknown)]
+        api.rows[0] = row(number: 1, status: .pending)
+        api.rows[1] = row(number: 2, status: .pending)
         let defaults = FakeDefaults()
         defaults.stringValues["GithubPanel.hooks.allSucceededScript"] = "echo success"
         defaults.stringValues["GithubPanel.hooks.anyFailuresScript"] = "echo failure"
@@ -218,8 +314,8 @@ final class PRMonitorTests: XCTestCase {
         await monitor.refreshNow()
         XCTAssertTrue(hooks.runs.isEmpty)
 
-        api.pullRequests["acme/widgets#1"] = info(number: 1, status: .success)
-        api.pullRequests["acme/widgets#2"] = info(number: 2, status: .failure)
+        api.rows[0] = row(number: 1, status: .success)
+        api.rows[1] = row(number: 2, status: .failure)
         await monitor.refreshNow()
 
         XCTAssertEqual(hooks.runs.map(\.script).sorted(), ["echo failure", "echo success"])
@@ -235,9 +331,9 @@ final class PRMonitorTests: XCTestCase {
     func testHooksIgnoreUnknownAndAlreadyTerminalStates() async {
         let api = FakeGitHubAPI()
         api.user = GitHubUser(login: "fred")
-        api.summaries = [summary(number: 1), summary(number: 2)]
-        api.pullRequests["acme/widgets#1"] = info(number: 1, status: .success)
-        api.pullRequests["acme/widgets#2"] = info(number: 2, status: .pending)
+        api.rows = [row(number: 1, status: .unknown), row(number: 2, status: .unknown)]
+        api.rows[0] = row(number: 1, status: .success)
+        api.rows[1] = row(number: 2, status: .pending)
         let defaults = FakeDefaults()
         defaults.stringValues["GithubPanel.hooks.allSucceededScript"] = "echo success"
         defaults.stringValues["GithubPanel.hooks.anyFailuresScript"] = "echo failure"
@@ -249,8 +345,8 @@ final class PRMonitorTests: XCTestCase {
 
         await monitor.refreshNow()
 
-        api.pullRequests["acme/widgets#1"] = info(number: 1, status: .failure)
-        api.pullRequests["acme/widgets#2"] = info(number: 2, status: .unknown)
+        api.rows[0] = row(number: 1, status: .failure)
+        api.rows[1] = row(number: 2, status: .unknown)
         await monitor.refreshNow()
 
         XCTAssertTrue(hooks.runs.isEmpty)
@@ -304,8 +400,8 @@ final class PRMonitorTests: XCTestCase {
     func testMergeQueueEnqueuesAndRefreshes() async {
         let api = FakeGitHubAPI()
         api.user = GitHubUser(login: "fred")
-        api.summaries = [summary(number: 1)]
-        api.pullRequests["acme/widgets#1"] = info(number: 1, status: .success, inMergeQueue: true)
+        api.rows = [row(number: 1, status: .unknown)]
+        api.rows[0] = row(number: 1, status: .success, inMergeQueue: true)
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
         let item = row(number: 1, status: .success, mergeQueue: true)
 
@@ -318,8 +414,8 @@ final class PRMonitorTests: XCTestCase {
     func testBlockedSuccessfulRowEnablesAutoMergeInsteadOfDirectMerge() async {
         let api = FakeGitHubAPI()
         api.user = GitHubUser(login: "fred")
-        api.summaries = [summary(number: 1)]
-        api.pullRequests["acme/widgets#1"] = info(number: 1,
+        api.rows = [row(number: 1, status: .unknown)]
+        api.rows[0] = row(number: 1,
                                                   status: .success,
                                                   autoMerge: true,
                                                   canDisableAutoMerge: true,
@@ -340,8 +436,8 @@ final class PRMonitorTests: XCTestCase {
     func testEnableAutoMergeAndDisableAutoMergeRefresh() async {
         let enableAPI = FakeGitHubAPI()
         enableAPI.user = GitHubUser(login: "fred")
-        enableAPI.summaries = [summary(number: 1)]
-        enableAPI.pullRequests["acme/widgets#1"] = info(number: 1, status: .pending, autoMerge: true)
+        enableAPI.rows = [row(number: 1, status: .unknown)]
+        enableAPI.rows[0] = row(number: 1, status: .pending, autoMerge: true)
         let enableMonitor = makeMonitor(api: enableAPI, tokenStore: FakeTokenStore(token: "token"))
 
         await enableMonitor.requestMerge(for: row(number: 1, status: .pending, canEnableAutoMerge: true))
@@ -351,8 +447,8 @@ final class PRMonitorTests: XCTestCase {
 
         let disableAPI = FakeGitHubAPI()
         disableAPI.user = GitHubUser(login: "fred")
-        disableAPI.summaries = [summary(number: 1)]
-        disableAPI.pullRequests["acme/widgets#1"] = info(number: 1, status: .pending, autoMerge: false)
+        disableAPI.rows = [row(number: 1, status: .unknown)]
+        disableAPI.rows[0] = row(number: 1, status: .pending, autoMerge: false)
         let disableMonitor = makeMonitor(api: disableAPI, tokenStore: FakeTokenStore(token: "token"))
 
         await disableMonitor.requestMerge(for: row(number: 1, status: .pending, autoMerge: true, canDisableAutoMerge: true))
@@ -410,15 +506,16 @@ private func makeMonitor(api: FakeGitHubAPI = FakeGitHubAPI(),
 
 private final class FakeGitHubAPI: GitHubAPIClient {
     var user = GitHubUser(login: "fred")
-    var summaries: [PullRequestSummary] = []
+    var rows: [PullRequestRow] = []
     var historyPages: [Int: PullRequestHistoryPage] = [:]
-    var pullRequests: [String: PullRequestInfo] = [:]
     var error: Error?
     var mergeResult = true
-    private let lock = NSLock()
 
     private(set) var fetchCurrentUserTokens: [String] = []
-    private(set) var fetchPullRequestCalls: [(repoFullName: String, number: Int)] = []
+    var openHandler: ((String) async throws -> OpenPullRequests)?
+    var userHandler: ((String) async throws -> GitHubUser)?
+    private(set) var historyUsernames: [String] = []
+    private(set) var fetchOpenPRTokens: [String] = []
     private(set) var fetchClosedPRCalls: [(page: Int, perPage: Int)] = []
     private(set) var enqueueCalls: [String] = []
     private(set) var enableCalls: [String] = []
@@ -428,33 +525,26 @@ private final class FakeGitHubAPI: GitHubAPIClient {
     func fetchCurrentUser(token: String) async throws -> GitHubUser {
         if let error { throw error }
         fetchCurrentUserTokens.append(token)
+        if let userHandler { return try await userHandler(token) }
         return user
     }
 
-    func fetchOpenPRs(token: String, username: String) async throws -> [PullRequestSummary] {
+    func fetchOpenPRs(token: String) async throws -> OpenPullRequests {
+        fetchOpenPRTokens.append(token)
+        if let openHandler { return try await openHandler(token) }
         if let error { throw error }
-        return summaries
+        return OpenPullRequests(login: user.login,
+                                rows: rows)
     }
 
     func fetchClosedPRs(token: String, username: String, page: Int, perPage: Int) async throws -> PullRequestHistoryPage {
         if let error { throw error }
+        historyUsernames.append(username)
         fetchClosedPRCalls.append((page, perPage))
         return historyPages[page] ?? PullRequestHistoryPage(rows: [],
                                                             page: page,
                                                             perPage: perPage,
                                                             totalCount: 0)
-    }
-
-    func fetchPullRequest(token: String, repoFullName: String, number: Int) async throws -> PullRequestInfo {
-        if let error { throw error }
-        return lock.withLock {
-            fetchPullRequestCalls.append((repoFullName, number))
-            return pullRequests["\(repoFullName)#\(number)"] ?? info(number: number, status: .unknown)
-        }
-    }
-
-    func fetchPRCheckState(token: String, pr: PullRequestInfo) async throws -> CheckState {
-        pr.status
     }
 
     func enqueuePullRequest(token: String, pullRequestID: String) async throws {
@@ -593,15 +683,6 @@ private struct TestError: LocalizedError {
     var errorDescription: String? { message }
 }
 
-private func summary(number: Int, updatedAt: Date = Date(timeIntervalSince1970: 0)) -> PullRequestSummary {
-    PullRequestSummary(id: "acme/widgets#\(number)",
-                       title: "PR \(number)",
-                       number: number,
-                       repoFullName: "acme/widgets",
-                       htmlURL: URL(string: "https://github.com/acme/widgets/pull/\(number)")!,
-                       updatedAt: updatedAt)
-}
-
 private func historyRow(number: Int,
                         mergedAt: Date? = Date(timeIntervalSince1970: 100)) -> PullRequestHistoryRow {
     PullRequestHistoryRow(id: "acme/widgets#\(number)",
@@ -612,31 +693,6 @@ private func historyRow(number: Int,
                           updatedAt: Date(timeIntervalSince1970: TimeInterval(number)),
                           closedAt: Date(timeIntervalSince1970: TimeInterval(number)),
                           mergedAt: mergedAt)
-}
-
-private func info(number: Int,
-                  status: CheckState,
-                  autoMerge: Bool = false,
-                  canEnableAutoMerge: Bool = false,
-                  canDisableAutoMerge: Bool = false,
-                  mergeQueue: Bool = false,
-                  inMergeQueue: Bool = false,
-                  isDraft: Bool = false,
-                  mergeStateStatus: String = "CLEAN") -> PullRequestInfo {
-    PullRequestInfo(nodeID: "node-\(number)",
-                    title: "PR \(number)",
-                    number: number,
-                    repoFullName: "acme/widgets",
-                    htmlURL: URL(string: "https://github.com/acme/widgets/pull/\(number)")!,
-                    headSHA: "sha-\(number)",
-                    isDraft: isDraft,
-                    status: status,
-                    isAutoMergeEnabled: autoMerge,
-                    canEnableAutoMerge: canEnableAutoMerge,
-                    canDisableAutoMerge: canDisableAutoMerge,
-                    isMergeQueueEnabled: mergeQueue,
-                    isInMergeQueue: inMergeQueue,
-                    mergeStateStatus: mergeStateStatus)
 }
 
 private func row(number: Int,

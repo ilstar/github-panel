@@ -149,6 +149,8 @@ final class PRMonitor: ObservableObject {
     private let timerScheduler: TimerScheduling
     private let dateProvider: DateProviding
     private let hookRunner: PullRequestHookRunning
+    private var credentialSession = UUID()
+    private var cachedLogin: String?
     private var timer: RefreshTimer?
     private var lastStates: [String: CheckState] = [:]
     private let historyPageSize = 10
@@ -198,12 +200,14 @@ final class PRMonitor: ObservableObject {
     }
 
     func saveToken(_ token: String) {
+        invalidateLogin()
         tokenStore.saveToken(token)
         hasToken = true
         refresh()
     }
 
     func clearToken() {
+        invalidateLogin()
         tokenStore.clearToken()
         hasToken = false
         prRows = []
@@ -211,6 +215,13 @@ final class PRMonitor: ObservableObject {
         historyPage = 1
         historyTotalCount = 0
         lastStates = [:]
+    }
+
+    private func invalidateLogin() {
+        credentialSession = UUID()
+        cachedLogin = nil
+        isLoading = false
+        isHistoryLoading = false
     }
 
     func scheduleTimer() {
@@ -228,15 +239,18 @@ final class PRMonitor: ObservableObject {
 
     func refreshNow() async {
         guard let token = tokenStore.loadToken() else { return }
+        let session = credentialSession
         isLoading = true
         lastError = nil
         do {
-            let user = try await api.fetchCurrentUser(token: token)
-            let summaries = try await api.fetchOpenPRs(token: token, username: user.login)
-            prRows = try await buildRows(token: token, summaries: summaries)
+            let result = try await api.fetchOpenPRs(token: token)
+            guard session == credentialSession else { return }
+            cachedLogin = result.login
+            prRows = result.rows
             updateNotificationsForRows()
             lastRefreshAt = dateProvider.now
         } catch {
+            guard session == credentialSession else { return }
             prRows = []
             lastError = error.localizedDescription
         }
@@ -283,61 +297,34 @@ final class PRMonitor: ObservableObject {
 
     private func refreshHistory(page: Int) async {
         guard let token = tokenStore.loadToken() else { return }
+        let session = credentialSession
         isHistoryLoading = true
         lastHistoryError = nil
         do {
-            let user = try await api.fetchCurrentUser(token: token)
+            let login: String
+            if let cachedLogin {
+                login = cachedLogin
+            } else {
+                login = try await api.fetchCurrentUser(token: token).login
+                guard session == credentialSession else { return }
+                cachedLogin = login
+            }
             let page = try await api.fetchClosedPRs(token: token,
-                                                    username: user.login,
+                                                    username: login,
                                                     page: page,
                                                     perPage: historyPageSize)
+            guard session == credentialSession else { return }
             historyRows = page.rows
             historyPage = page.page
             historyTotalCount = page.totalCount
             lastHistoryRefreshAt = dateProvider.now
         } catch {
+            guard session == credentialSession else { return }
             historyRows = []
             historyTotalCount = 0
             lastHistoryError = error.localizedDescription
         }
         isHistoryLoading = false
-    }
-
-    private func buildRows(token: String, summaries: [PullRequestSummary]) async throws -> [PullRequestRow] {
-        let limited = Array(summaries.prefix(10))
-        var rowsByID: [String: PullRequestRow] = [:]
-
-        try await withThrowingTaskGroup(of: PullRequestRow.self) { group in
-            for summary in limited {
-                group.addTask {
-                    let pr = try await self.api.fetchPullRequest(token: token,
-                                                                 repoFullName: summary.repoFullName,
-                                                                 number: summary.number)
-                    return PullRequestRow(id: summary.id,
-                                          nodeID: pr.nodeID,
-                                          title: summary.title,
-                                          number: summary.number,
-                                          repoFullName: summary.repoFullName,
-                                          htmlURL: summary.htmlURL,
-                                          headSHA: pr.headSHA,
-                                          status: pr.status,
-                                          isDraft: pr.isDraft,
-                                          isAutoMergeEnabled: pr.isAutoMergeEnabled,
-                                          canEnableAutoMerge: pr.canEnableAutoMerge,
-                                          canDisableAutoMerge: pr.canDisableAutoMerge,
-                                          isMergeQueueEnabled: pr.isMergeQueueEnabled,
-                                          isInMergeQueue: pr.isInMergeQueue,
-                                          mergeStateStatus: pr.mergeStateStatus,
-                                          updatedAt: summary.updatedAt)
-                }
-            }
-
-            for try await row in group {
-                rowsByID[row.id] = row
-            }
-        }
-
-        return limited.compactMap { rowsByID[$0.id] }
     }
 
     private func updateNotificationsForRows() {
