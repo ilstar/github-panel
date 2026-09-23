@@ -693,6 +693,20 @@ final class PRMonitorTests: XCTestCase {
         XCTAssertTrue(monitor.prRows.isEmpty)
     }
 
+    func testMarkingDraftReadyCallsAPIAndRefreshesRows() async {
+        let api = FakeGitHubAPI()
+        api.rows = [row(number: 1, status: .success)]
+        let tokenStore = FakeTokenStore(token: "token")
+        let monitor = makeMonitor(api: api, tokenStore: tokenStore)
+
+        await monitor.requestMarkReady(for: row(number: 1, status: .pending, isDraft: true))
+
+        XCTAssertEqual(api.markReadyCalls, ["node-1"])
+        XCTAssertEqual(api.fetchOpenPRTokens, ["token"])
+        XCTAssertEqual(monitor.prRows, api.rows)
+        XCTAssertEqual(tokenStore.loadTokenCallCount, 1)
+    }
+
     func testDirectMergeFalseKeepsRow() async {
         let api = FakeGitHubAPI()
         api.mergeResult = false
@@ -828,6 +842,7 @@ private final class FakeGitHubAPI: GitHubAPIClient {
     private(set) var fetchOpenPRTokens: [String] = []
     private(set) var fetchClosedPRCalls: [(page: Int, perPage: Int)] = []
     private(set) var enqueueCalls: [String] = []
+    private(set) var markReadyCalls: [String] = []
     private(set) var enableCalls: [String] = []
     private(set) var disableCalls: [String] = []
     private(set) var mergePullRequestCalls: [(repoFullName: String, number: Int)] = []
@@ -864,6 +879,11 @@ private final class FakeGitHubAPI: GitHubAPIClient {
         if let error { throw error }
         enqueueCalls.append(pullRequestID)
         await enqueueHandler?(pullRequestID)
+    }
+
+    func markPullRequestReadyForReview(token: String, pullRequestID: String) async throws {
+        if let error { throw error }
+        markReadyCalls.append(pullRequestID)
     }
 
     func enableAutoMerge(token: String, pullRequestID: String) async throws {

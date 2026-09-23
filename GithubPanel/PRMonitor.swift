@@ -456,6 +456,8 @@ final class PRMonitor: ObservableObject {
         switch state {
         case .success:
             return .allSucceeded
+        case .noChecks:
+            return nil
         case .failure, .error:
             return .anyFailures
         case .pending, .unknown:
@@ -463,8 +465,20 @@ final class PRMonitor: ObservableObject {
         }
     }
 
+    func requestMarkReady(for row: PullRequestRow) async {
+        guard row.isDraft, let token = loadSessionToken() else { return }
+        let session = credentialSession
+        do {
+            try await api.markPullRequestReadyForReview(token: token, pullRequestID: row.nodeID)
+            await requireFreshRefresh(for: session)
+        } catch {
+            guard session == credentialSession else { return }
+            lastError = error.localizedDescription
+        }
+    }
+
     func requestMerge(for row: PullRequestRow) async {
-        guard let token = loadSessionToken() else { return }
+        guard !row.isDraft, let token = loadSessionToken() else { return }
         let session = credentialSession
         do {
             if row.isInMergeQueue || row.status == .failure || row.status == .error {

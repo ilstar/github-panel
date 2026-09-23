@@ -195,6 +195,12 @@ final class MockGitHubAPI: GitHubAPIClient {
         }
     }
 
+    func markPullRequestReadyForReview(token: String, pullRequestID: String) async throws {
+        updatePullRequest(with: pullRequestID) { pr in
+            pr.copy(isDraft: false)
+        }
+    }
+
     func enableAutoMerge(token: String, pullRequestID: String) async throws {
         updatePullRequest(with: pullRequestID) { pr in
             pr.copy(isAutoMergeEnabled: true, canEnableAutoMerge: false, canDisableAutoMerge: true)
@@ -259,7 +265,11 @@ final class MockGitHubAPI: GitHubAPIClient {
                         isDraft: true),
             pullRequest(number: 110,
                         title: "Unknown check state",
-                        status: .unknown)
+                        status: .unknown),
+            pullRequest(number: 111,
+                        title: "Ready: no checks, add to queue",
+                        status: .noChecks,
+                        isMergeQueueEnabled: true)
         ]
     }
 
@@ -309,7 +319,8 @@ final class MockGitHubAPI: GitHubAPIClient {
 }
 
 private extension PullRequestRow {
-    func copy(isAutoMergeEnabled: Bool? = nil,
+    func copy(isDraft: Bool? = nil,
+              isAutoMergeEnabled: Bool? = nil,
               canEnableAutoMerge: Bool? = nil,
               canDisableAutoMerge: Bool? = nil,
               isInMergeQueue: Bool? = nil,
@@ -323,7 +334,7 @@ private extension PullRequestRow {
                         htmlURL: htmlURL,
                         headSHA: headSHA,
                         status: status,
-                        isDraft: isDraft,
+                        isDraft: isDraft ?? self.isDraft,
                         isAutoMergeEnabled: isAutoMergeEnabled ?? self.isAutoMergeEnabled,
                         canEnableAutoMerge: canEnableAutoMerge ?? self.canEnableAutoMerge,
                         canDisableAutoMerge: canDisableAutoMerge ?? self.canDisableAutoMerge,

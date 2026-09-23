@@ -58,6 +58,22 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertTrue(body.query.contains("first: 10, states: [OPEN]"))
         XCTAssertTrue(body.query.contains("field: UPDATED_AT, direction: DESC"))
         XCTAssertTrue(body.query.contains("repository { nameWithOwner }"))
+        XCTAssertTrue(body.query.contains("contexts(first: 1) { totalCount }"))
+    }
+
+    func testExpectedRollupWithNoContextsIsDecodedAsNoChecks() async throws {
+        let noChecksResponse = openPRResponse.replacingOccurrences(
+            of: #""state":"PENDING""#,
+            with: #""state":"EXPECTED","contexts":{"totalCount":0}"#
+        )
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: noChecksResponse)
+
+        let result = try await GitHubAPI(transport: transport).fetchOpenPRs(token: "token")
+        let pr = try XCTUnwrap(result.rows.first)
+
+        XCTAssertEqual(pr.status, .noChecks)
+        XCTAssertTrue(pr.canMergeImmediately)
     }
 
     func testFetchOpenPRsAllowsEmptyResults() async throws {
@@ -184,6 +200,13 @@ final class GitHubAPITests: XCTestCase {
         try await GitHubAPI(transport: enqueueTransport).enqueuePullRequest(token: "token", pullRequestID: "PR_node")
         var body = try enqueueTransport.graphQLBody(at: 0)
         XCTAssertTrue(body.query.contains("enqueuePullRequest"))
+        XCTAssertEqual(body.variables["id"] as? String, "PR_node")
+
+        let readyTransport = MockHTTPTransport()
+        readyTransport.enqueue(json: #"{"data":{"markPullRequestReadyForReview":{"pullRequest":{"id":"PR_node"}}}}"#)
+        try await GitHubAPI(transport: readyTransport).markPullRequestReadyForReview(token: "token", pullRequestID: "PR_node")
+        body = try readyTransport.graphQLBody(at: 0)
+        XCTAssertTrue(body.query.contains("markPullRequestReadyForReview"))
         XCTAssertEqual(body.variables["id"] as? String, "PR_node")
 
         let enableTransport = MockHTTPTransport()

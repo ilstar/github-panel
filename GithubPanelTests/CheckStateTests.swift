@@ -9,6 +9,8 @@ final class CheckStateTests: XCTestCase {
         XCTAssertEqual(CheckState(githubStatus: "ERROR"), .error)
         XCTAssertEqual(CheckState(githubStatus: "PENDING"), .pending)
         XCTAssertEqual(CheckState(githubStatus: "EXPECTED"), .pending)
+        XCTAssertEqual(CheckState(githubStatus: "EXPECTED", hasCheckContexts: false), .noChecks)
+        XCTAssertEqual(CheckState(githubStatus: "EXPECTED", hasCheckContexts: true), .pending)
         XCTAssertEqual(CheckState(githubStatus: "QUEUED"), .unknown)
     }
 
@@ -20,6 +22,7 @@ final class CheckStateTests: XCTestCase {
         XCTAssertEqual(CheckState.unknown.emoji, "❔")
 
         XCTAssertEqual(CheckState.success.descriptionText, "All checks are done.")
+        XCTAssertEqual(CheckState.noChecks.descriptionText, "No checks reported.")
         XCTAssertEqual(CheckState.failure.descriptionText, "Checks failed.")
         XCTAssertEqual(CheckState.error.descriptionText, "Checks failed.")
         XCTAssertEqual(CheckState.pending.descriptionText, "Still building.")
