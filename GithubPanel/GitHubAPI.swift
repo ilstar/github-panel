@@ -5,6 +5,7 @@ protocol GitHubAPIClient {
     func fetchOpenPRs(token: String) async throws -> OpenPullRequests
     func fetchClosedPRs(token: String, username: String, page: Int, perPage: Int) async throws -> PullRequestHistoryPage
     func enqueuePullRequest(token: String, pullRequestID: String) async throws
+    func markPullRequestReadyForReview(token: String, pullRequestID: String) async throws
     func enableAutoMerge(token: String, pullRequestID: String) async throws
     func disableAutoMerge(token: String, pullRequestID: String) async throws
     func mergePullRequest(token: String, repoFullName: String, number: Int) async throws -> Bool
@@ -93,7 +94,7 @@ struct PullRequestRow: Identifiable, Equatable {
     let updatedAt: Date
 
     var canMergeImmediately: Bool {
-        status == .success
+        status.isPassing
         && !isDraft
         && ["CLEAN", "HAS_HOOKS"].contains(mergeStateStatus)
     }
@@ -101,15 +102,18 @@ struct PullRequestRow: Identifiable, Equatable {
 
 enum CheckState: String {
     case success
+    case noChecks
     case failure
     case error
     case pending
     case unknown
 
-    init(githubStatus: String?) {
+    init(githubStatus: String?, hasCheckContexts: Bool? = nil) {
         switch githubStatus {
         case "SUCCESS", nil:
             self = .success
+        case "EXPECTED" where hasCheckContexts == false:
+            self = .noChecks
         case "FAILURE":
             self = .failure
         case "ERROR":
@@ -124,6 +128,7 @@ enum CheckState: String {
     var emoji: String {
         switch self {
         case .success: return "✅"
+        case .noChecks: return "➖"
         case .failure, .error: return "❌"
         case .pending: return "⏳"
         case .unknown: return "❔"
@@ -133,10 +138,15 @@ enum CheckState: String {
     var descriptionText: String {
         switch self {
         case .success: return "All checks are done."
+        case .noChecks: return "No checks reported."
         case .failure, .error: return "Checks failed."
         case .pending: return "Still building."
         case .unknown: return "Status unavailable."
         }
+    }
+
+    var isPassing: Bool {
+        self == .success || self == .noChecks
     }
 }
 
@@ -173,7 +183,10 @@ final class GitHubAPI: GitHubAPIClient {
                 isMergeQueueEnabled
                 isInMergeQueue
                 mergeStateStatus
-                statusCheckRollup { state }
+                statusCheckRollup {
+                  state
+                  contexts(first: 1) { totalCount }
+                }
               }
             }
           }
@@ -189,7 +202,8 @@ final class GitHubAPI: GitHubAPIClient {
                            repoFullName: pr.repository.nameWithOwner,
                            htmlURL: pr.url,
                            headSHA: pr.headRefOid,
-                           status: CheckState(githubStatus: pr.statusCheckRollup?.state),
+                           status: CheckState(githubStatus: pr.statusCheckRollup?.state,
+                                              hasCheckContexts: pr.statusCheckRollup?.contexts.map { $0.totalCount > 0 }),
                            isDraft: pr.isDraft,
                            isAutoMergeEnabled: pr.autoMergeRequest != nil,
                            canEnableAutoMerge: pr.viewerCanEnableAutoMerge,
@@ -237,6 +251,20 @@ final class GitHubAPI: GitHubAPIClient {
         struct Response: Decodable { let enqueuePullRequest: EnqueueResult? }
         struct EnqueueResult: Decodable { let mergeQueueEntry: MergeQueueEntry }
         struct MergeQueueEntry: Decodable { let id: String }
+        _ = try await graphQL(Response.self, query: query, variables: ["id": pullRequestID], token: token)
+    }
+
+    func markPullRequestReadyForReview(token: String, pullRequestID: String) async throws {
+        let query = """
+        mutation($id: ID!) {
+          markPullRequestReadyForReview(input: { pullRequestId: $id }) {
+            pullRequest { id }
+          }
+        }
+        """
+        struct Response: Decodable { let markPullRequestReadyForReview: ReadyResult? }
+        struct ReadyResult: Decodable { let pullRequest: PullRequestNode }
+        struct PullRequestNode: Decodable { let id: String }
         _ = try await graphQL(Response.self, query: query, variables: ["id": pullRequestID], token: token)
     }
 
@@ -462,6 +490,11 @@ private struct PullRequestNode: Decodable {
 
 private struct StatusCheckRollup: Decodable {
     let state: String
+    let contexts: StatusCheckContexts?
+}
+
+private struct StatusCheckContexts: Decodable {
+    let totalCount: Int
 }
 
 private struct AutoMergeRequest: Decodable {}

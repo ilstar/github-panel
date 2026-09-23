@@ -171,8 +171,8 @@ struct ContentView: View {
                             relativeFormatter: relativeFormatter,
                             now: now,
                             isMerging: mergeInFlight.contains(pr.id),
-                            onMerge: {
-                                merge(pr: pr)
+                            onAction: {
+                                actOnPullRequest(pr: pr)
                             }
                         )
                         .id(pr.id)
@@ -374,11 +374,15 @@ struct ContentView: View {
         }
     }
 
-    private func merge(pr: PullRequestRow) {
+    private func actOnPullRequest(pr: PullRequestRow) {
         if mergeInFlight.contains(pr.id) { return }
         mergeInFlight.insert(pr.id)
         Task {
-            await monitor.requestMerge(for: pr)
+            if pr.isDraft {
+                await monitor.requestMarkReady(for: pr)
+            } else {
+                await monitor.requestMerge(for: pr)
+            }
             await MainActor.run {
                 _ = mergeInFlight.remove(pr.id)
             }
@@ -430,7 +434,7 @@ private struct PRRow: View {
     let relativeFormatter: RelativeDateTimeFormatter
     let now: Date
     let isMerging: Bool
-    let onMerge: () -> Void
+    let onAction: () -> Void
 
     @State private var isHovering = false
     @State private var isMergeButtonHovering = false
@@ -480,30 +484,8 @@ private struct PRRow: View {
         }
     }
 
-    private var isReady: Bool {
-        pr.canMergeImmediately
-    }
-
     private var mergeButtonState: MergeButtonState {
-        if isMerging {
-            return .working
-        }
-        if pr.status == .failure || pr.status == .error {
-            return .checksFailed
-        }
-        if pr.isInMergeQueue {
-            return .queued
-        }
-        if isReady {
-            return .merge
-        }
-        if pr.isAutoMergeEnabled {
-            return .disableAutoMerge
-        }
-        if pr.canEnableAutoMerge {
-            return .enableAutoMerge
-        }
-        return .waitingForChecks
+        MergeButtonState.resolve(for: pr, isWorking: isMerging)
     }
 
     private var mergeButton: some View {
@@ -550,7 +532,7 @@ private struct PRRow: View {
 
     private func handleMergeButtonClick() {
         guard mergeButtonState.isClickable else { return }
-        onMerge()
+        onAction()
     }
 
     private var mergeButtonTitle: String {
@@ -563,80 +545,70 @@ private struct PRRow: View {
 
     private var mergeFill: Color {
         switch mergeButtonState {
-        case .disableAutoMerge:
+        case .markReady, .enableAutoMerge, .disableAutoMerge:
             return isMergeButtonHovering
                 ? Color(red: 0.91, green: 0.96, blue: 1.0)
                 : Color(red: 0.95, green: 0.98, blue: 1.0)
-        case .merge:
+        case .merge, .enqueue:
             return isMergeButtonHovering
                 ? Color(red: 0.16, green: 0.56, blue: 0.29)
                 : Color(red: 0.13, green: 0.49, blue: 0.25)
-        case .enableAutoMerge:
-            return isMergeButtonHovering
-                ? Color(red: 0.91, green: 0.96, blue: 1.0)
-                : Color(red: 0.95, green: 0.98, blue: 1.0)
         case .queued:
             return isMergeButtonHovering
                 ? Color(red: 0.94, green: 0.99, blue: 0.96)
                 : Color.white
         case .checksFailed:
             return Color(red: 1.0, green: 0.96, blue: 0.96)
-        case .waitingForChecks, .working:
+        case .blocked, .statusUnavailable, .waitingForChecks, .working:
             return Color.white
         }
     }
 
     private var mergeForeground: Color {
         switch mergeButtonState {
-        case .merge:
+        case .merge, .enqueue:
             return Color.white
-        case .disableAutoMerge:
-            return Color(red: 0.14, green: 0.36, blue: 0.62)
-        case .enableAutoMerge:
+        case .markReady, .disableAutoMerge, .enableAutoMerge:
             return Color(red: 0.14, green: 0.36, blue: 0.62)
         case .queued:
             return Color(red: 0.10, green: 0.43, blue: 0.24)
         case .checksFailed:
             return Color(red: 0.72, green: 0.16, blue: 0.16)
-        case .waitingForChecks, .working:
+        case .blocked, .statusUnavailable, .waitingForChecks, .working:
             return Color.secondary
         }
     }
 
     private var mergeStroke: Color {
         switch mergeButtonState {
-        case .disableAutoMerge:
+        case .markReady, .disableAutoMerge, .enableAutoMerge:
             return Color(red: 0.50, green: 0.68, blue: 0.86).opacity(isMergeButtonHovering ? 0.68 : 0.45)
-        case .merge:
+        case .merge, .enqueue:
             return Color(red: 0.06, green: 0.38, blue: 0.16).opacity(isMergeButtonHovering ? 0.62 : 0.45)
-        case .enableAutoMerge:
-            return Color(red: 0.50, green: 0.68, blue: 0.86).opacity(isMergeButtonHovering ? 0.68 : 0.45)
         case .queued:
             return Color(red: 0.30, green: 0.63, blue: 0.42).opacity(isMergeButtonHovering ? 0.55 : 0.32)
         case .checksFailed:
             return Color(red: 0.78, green: 0.22, blue: 0.20).opacity(0.34)
-        case .waitingForChecks, .working:
+        case .blocked, .statusUnavailable, .waitingForChecks, .working:
             return Color.black.opacity(0.12)
         }
     }
 
     private var mergeShadow: Color {
         switch mergeButtonState {
-        case .disableAutoMerge:
+        case .markReady, .disableAutoMerge, .enableAutoMerge:
             return Color.black.opacity(isMergeButtonHovering ? 0.10 : 0.06)
-        case .merge:
+        case .merge, .enqueue:
             return Color.green.opacity(isMergeButtonHovering ? 0.26 : 0.18)
-        case .enableAutoMerge:
-            return Color.black.opacity(isMergeButtonHovering ? 0.10 : 0.06)
         case .queued:
             return Color.green.opacity(isMergeButtonHovering ? 0.14 : 0.07)
-        case .checksFailed, .waitingForChecks, .working:
+        case .blocked, .statusUnavailable, .checksFailed, .waitingForChecks, .working:
             return Color.black.opacity(0.04)
         }
     }
 
     private var mergeProgressTint: Color {
-        isReady ? Color.white : mergeForeground
+        mergeButtonState == .merge || mergeButtonState == .enqueue ? .white : mergeForeground
     }
 
     private var mergeButtonOffset: CGFloat {
@@ -649,6 +621,9 @@ private struct PRRow: View {
             case .success:
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(.green)
+            case .noChecks:
+                Image(systemName: "minus.circle.fill")
+                    .foregroundStyle(.secondary)
             case .failure, .error:
                 Image(systemName: "xmark.octagon.fill")
                     .symbolRenderingMode(.multicolor)
@@ -786,17 +761,38 @@ private struct PRHistoryRow: View {
     }
 }
 
-private enum MergeButtonState {
+enum MergeButtonState: Equatable {
+    case markReady
+    case enqueue
     case merge
     case enableAutoMerge
     case disableAutoMerge
     case queued
     case checksFailed
+    case blocked
+    case statusUnavailable
     case waitingForChecks
     case working
 
+    static func resolve(for pr: PullRequestRow, isWorking: Bool) -> MergeButtonState {
+        if isWorking { return .working }
+        if pr.isDraft { return .markReady }
+        if pr.status == .failure || pr.status == .error { return .checksFailed }
+        if pr.isInMergeQueue { return .queued }
+        if pr.canMergeImmediately { return pr.isMergeQueueEnabled ? .enqueue : .merge }
+        if pr.isAutoMergeEnabled { return .disableAutoMerge }
+        if pr.canEnableAutoMerge { return .enableAutoMerge }
+        if pr.status == .pending { return .waitingForChecks }
+        if pr.status == .unknown { return .statusUnavailable }
+        return .blocked
+    }
+
     var title: String {
         switch self {
+        case .markReady:
+            return "Mark ready"
+        case .enqueue:
+            return "Add to queue"
         case .merge:
             return "Merge"
         case .enableAutoMerge:
@@ -807,6 +803,10 @@ private enum MergeButtonState {
             return "Queued"
         case .checksFailed:
             return "Checks failed"
+        case .blocked:
+            return "Not mergeable"
+        case .statusUnavailable:
+            return "Status unavailable"
         case .waitingForChecks:
             return "Waiting for checks"
         case .working:
@@ -816,6 +816,10 @@ private enum MergeButtonState {
 
     var iconName: String {
         switch self {
+        case .markReady:
+            return "checkmark.circle"
+        case .enqueue:
+            return "arrow.right.to.line"
         case .merge:
             return "checkmark"
         case .enableAutoMerge:
@@ -826,6 +830,8 @@ private enum MergeButtonState {
             return "checkmark.circle"
         case .checksFailed:
             return "xmark"
+        case .blocked, .statusUnavailable:
+            return "minus.circle"
         case .waitingForChecks:
             return "clock"
         case .working:
@@ -835,18 +841,18 @@ private enum MergeButtonState {
 
     var isClickable: Bool {
         switch self {
-        case .merge, .enableAutoMerge, .disableAutoMerge:
+        case .markReady, .enqueue, .merge, .enableAutoMerge, .disableAutoMerge:
             return true
-        case .queued, .checksFailed, .waitingForChecks, .working:
+        case .queued, .checksFailed, .blocked, .statusUnavailable, .waitingForChecks, .working:
             return false
         }
     }
 
     var hasHoverEffect: Bool {
         switch self {
-        case .merge, .enableAutoMerge, .disableAutoMerge, .queued:
+        case .markReady, .enqueue, .merge, .enableAutoMerge, .disableAutoMerge, .queued:
             return true
-        case .checksFailed, .waitingForChecks, .working:
+        case .checksFailed, .blocked, .statusUnavailable, .waitingForChecks, .working:
             return false
         }
     }
