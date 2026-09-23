@@ -150,6 +150,8 @@ final class PRMonitor: ObservableObject {
     private let dateProvider: DateProviding
     private let hookRunner: PullRequestHookRunning
     private var credentialSession = UUID()
+    private var didLoadSessionToken = false
+    private var sessionToken: String?
     private var cachedLogin: String?
     private var timer: RefreshTimer?
     private var activeRefreshTask: Task<Void, Never>?
@@ -192,7 +194,7 @@ final class PRMonitor: ObservableObject {
     }
 
     func start() {
-        hasToken = tokenStore.hasToken
+        hasToken = loadSessionToken() != nil
         refresh()
         scheduleTimer()
     }
@@ -207,6 +209,8 @@ final class PRMonitor: ObservableObject {
     func saveToken(_ token: String) {
         invalidateLogin()
         tokenStore.saveToken(token)
+        sessionToken = token
+        didLoadSessionToken = true
         hasToken = true
         refresh()
     }
@@ -214,6 +218,8 @@ final class PRMonitor: ObservableObject {
     func clearToken() {
         invalidateLogin()
         tokenStore.clearToken()
+        sessionToken = nil
+        didLoadSessionToken = true
         hasToken = false
         setPRRows([])
         setHistoryRows([])
@@ -247,8 +253,15 @@ final class PRMonitor: ObservableObject {
         }
     }
 
+    private func loadSessionToken() -> String? {
+        guard !didLoadSessionToken else { return sessionToken }
+        sessionToken = tokenStore.loadToken()
+        didLoadSessionToken = true
+        return sessionToken
+    }
+
     func refreshNow() async {
-        guard tokenStore.loadToken() != nil else { return }
+        guard loadSessionToken() != nil else { return }
         let task = startRefreshIfNeeded()
         await task.value
     }
@@ -291,7 +304,7 @@ final class PRMonitor: ObservableObject {
     }
 
     private func refreshHistory(page: Int, onlyIfNeeded: Bool) async {
-        guard let token = tokenStore.loadToken() else { return }
+        guard let token = loadSessionToken() else { return }
         guard !isHistoryLoading else { return }
         guard !onlyIfNeeded || !historyLoadedSuccessfully else { return }
         let session = credentialSession
@@ -346,7 +359,7 @@ final class PRMonitor: ObservableObject {
 
     private func runRefresh(session: UUID, refreshID: UUID) async {
         while true {
-            guard let token = tokenStore.loadToken() else { break }
+            guard let token = loadSessionToken() else { break }
             let requestRevision = refreshRevision
 
             do {
@@ -453,7 +466,7 @@ final class PRMonitor: ObservableObject {
     }
 
     func requestMarkReady(for row: PullRequestRow) async {
-        guard row.isDraft, let token = tokenStore.loadToken() else { return }
+        guard row.isDraft, let token = loadSessionToken() else { return }
         let session = credentialSession
         do {
             try await api.markPullRequestReadyForReview(token: token, pullRequestID: row.nodeID)
@@ -465,7 +478,7 @@ final class PRMonitor: ObservableObject {
     }
 
     func requestMerge(for row: PullRequestRow) async {
-        guard !row.isDraft, let token = tokenStore.loadToken() else { return }
+        guard !row.isDraft, let token = loadSessionToken() else { return }
         let session = credentialSession
         do {
             if row.isInMergeQueue || row.status == .failure || row.status == .error {
