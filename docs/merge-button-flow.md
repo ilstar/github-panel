@@ -1,45 +1,57 @@
-# Merge Button States
+# Pull Request Action Button States
 
-This is the proposed user-facing flow for the PR row merge button. The button should describe the next useful action without exposing whether the repo merges directly or uses a merge queue.
+This flow describes the action button shown on each open PR row. Draft state and GitHub's merge state determine which action is available; check status alone does not determine whether a PR can merge.
 
-## Proposed Flow
+## Flow
 
 ```mermaid
 flowchart TD
-    pr["Open PR"] --> failed{"Checks failed?"}
+    pr["Open PR"] --> working{"Action in progress?"}
+    working -- "Yes" --> workingButton["Button: Working..."]
+    working -- "No" --> draft{"Draft PR?"}
+    draft -- "Yes" --> markReady["Button: Mark ready"]
+    draft -- "No" --> failed{"Checks failed or errored?"}
     failed -- "Yes" --> checksFailed["Button: Checks failed"]
-
-    failed -- "No" --> passed{"Checks passed?"}
-    passed -- "Yes" --> merge["Button: Merge"]
-    merge --> queueCheck{"Added to merge queue?"}
-    queueCheck -- "Yes" --> queued["Button: Queued"]
-    queueCheck -- "No" --> merged["Merged: remove row"]
-    queued --> mergedWhenClosed["Remove row when PR closes"]
-
-    passed -- "No" --> autoOn{"Auto-merge already enabled?"}
+    failed -- "No" --> queuedCheck{"Already in merge queue?"}
+    queuedCheck -- "Yes" --> queued["Button: Queued"]
+    queuedCheck -- "No" --> mergeable{"Checks passed or none reported, and merge state is CLEAN or HAS_HOOKS?"}
+    mergeable -- "Yes" --> queueEnabled{"Merge queue enabled?"}
+    queueEnabled -- "Yes" --> enqueue["Button: Add to queue"]
+    queueEnabled -- "No" --> merge["Button: Merge"]
+    mergeable -- "No" --> autoOn{"Auto-merge already enabled?"}
     autoOn -- "Yes" --> disable["Button: Disable auto-merge"]
-
-    autoOn -- "No" --> autoAvailable{"Auto-merge available?"}
+    autoOn -- "No" --> autoAvailable{"Can enable auto-merge?"}
     autoAvailable -- "Yes" --> enable["Button: Enable auto-merge"]
-    autoAvailable -- "No" --> waiting["Button: Waiting for checks"]
+    autoAvailable -- "No" --> pending{"Checks pending?"}
+    pending -- "Yes" --> waiting["Button: Waiting for checks"]
+    pending -- "No" --> known{"Check status known?"}
+    known -- "No" --> unavailable["Button: Status unavailable"]
+    known -- "Yes" --> blocked["Button: Not mergeable"]
 ```
 
 ## Button States
 
 | PR state | Button | User meaning |
 | --- | --- | --- |
-| Checks pending and auto-merge available | `Enable auto-merge` | Merge this PR automatically once it becomes eligible. |
-| Auto-merge enabled | `Disable auto-merge` | Auto-merge is scheduled; click to cancel it. |
-| Checks pending and auto-merge unavailable | `Waiting for checks` | This PR is not ready, and auto-merge cannot be enabled here. |
-| Checks passed | `Merge` | Complete the PR now. This may merge directly or enter the merge queue. |
+| Action is in progress | `Working...` | The requested GitHub action is running. |
+| Draft PR | `Mark ready` | Mark this draft PR ready for review. |
+| Checks failed or errored | `Checks failed` | No primary merge action until checks recover. |
 | Already in merge queue | `Queued` | This PR is waiting in the merge queue. |
-| Checks failed | `Checks failed` | No primary merge action until checks recover. |
+| Checks pass or none are reported, merge state is `CLEAN` or `HAS_HOOKS`, and no queue is enabled | `Merge` | Merge the PR now. |
+| Checks pass or none are reported, merge state is `CLEAN` or `HAS_HOOKS`, and a queue is enabled | `Add to queue` | Add the PR to the merge queue. |
+| Auto-merge enabled | `Disable auto-merge` | Cancel the scheduled auto-merge. |
+| Auto-merge can be enabled | `Enable auto-merge` | Merge automatically once GitHub considers the PR eligible. |
+| Checks are pending and no auto-merge action is available | `Waiting for checks` | Checks are still running, and auto-merge cannot be enabled here. |
+| Check status is unknown and no auto-merge action is available | `Status unavailable` | GitHub did not provide a usable check status. |
+| Otherwise not mergeable | `Not mergeable` | GitHub's merge state prevents a merge or queue action. |
 | Merged | No row | The PR is done and leaves the open list. |
 
 ## Product Notes
 
-`Merge` should hide the repo implementation detail. In a normal repo, it merges the PR. In a merge queue repo, it adds the PR to the queue.
+`EXPECTED` with zero rollup contexts is displayed as `No checks reported`. It counts as passing for the check-status gate, but merge and queue actions still require GitHub to report a merge state of `CLEAN` or `HAS_HOOKS`.
 
-`Enable auto-merge` should only appear when GitHub supports auto-merge for that PR. Not every PR has this option: the repo must allow auto-merge, the user must have permission, and GitHub must consider the PR eligible for auto-merge.
+`Add to queue` is shown when the base branch has a merge queue and the PR can merge immediately. Without a merge queue, that same eligible PR shows `Merge`.
 
-`Disable auto-merge` should look like an active button, not a disabled status pill. It represents a reversible scheduled state.
+Draft PRs show `Mark ready` regardless of check status. After the mutation succeeds, the app refreshes the open PR list to pick up GitHub's updated state.
+
+`Enable auto-merge` appears only when GitHub allows the viewer to enable it. `Disable auto-merge` remains an active, reversible action.
