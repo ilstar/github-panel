@@ -70,9 +70,42 @@ final class PRMonitorTests: XCTestCase {
         let monitor = makeMonitor(tokenStore: tokenStore, timerScheduler: scheduler)
 
         monitor.start()
+        monitor.start()
 
         XCTAssertTrue(monitor.hasToken)
-        XCTAssertEqual(scheduler.intervals, [60])
+        XCTAssertEqual(scheduler.intervals, [60, 60])
+        XCTAssertEqual(tokenStore.loadTokenCallCount, 1)
+    }
+
+    func testTokenIsReadOnceAcrossMonitorOperationsUntilCredentialChanges() async {
+        let api = FakeGitHubAPI()
+        let tokenStore = FakeTokenStore(token: "first")
+        let monitor = makeMonitor(api: api, tokenStore: tokenStore)
+
+        monitor.start()
+        await monitor.refreshNow()
+        await monitor.refreshCurrentHistoryPage()
+        await monitor.requestMerge(for: row(number: 1, status: .pending, canEnableAutoMerge: true))
+        monitor.start()
+        await monitor.refreshNow()
+
+        XCTAssertEqual(tokenStore.loadTokenCallCount, 1)
+        XCTAssertEqual(api.fetchOpenPRTokens, ["first", "first", "first"])
+        XCTAssertTrue(api.fetchCurrentUserTokens.isEmpty)
+        XCTAssertEqual(api.enableCalls, ["node-1"])
+
+        monitor.saveToken("second")
+        await monitor.refreshNow()
+
+        XCTAssertEqual(tokenStore.loadTokenCallCount, 1)
+        XCTAssertEqual(api.fetchOpenPRTokens.last, "second")
+
+        monitor.clearToken()
+        tokenStore.token = "external-change"
+        await monitor.refreshNow()
+
+        XCTAssertEqual(tokenStore.loadTokenCallCount, 1)
+        XCTAssertEqual(api.fetchOpenPRTokens.last, "second")
     }
 
     func testRefreshSuccessPreservesAPIOrderAndTimestamp() async {
@@ -211,7 +244,7 @@ final class PRMonitorTests: XCTestCase {
         let oldRefresh = Task { await monitor.refreshNow() }
         await gate.waitForRequestCount(1)
         monitor.clearToken()
-        store.token = "new"
+        monitor.saveToken("new")
         let newRefresh = Task { await monitor.refreshNow() }
         await gate.waitForRequestCount(2)
 
@@ -387,8 +420,10 @@ final class PRMonitorTests: XCTestCase {
         let monitor = makeMonitor(api: api, tokenStore: store)
         await monitor.refreshNow()
         monitor.clearToken()
-        store.token = "token"
+        api.openHandler = { _ in throw TestError(message: "offline") }
         api.user = GitHubUser(login: "renamed-user")
+        monitor.saveToken("token")
+        await monitor.refreshNow()
         await monitor.refreshCurrentHistoryPage()
         XCTAssertEqual(api.fetchCurrentUserTokens, ["token"])
         XCTAssertEqual(api.historyUsernames, ["renamed-user"])
@@ -427,10 +462,13 @@ final class PRMonitorTests: XCTestCase {
         XCTAssertTrue(monitor.prRows.isEmpty)
         XCTAssertNil(monitor.lastRefreshAt)
         XCTAssertFalse(monitor.isLoading)
-        store.token = "new"
+        api.openHandler = nil
         api.user = GitHubUser(login: "new-user")
+        monitor.saveToken("new")
+        await monitor.refreshNow()
         await monitor.refreshCurrentHistoryPage()
-        XCTAssertEqual(api.fetchCurrentUserTokens, ["new"])
+        XCTAssertEqual(api.fetchOpenPRTokens, ["old", "new"])
+        XCTAssertTrue(api.fetchCurrentUserTokens.isEmpty)
         XCTAssertEqual(api.historyUsernames, ["new-user"])
     }
 
@@ -473,13 +511,18 @@ final class PRMonitorTests: XCTestCase {
 
     func testRefreshWithoutTokenDoesNothing() async {
         let api = FakeGitHubAPI()
-        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: nil))
+        let tokenStore = FakeTokenStore(token: nil)
+        let monitor = makeMonitor(api: api, tokenStore: tokenStore)
 
         await monitor.refreshNow()
+        monitor.start()
+        await monitor.refreshCurrentHistoryPage()
 
         XCTAssertFalse(monitor.isLoading)
+        XCTAssertFalse(monitor.hasToken)
         XCTAssertTrue(api.fetchCurrentUserTokens.isEmpty)
         XCTAssertNil(monitor.lastRefreshAt)
+        XCTAssertEqual(tokenStore.loadTokenCallCount, 1)
     }
 
     func testRefreshHistoryLoadsRequestedPageAndPaginationState() async {
@@ -843,6 +886,7 @@ private final class FakeGitHubAPI: GitHubAPIClient {
 
 private final class FakeTokenStore: TokenStoring {
     var token: String?
+    private(set) var loadTokenCallCount = 0
 
     init(token: String?) {
         self.token = token
@@ -857,7 +901,8 @@ private final class FakeTokenStore: TokenStoring {
     }
 
     func loadToken() -> String? {
-        token
+        loadTokenCallCount += 1
+        return token
     }
 
     func clearToken() {
