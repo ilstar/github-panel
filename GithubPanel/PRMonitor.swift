@@ -102,11 +102,14 @@ struct SystemTimerScheduler: TimerScheduling {
     func scheduledTimer(withTimeInterval interval: TimeInterval,
                         repeats: Bool,
                         block: @escaping @MainActor () -> Void) -> RefreshTimer {
-        Timer.scheduledTimer(withTimeInterval: interval, repeats: repeats) { _ in
+        let timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: repeats) { _ in
             Task { @MainActor in
                 block()
             }
         }
+        // Let macOS coalesce this background poll with other wake-ups.
+        timer.tolerance = interval * 0.1
+        return timer
     }
 }
 

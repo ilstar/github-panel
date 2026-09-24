@@ -77,6 +77,14 @@ final class PRMonitorTests: XCTestCase {
         XCTAssertEqual(tokenStore.loadTokenCallCount, 1)
     }
 
+    func testSystemTimerSchedulerSetsTolerance() throws {
+        let refreshTimer = SystemTimerScheduler().scheduledTimer(withTimeInterval: 60, repeats: true) {}
+        let timer = try XCTUnwrap(refreshTimer as? Timer)
+        defer { timer.invalidate() }
+
+        XCTAssertEqual(timer.tolerance, 6, accuracy: 0.001)
+    }
+
     func testTokenIsReadOnceAcrossMonitorOperationsUntilCredentialChanges() async {
         let api = FakeGitHubAPI()
         let tokenStore = FakeTokenStore(token: "first")
