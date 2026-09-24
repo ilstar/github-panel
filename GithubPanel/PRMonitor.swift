@@ -102,11 +102,14 @@ struct SystemTimerScheduler: TimerScheduling {
     func scheduledTimer(withTimeInterval interval: TimeInterval,
                         repeats: Bool,
                         block: @escaping @MainActor () -> Void) -> RefreshTimer {
-        Timer.scheduledTimer(withTimeInterval: interval, repeats: repeats) { _ in
+        let timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: repeats) { _ in
             Task { @MainActor in
                 block()
             }
         }
+        // Let macOS coalesce this background poll with other wake-ups.
+        timer.tolerance = interval * 0.1
+        return timer
     }
 }
 
@@ -160,6 +163,9 @@ final class PRMonitor: ObservableObject {
     private var refreshRevision = 0
     private var historyLoadedSuccessfully = false
     private var lastStates: [String: CheckState] = [:]
+    private var nextTimerRefreshAt: Date?
+    private var consecutiveThrottledFailures = 0
+    private let maxThrottledBackoff: TimeInterval = 30 * 60
     private let historyPageSize = 10
     private let relativeFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
@@ -236,6 +242,8 @@ final class PRMonitor: ObservableObject {
         activeRefreshID = nil
         refreshQueued = false
         historyLoadedSuccessfully = false
+        nextTimerRefreshAt = nil
+        consecutiveThrottledFailures = 0
         isLoading = false
         isHistoryLoading = false
     }
@@ -243,8 +251,17 @@ final class PRMonitor: ObservableObject {
     func scheduleTimer() {
         timer?.invalidate()
         timer = timerScheduler.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { [weak self] in
-            self?.refresh()
+            Task { await self?.handleTimerTick() }
         }
+    }
+
+    /// Timer-driven refresh. Skips the fetch when another refresh finished recently
+    /// or while backing off from auth/rate-limit failures.
+    func handleTimerTick() async {
+        if let nextTimerRefreshAt, dateProvider.now < nextTimerRefreshAt {
+            return
+        }
+        await refreshNow()
     }
 
     private func refresh() {
@@ -365,6 +382,7 @@ final class PRMonitor: ObservableObject {
             do {
                 let result = try await api.fetchOpenPRs(token: token)
                 guard session == credentialSession else { return }
+                scheduleNextTimerRefresh(after: nil)
                 if requestRevision == refreshRevision {
                     cachedLogin = result.login
                     updateNotificationsForRows(result.rows)
@@ -373,6 +391,7 @@ final class PRMonitor: ObservableObject {
                 }
             } catch {
                 guard session == credentialSession else { return }
+                scheduleNextTimerRefresh(after: error)
                 if requestRevision == refreshRevision {
                     setPRRows([])
                     lastError = error.localizedDescription
@@ -388,6 +407,27 @@ final class PRMonitor: ObservableObject {
         activeRefreshTask = nil
         activeRefreshID = nil
         isLoading = false
+    }
+
+    private func scheduleNextTimerRefresh(after error: Error?) {
+        let delay: TimeInterval
+        if let error, Self.isThrottlingError(error) {
+            consecutiveThrottledFailures += 1
+            let backoff = refreshInterval * pow(2, Double(consecutiveThrottledFailures))
+            delay = min(backoff, max(refreshInterval, maxThrottledBackoff))
+        } else {
+            consecutiveThrottledFailures = 0
+            delay = refreshInterval
+        }
+        // Ticks run on a fixed cadence that started before this fetch completed, so allow
+        // half an interval of slack; otherwise the tick due after `delay` would be skipped.
+        nextTimerRefreshAt = dateProvider.now.addingTimeInterval(delay - refreshInterval / 2)
+    }
+
+    private static func isThrottlingError(_ error: Error) -> Bool {
+        let statusCode = (error as? GraphQLError)?.statusCode ?? (error as? GitHubAPIError)?.statusCode
+        guard let statusCode else { return false }
+        return [401, 403, 429].contains(statusCode)
     }
 
     private func requireFreshRefresh(for session: UUID) async {

@@ -148,6 +148,21 @@ final class GitHubAPITests: XCTestCase {
         }
     }
 
+    func testGraphQLHTTPErrorCarriesStatusCode() async {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: #"{"message":"Bad credentials"}"#, statusCode: 401)
+        let api = GitHubAPI(transport: transport)
+
+        do {
+            _ = try await api.fetchOpenPRs(token: "bad-token")
+            XCTFail("Expected GraphQLError")
+        } catch let error as GraphQLError {
+            XCTAssertEqual(error.statusCode, 401)
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
     func testRESTErrorDecodesGitHubAPIError() async {
         let transport = MockHTTPTransport()
         transport.enqueue(json: #"{"message":"Bad credentials","documentation_url":"https://docs.github.com"}"#, statusCode: 401)

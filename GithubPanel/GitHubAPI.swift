@@ -369,7 +369,7 @@ final class GitHubAPI: GitHubAPIClient {
         }
         guard (200...299).contains(http.statusCode) else {
             let raw = String(data: data, encoding: .utf8) ?? "<non-utf8 response>"
-            throw GraphQLError(message: "GraphQL HTTP \(http.statusCode): \(raw)")
+            throw GraphQLError(message: "GraphQL HTTP \(http.statusCode): \(raw)", statusCode: http.statusCode)
         }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -510,6 +510,7 @@ private struct GraphQLErrorPayload: Decodable {
 
 struct GraphQLError: LocalizedError {
     let message: String
+    var statusCode: Int? = nil
 
     var errorDescription: String? { message }
 }
