@@ -3,29 +3,12 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 56;
+	objectVersion = 77;
 	objects = {
 
 /* Begin PBXBuildFile section */
-		1A1110012B12345600000001 /* GithubPanelApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110002B12345600000001 /* GithubPanelApp.swift */; };
-		1A1110022B12345600000001 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110032B12345600000001 /* ContentView.swift */; };
-		1A1110202B12345600000001 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110212B12345600000001 /* SettingsView.swift */; };
-		1A1110042B12345600000001 /* PRMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110052B12345600000001 /* PRMonitor.swift */; };
-		1A1110062B12345600000001 /* GitHubAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110072B12345600000001 /* GitHubAPI.swift */; };
-		1A1110082B12345600000001 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110092B12345600000001 /* KeychainStore.swift */; };
-		1A11100A2B12345600000001 /* NotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A11100B2B12345600000001 /* NotificationManager.swift */; };
-		1A1110242B12345600000001 /* Shortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110222B12345600000001 /* Shortcuts.swift */; };
-		1A1110252B12345600000001 /* AppVisibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110232B12345600000001 /* AppVisibility.swift */; };
-		1A11100C2B12345600000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1A11100D2B12345600000001 /* Assets.xcassets */; };
 		1A1110302B12345600000001 /* KeyboardShortcuts in Frameworks */ = {isa = PBXBuildFile; productRef = 1A1110322B12345600000001 /* KeyboardShortcuts */; };
 		1A1110602B12345600000001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 1A1110622B12345600000001 /* Sparkle */; };
-		1A1110402B12345600000001 /* CheckStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110412B12345600000001 /* CheckStateTests.swift */; };
-		1A1110422B12345600000001 /* GitHubAPITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110432B12345600000001 /* GitHubAPITests.swift */; };
-		1A1110442B12345600000001 /* PRMonitorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110452B12345600000001 /* PRMonitorTests.swift */; };
-		1A1110462B12345600000001 /* KeychainStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110472B12345600000001 /* KeychainStoreTests.swift */; };
-		1A1110532B12345600000001 /* AppIconAssetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110542B12345600000001 /* AppIconAssetTests.swift */; };
-		1A1110552B12345600000001 /* ContentViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110562B12345600000001 /* ContentViewTests.swift */; };
-		1A1110572B12345600000001 /* UpdaterConfigurationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1110582B12345600000001 /* UpdaterConfigurationTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -39,54 +22,63 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		1A1110002B12345600000001 /* GithubPanelApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GithubPanelApp.swift; sourceTree = "<group>"; };
-		1A1110032B12345600000001 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
-		1A1110212B12345600000001 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
-		1A1110052B12345600000001 /* PRMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PRMonitor.swift; sourceTree = "<group>"; };
-		1A1110072B12345600000001 /* GitHubAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitHubAPI.swift; sourceTree = "<group>"; };
-		1A1110092B12345600000001 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
-		1A11100B2B12345600000001 /* NotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationManager.swift; sourceTree = "<group>"; };
-		1A1110222B12345600000001 /* Shortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shortcuts.swift; sourceTree = "<group>"; };
-		1A1110232B12345600000001 /* AppVisibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppVisibility.swift; sourceTree = "<group>"; };
-		1A11100D2B12345600000001 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		1A11100E2B12345600000001 /* GithubPanel.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; path = GithubPanel.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		1A11100F2B12345600000001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		1A1110412B12345600000001 /* CheckStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckStateTests.swift; sourceTree = "<group>"; };
-		1A1110432B12345600000001 /* GitHubAPITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitHubAPITests.swift; sourceTree = "<group>"; };
-		1A1110452B12345600000001 /* PRMonitorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PRMonitorTests.swift; sourceTree = "<group>"; };
-		1A1110472B12345600000001 /* KeychainStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStoreTests.swift; sourceTree = "<group>"; };
 		1A1110492B12345600000001 /* GithubPanelTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = GithubPanelTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		1A1110542B12345600000001 /* AppIconAssetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIconAssetTests.swift; sourceTree = "<group>"; };
-		1A1110562B12345600000001 /* ContentViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentViewTests.swift; sourceTree = "<group>"; };
-		1A1110582B12345600000001 /* UpdaterConfigurationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdaterConfigurationTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		1A1110722B12345600000001 /* Exceptions for "GithubPanel" folder in "GithubPanel" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 1A1110132B12345600000001 /* GithubPanel */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		1A1110702B12345600000001 /* GithubPanel */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				1A1110722B12345600000001 /* Exceptions for "GithubPanel" folder in "GithubPanel" target */,
+			);
+			path = GithubPanel;
+			sourceTree = "<group>";
+		};
+		1A1110712B12345600000001 /* GithubPanelTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = GithubPanelTests;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		1A1110312B12345600000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1A1110302B12345600000001 /* KeyboardShortcuts in Frameworks */,
+				1A1110602B12345600000001 /* Sparkle in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		1A11104A2B12345600000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		1A1110102B12345600000001 = {
 			isa = PBXGroup;
 			children = (
-				1A1110112B12345600000001 /* GithubPanel */,
-				1A11104B2B12345600000001 /* GithubPanelTests */,
+				1A1110702B12345600000001 /* GithubPanel */,
+				1A1110712B12345600000001 /* GithubPanelTests */,
 				1A1110122B12345600000001 /* Products */,
 			);
-			sourceTree = "<group>";
-		};
-		1A1110112B12345600000001 /* GithubPanel */ = {
-			isa = PBXGroup;
-			children = (
-				1A1110002B12345600000001 /* GithubPanelApp.swift */,
-				1A1110032B12345600000001 /* ContentView.swift */,
-				1A1110212B12345600000001 /* SettingsView.swift */,
-				1A1110222B12345600000001 /* Shortcuts.swift */,
-				1A1110232B12345600000001 /* AppVisibility.swift */,
-				1A1110052B12345600000001 /* PRMonitor.swift */,
-				1A1110072B12345600000001 /* GitHubAPI.swift */,
-				1A1110092B12345600000001 /* KeychainStore.swift */,
-				1A11100B2B12345600000001 /* NotificationManager.swift */,
-				1A11100D2B12345600000001 /* Assets.xcassets */,
-				1A11100F2B12345600000001 /* Info.plist */,
-			);
-			path = GithubPanel;
 			sourceTree = "<group>";
 		};
 		1A1110122B12345600000001 /* Products */ = {
@@ -96,20 +88,6 @@
 				1A1110492B12345600000001 /* GithubPanelTests.xctest */,
 			);
 			name = Products;
-			sourceTree = "<group>";
-		};
-		1A11104B2B12345600000001 /* GithubPanelTests */ = {
-			isa = PBXGroup;
-			children = (
-				1A1110542B12345600000001 /* AppIconAssetTests.swift */,
-				1A1110412B12345600000001 /* CheckStateTests.swift */,
-				1A1110562B12345600000001 /* ContentViewTests.swift */,
-				1A1110432B12345600000001 /* GitHubAPITests.swift */,
-				1A1110452B12345600000001 /* PRMonitorTests.swift */,
-				1A1110472B12345600000001 /* KeychainStoreTests.swift */,
-				1A1110582B12345600000001 /* UpdaterConfigurationTests.swift */,
-			);
-			path = GithubPanelTests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -126,6 +104,9 @@
 			buildRules = (
 			);
 			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				1A1110702B12345600000001 /* GithubPanel */,
 			);
 			name = GithubPanel;
 			packageProductDependencies = (
@@ -148,6 +129,9 @@
 			);
 			dependencies = (
 				1A1110502B12345600000001 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				1A1110712B12345600000001 /* GithubPanelTests */,
 			);
 			name = GithubPanelTests;
 			productName = GithubPanelTests;
@@ -172,7 +156,6 @@
 				};
 			};
 			buildConfigurationList = 1A1110182B12345600000001 /* Build configuration list for PBXProject "GithubPanel" */;
-			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -180,10 +163,12 @@
 				Base,
 			);
 			mainGroup = 1A1110102B12345600000001;
+			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				1A1110332B12345600000001 /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */,
 				1A1110632B12345600000001 /* XCRemoteSwiftPackageReference "Sparkle" */,
 			);
+			preferredProjectObjectVersion = 77;
 			productRefGroup = 1A1110122B12345600000001 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -199,7 +184,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				1A11100C2B12345600000001 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -212,39 +196,11 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
-/* Begin PBXFrameworksBuildPhase section */
-		1A1110312B12345600000001 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				1A1110302B12345600000001 /* KeyboardShortcuts in Frameworks */,
-				1A1110602B12345600000001 /* Sparkle in Frameworks */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		1A11104A2B12345600000001 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXFrameworksBuildPhase section */
-
 /* Begin PBXSourcesBuildPhase section */
 		1A1110152B12345600000001 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				1A1110012B12345600000001 /* GithubPanelApp.swift in Sources */,
-				1A1110022B12345600000001 /* ContentView.swift in Sources */,
-				1A1110202B12345600000001 /* SettingsView.swift in Sources */,
-				1A1110042B12345600000001 /* PRMonitor.swift in Sources */,
-				1A1110062B12345600000001 /* GitHubAPI.swift in Sources */,
-				1A1110082B12345600000001 /* KeychainStore.swift in Sources */,
-				1A11100A2B12345600000001 /* NotificationManager.swift in Sources */,
-				1A1110242B12345600000001 /* Shortcuts.swift in Sources */,
-				1A1110252B12345600000001 /* AppVisibility.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -252,13 +208,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				1A1110402B12345600000001 /* CheckStateTests.swift in Sources */,
-				1A1110552B12345600000001 /* ContentViewTests.swift in Sources */,
-				1A1110422B12345600000001 /* GitHubAPITests.swift in Sources */,
-				1A1110442B12345600000001 /* PRMonitorTests.swift in Sources */,
-				1A1110462B12345600000001 /* KeychainStoreTests.swift in Sources */,
-				1A1110532B12345600000001 /* AppIconAssetTests.swift in Sources */,
-				1A1110572B12345600000001 /* UpdaterConfigurationTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
