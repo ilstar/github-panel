@@ -164,6 +164,8 @@ final class PRMonitor: ObservableObject {
     private var historyLoadedSuccessfully = false
     private var lastStates: [String: CheckState] = [:]
     private var nextTimerRefreshAt: Date?
+    private var consecutiveThrottledFailures = 0
+    private let maxThrottledBackoff: TimeInterval = 30 * 60
     private let historyPageSize = 10
     private let relativeFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
@@ -241,6 +243,7 @@ final class PRMonitor: ObservableObject {
         refreshQueued = false
         historyLoadedSuccessfully = false
         nextTimerRefreshAt = nil
+        consecutiveThrottledFailures = 0
         isLoading = false
         isHistoryLoading = false
     }
@@ -252,7 +255,8 @@ final class PRMonitor: ObservableObject {
         }
     }
 
-    /// Timer-driven refresh. Skips the fetch when another refresh finished recently.
+    /// Timer-driven refresh. Skips the fetch when another refresh finished recently
+    /// or while backing off from auth/rate-limit failures.
     func handleTimerTick() async {
         if let nextTimerRefreshAt, dateProvider.now < nextTimerRefreshAt {
             return
@@ -378,7 +382,7 @@ final class PRMonitor: ObservableObject {
             do {
                 let result = try await api.fetchOpenPRs(token: token)
                 guard session == credentialSession else { return }
-                scheduleNextTimerRefresh()
+                scheduleNextTimerRefresh(after: nil)
                 if requestRevision == refreshRevision {
                     cachedLogin = result.login
                     updateNotificationsForRows(result.rows)
@@ -387,7 +391,7 @@ final class PRMonitor: ObservableObject {
                 }
             } catch {
                 guard session == credentialSession else { return }
-                scheduleNextTimerRefresh()
+                scheduleNextTimerRefresh(after: error)
                 if requestRevision == refreshRevision {
                     setPRRows([])
                     lastError = error.localizedDescription
@@ -405,10 +409,25 @@ final class PRMonitor: ObservableObject {
         isLoading = false
     }
 
-    private func scheduleNextTimerRefresh() {
-        // A tick within half an interval of a completed fetch would return the same data.
-        // Ticks run on a fixed cadence, so a longer window could skip the next useful one.
-        nextTimerRefreshAt = dateProvider.now.addingTimeInterval(refreshInterval / 2)
+    private func scheduleNextTimerRefresh(after error: Error?) {
+        let delay: TimeInterval
+        if let error, Self.isThrottlingError(error) {
+            consecutiveThrottledFailures += 1
+            let backoff = refreshInterval * pow(2, Double(consecutiveThrottledFailures))
+            delay = min(backoff, max(refreshInterval, maxThrottledBackoff))
+        } else {
+            consecutiveThrottledFailures = 0
+            delay = refreshInterval
+        }
+        // Ticks run on a fixed cadence that started before this fetch completed, so allow
+        // half an interval of slack; otherwise the tick due after `delay` would be skipped.
+        nextTimerRefreshAt = dateProvider.now.addingTimeInterval(delay - refreshInterval / 2)
+    }
+
+    private static func isThrottlingError(_ error: Error) -> Bool {
+        let statusCode = (error as? GraphQLError)?.statusCode ?? (error as? GitHubAPIError)?.statusCode
+        guard let statusCode else { return false }
+        return [401, 403, 429].contains(statusCode)
     }
 
     private func requireFreshRefresh(for session: UUID) async {
