@@ -1,0 +1,28 @@
+# Project tasks. Run `mise tasks` to list them and `mise run <task>` to run one.
+# Short tasks live here; longer ones are scripts in mise-tasks/ that share
+# scripts/lib.sh.
+
+[env]
+# .env holds committed defaults; .env.local holds your signing settings and is
+# ignored by Git. Both use dotenv syntax: KEY="value".
+_.file = [".env", ".env.local"]
+
+[tasks.open]
+description = "Open the Debug app"
+run = "open -n build/DerivedData/Build/Products/Debug/GithubPanel.app"
+
+[tasks.run]
+description = "Run the Debug app binary so print() output appears in the terminal"
+run = "build/DerivedData/Build/Products/Debug/GithubPanel.app/Contents/MacOS/GithubPanel"
+
+[tasks.mock]
+description = "Open the Debug app with fixture PRs"
+run = "open -n build/DerivedData/Build/Products/Debug/GithubPanel.app --args --mock-github-prs"
+
+[tasks.mock-empty]
+description = "Open the Debug app with an empty fixture PR list"
+run = "open -n build/DerivedData/Build/Products/Debug/GithubPanel.app --args --mock-empty-github-prs"
+
+[tasks.build-and-open]
+description = "Build the Debug app, then open it"
+run = [{ task = "build" }, { task = "open" }]

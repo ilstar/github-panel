@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+#MISE description="Build an unsigned DMG for testing on this Mac only"
+source "$MISE_PROJECT_ROOT/scripts/lib.sh"
+
+xcodebuild_app Release build
+run mkdir -p "$DIST_DIR"
+create_dmg
+echo "Created $DMG_PATH"
+echo "This DMG is for local testing only. Use 'mise run dmg' for sharing outside this Mac."

@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+#MISE description="Dry-run the release tasks and check the commands they would run"
+source "$MISE_PROJECT_ROOT/scripts/lib.sh"
+
+out_dir="$ROOT/build/test"
+mkdir -p "$out_dir"
+
+# dry_run_task <task> <expected substring...>
+dry_run_task() {
+  local task=$1 output="$out_dir/$1-dry-run.txt"
+  shift
+  DRY_RUN=1 VERSION=9.9.9 BUILD_VERSION=4 BASE_BUILD_VERSION=3 RELEASE_TAG='' RELEASE_TITLE='' RELEASE_NOTES="Dry run" \
+    "$ROOT/mise-tasks/$task" >"$output"
+  for expected in "$@"; do
+    grep -qF -- "$expected" "$output" || fail "$task dry run is missing '$expected' (see $output)"
+  done
+}
+
+dry_run_task local-dmg 'hdiutil create' 'GithubPanel-9.9.9.dmg' 'local testing'
+dry_run_task dmg 'notarytool submit' 'stapler staple' 'spctl --assess --type open'
+dry_run_task appcast 'generate_appcast' 'appcast.xml' 'releases/download/v9.9.9'
+dry_run_task release 'notarytool submit' 'stapler staple' 'generate_appcast' 'appcast.xml' \
+  'gh release create v9.9.9' 'GithubPanel-9.9.9.dmg' 'Dry run'
+
+if DRY_RUN=1 BUILD_VERSION=3 BASE_BUILD_VERSION=3 "$ROOT/mise-tasks/dmg" >/dev/null 2>&1; then
+  fail "dmg should reject a BUILD_VERSION that is not greater than BASE_BUILD_VERSION"
+fi
+
+echo "Release task dry runs look good."

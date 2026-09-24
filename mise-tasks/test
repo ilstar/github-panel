@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+#MISE description="Run the release script checks and the unit tests"
+#MISE depends=["test-release-scripts"]
+source "$MISE_PROJECT_ROOT/scripts/lib.sh"
+
+xcodebuild_app "$CONFIGURATION" test

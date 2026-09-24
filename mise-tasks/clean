@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="Clean the command-line build output"
+source "$MISE_PROJECT_ROOT/scripts/lib.sh"
+
+xcodebuild_app "$CONFIGURATION" clean

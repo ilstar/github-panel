@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="Build the app (CONFIGURATION=Debug by default)"
+source "$MISE_PROJECT_ROOT/scripts/lib.sh"
+
+xcodebuild_app "$CONFIGURATION" build
