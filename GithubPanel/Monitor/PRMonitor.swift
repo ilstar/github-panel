@@ -408,17 +408,12 @@ final class PRMonitor: ObservableObject {
         guard !row.isDraft, let token = loadSessionToken() else { return }
         let session = credentialSession
         do {
-            if row.isInMergeQueue || row.status == .failure || row.status == .error {
-                return
-            }
-
-            if row.canMergeImmediately {
-                if row.isMergeQueueEnabled {
-                    try await api.enqueuePullRequest(token: token, pullRequestID: row.nodeID)
-                    await requireFreshRefresh(for: session)
-                    return
-                }
-
+            // Use the same resolver as the row's button so the label and the action cannot drift apart.
+            switch MergeButtonState.resolve(for: row, isWorking: false) {
+            case .enqueue:
+                try await api.enqueuePullRequest(token: token, pullRequestID: row.nodeID)
+                await requireFreshRefresh(for: session)
+            case .merge:
                 let merged = try await api.mergePullRequest(token: token, repoFullName: row.repoFullName, number: row.number)
                 guard session == credentialSession else { return }
                 if merged {
@@ -426,19 +421,16 @@ final class PRMonitor: ObservableObject {
                     lastStates.removeValue(forKey: row.id)
                     await requireFreshRefresh(for: session)
                 }
-                return
-            }
-
-            if row.isAutoMergeEnabled {
+            case .disableAutoMerge:
                 guard row.canDisableAutoMerge else { return }
                 try await api.disableAutoMerge(token: token, pullRequestID: row.nodeID)
                 await requireFreshRefresh(for: session)
+            case .enableAutoMerge:
+                try await api.enableAutoMerge(token: token, pullRequestID: row.nodeID)
+                await requireFreshRefresh(for: session)
+            case .markReady, .queued, .checksFailed, .blocked, .statusUnavailable, .waitingForChecks, .working:
                 return
             }
-
-            guard row.canEnableAutoMerge else { return }
-            try await api.enableAutoMerge(token: token, pullRequestID: row.nodeID)
-            await requireFreshRefresh(for: session)
         } catch {
             guard session == credentialSession else { return }
             lastError = error.localizedDescription

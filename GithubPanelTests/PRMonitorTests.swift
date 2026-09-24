@@ -899,6 +899,37 @@ final class PRMonitorTests: XCTestCase {
         }
     }
 
+    func testMergeActionMatchesResolvedButtonState() async {
+        let cases: [(PullRequestRow, MergeButtonState, String?)] = [
+            (row(number: 1, status: .success), .merge, "merge"),
+            (row(number: 2, status: .noChecks, mergeQueue: true), .enqueue, "enqueue"),
+            (row(number: 3, status: .pending, canEnableAutoMerge: true), .enableAutoMerge, "enable"),
+            (row(number: 4, status: .unknown, canEnableAutoMerge: true), .enableAutoMerge, "enable"),
+            (row(number: 5, status: .pending, autoMerge: true, canDisableAutoMerge: true), .disableAutoMerge, "disable"),
+            (row(number: 6, status: .success, isDraft: true), .markReady, nil),
+            (row(number: 7, status: .failure, canEnableAutoMerge: true), .checksFailed, nil),
+            (row(number: 8, status: .success, mergeQueue: true, inMergeQueue: true), .queued, nil),
+            (row(number: 9, status: .pending), .waitingForChecks, nil),
+            (row(number: 10, status: .unknown), .statusUnavailable, nil),
+            (row(number: 11, status: .success, mergeStateStatus: "BLOCKED"), .blocked, nil)
+        ]
+
+        for (item, expectedState, expectedCall) in cases {
+            XCTAssertEqual(MergeButtonState.resolve(for: item, isWorking: false), expectedState, "PR \(item.number)")
+
+            let api = FakeGitHubAPI()
+            let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+            await monitor.requestMerge(for: item)
+
+            var calls: [String] = []
+            if !api.mergePullRequestCalls.isEmpty { calls.append("merge") }
+            if !api.enqueueCalls.isEmpty { calls.append("enqueue") }
+            if !api.enableCalls.isEmpty { calls.append("enable") }
+            if !api.disableCalls.isEmpty { calls.append("disable") }
+            XCTAssertEqual(calls, expectedCall.map { [$0] } ?? [], "PR \(item.number)")
+        }
+    }
+
     func testMergeWithoutTokenDoesNothing() async {
         let api = FakeGitHubAPI()
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: nil))

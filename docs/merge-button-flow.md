@@ -55,3 +55,7 @@ flowchart TD
 Draft PRs show `Mark ready` regardless of check status. After the mutation succeeds, the app refreshes the open PR list to pick up GitHub's updated state.
 
 `Enable auto-merge` appears only when GitHub allows the viewer to enable it. `Disable auto-merge` remains an active, reversible action.
+
+## Implementation
+
+`MergeButtonState.resolve(for:isWorking:)` in `GithubPanel/Models/MergeButtonState.swift` is the single source of truth for this flow. The row's button label and `PRMonitor.requestMerge(for:)` both switch on its result, so the action performed always matches the label shown.
