@@ -85,6 +85,45 @@ final class PRMonitorTests: XCTestCase {
         XCTAssertEqual(timer.tolerance, 6, accuracy: 0.001)
     }
 
+    func testTimerTickFetchesWhenNoRefreshHasRun() async {
+        let api = FakeGitHubAPI()
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+
+        await monitor.handleTimerTick()
+
+        XCTAssertEqual(api.fetchOpenPRTokens.count, 1)
+    }
+
+    func testTimerTickSkipsFetchRightAfterRecentRefresh() async {
+        let api = FakeGitHubAPI()
+        let dateProvider = FakeDateProvider(now: Date(timeIntervalSince1970: 0))
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"), dateProvider: dateProvider)
+
+        await monitor.refreshNow()
+        dateProvider.now = Date(timeIntervalSince1970: 29)
+        await monitor.handleTimerTick()
+
+        XCTAssertEqual(api.fetchOpenPRTokens.count, 1)
+
+        dateProvider.now = Date(timeIntervalSince1970: 30)
+        await monitor.handleTimerTick()
+
+        XCTAssertEqual(api.fetchOpenPRTokens.count, 2)
+    }
+
+    func testTimerTickUsesNormalCadenceAfterNonThrottlingFailure() async {
+        let api = FakeGitHubAPI()
+        api.error = TestError(message: "offline")
+        let dateProvider = FakeDateProvider(now: Date(timeIntervalSince1970: 0))
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"), dateProvider: dateProvider)
+
+        await monitor.refreshNow()
+        dateProvider.now = Date(timeIntervalSince1970: 60)
+        await monitor.handleTimerTick()
+
+        XCTAssertEqual(api.fetchOpenPRTokens.count, 2)
+    }
+
     func testTokenIsReadOnceAcrossMonitorOperationsUntilCredentialChanges() async {
         let api = FakeGitHubAPI()
         let tokenStore = FakeTokenStore(token: "first")

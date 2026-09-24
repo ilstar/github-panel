@@ -393,7 +393,7 @@ struct ContentView: View {
         if monitor.selectedTab == .history {
             Task { await monitor.refreshCurrentHistoryPage() }
         } else {
-            monitor.start()
+            Task { await monitor.refreshNow() }
         }
     }
 

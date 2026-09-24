@@ -163,6 +163,7 @@ final class PRMonitor: ObservableObject {
     private var refreshRevision = 0
     private var historyLoadedSuccessfully = false
     private var lastStates: [String: CheckState] = [:]
+    private var nextTimerRefreshAt: Date?
     private let historyPageSize = 10
     private let relativeFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
@@ -239,6 +240,7 @@ final class PRMonitor: ObservableObject {
         activeRefreshID = nil
         refreshQueued = false
         historyLoadedSuccessfully = false
+        nextTimerRefreshAt = nil
         isLoading = false
         isHistoryLoading = false
     }
@@ -246,8 +248,16 @@ final class PRMonitor: ObservableObject {
     func scheduleTimer() {
         timer?.invalidate()
         timer = timerScheduler.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { [weak self] in
-            self?.refresh()
+            Task { await self?.handleTimerTick() }
         }
+    }
+
+    /// Timer-driven refresh. Skips the fetch when another refresh finished recently.
+    func handleTimerTick() async {
+        if let nextTimerRefreshAt, dateProvider.now < nextTimerRefreshAt {
+            return
+        }
+        await refreshNow()
     }
 
     private func refresh() {
@@ -368,6 +378,7 @@ final class PRMonitor: ObservableObject {
             do {
                 let result = try await api.fetchOpenPRs(token: token)
                 guard session == credentialSession else { return }
+                scheduleNextTimerRefresh()
                 if requestRevision == refreshRevision {
                     cachedLogin = result.login
                     updateNotificationsForRows(result.rows)
@@ -376,6 +387,7 @@ final class PRMonitor: ObservableObject {
                 }
             } catch {
                 guard session == credentialSession else { return }
+                scheduleNextTimerRefresh()
                 if requestRevision == refreshRevision {
                     setPRRows([])
                     lastError = error.localizedDescription
@@ -391,6 +403,12 @@ final class PRMonitor: ObservableObject {
         activeRefreshTask = nil
         activeRefreshID = nil
         isLoading = false
+    }
+
+    private func scheduleNextTimerRefresh() {
+        // A tick within half an interval of a completed fetch would return the same data.
+        // Ticks run on a fixed cadence, so a longer window could skip the next useful one.
+        nextTimerRefreshAt = dateProvider.now.addingTimeInterval(refreshInterval / 2)
     }
 
     private func requireFreshRefresh(for session: UUID) async {
