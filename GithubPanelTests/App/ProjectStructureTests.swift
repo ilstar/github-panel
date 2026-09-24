@@ -25,10 +25,7 @@ final class ProjectStructureTests: XCTestCase {
     }
 
     private func loadProjectFile() throws -> String {
-        let repositoryRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let projectURL = repositoryRoot.appendingPathComponent("GithubPanel.xcodeproj/project.pbxproj")
+        let projectURL = TestPaths.url("GithubPanel.xcodeproj/project.pbxproj")
         return try String(contentsOf: projectURL, encoding: .utf8)
     }
 }

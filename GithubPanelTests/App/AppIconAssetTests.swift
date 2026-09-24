@@ -2,8 +2,7 @@ import XCTest
 
 final class AppIconAssetTests: XCTestCase {
     func testAppIconCatalogReferencesExpectedMacPNGs() throws {
-        let iconSet = repositoryRoot()
-            .appendingPathComponent("GithubPanel/Assets.xcassets/AppIcon.appiconset")
+        let iconSet = TestPaths.url("GithubPanel/Assets.xcassets/AppIcon.appiconset")
         let contentsURL = iconSet.appendingPathComponent("Contents.json")
         let catalog = try JSONDecoder().decode(AppIconCatalog.self, from: Data(contentsOf: contentsURL))
         let expected: [String: (filename: String, pixels: PNGSize)] = [
@@ -30,12 +29,6 @@ final class AppIconAssetTests: XCTestCase {
         }
 
         XCTAssertEqual(seen, Set(expected.keys))
-    }
-
-    private func repositoryRoot() -> URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
     }
 
     private func pngSize(of url: URL) throws -> PNGSize {

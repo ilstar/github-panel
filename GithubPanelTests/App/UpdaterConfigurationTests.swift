@@ -29,10 +29,7 @@ final class UpdaterConfigurationTests: XCTestCase {
     }
 
     private func loadInfoPlist() throws -> [String: Any] {
-        let repositoryRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let plistURL = repositoryRoot.appendingPathComponent("GithubPanel/Info.plist")
+        let plistURL = TestPaths.url("GithubPanel/Info.plist")
         let data = try Data(contentsOf: plistURL)
         return try XCTUnwrap(
             PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
@@ -40,9 +37,6 @@ final class UpdaterConfigurationTests: XCTestCase {
     }
 
     private func loadSourceFile(_ path: String) throws -> String {
-        let repositoryRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        return try String(contentsOf: repositoryRoot.appendingPathComponent(path), encoding: .utf8)
+        try String(contentsOf: TestPaths.url(path), encoding: .utf8)
     }
 }
