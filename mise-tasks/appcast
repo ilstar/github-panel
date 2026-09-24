@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+#MISE description="Build the notarized DMG and a signed Sparkle appcast.xml"
+source "$MISE_PROJECT_ROOT/scripts/lib.sh"
+
+require_distribution_signing
+require_sparkle_tools
+build_notarized_dmg
+generate_appcast

@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+#MISE description="Build a Developer ID signed, notarized, stapled DMG"
+#MISE alias="notarized-dmg"
+source "$MISE_PROJECT_ROOT/scripts/lib.sh"
+
+require_distribution_signing
+build_notarized_dmg

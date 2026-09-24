@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+#MISE description="Build the notarized DMG and appcast, then create or update the GitHub release"
+#MISE alias="github-release"
+source "$MISE_PROJECT_ROOT/scripts/lib.sh"
+
+require_distribution_signing
+require_sparkle_tools
+require_gh
+build_notarized_dmg
+generate_appcast
+publish_github_release

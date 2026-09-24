@@ -20,62 +20,43 @@ Mini macOS app to monitor your active GitHub pull request checks.
 Open `GithubPanel.xcodeproj` and run the `GithubPanel` target.
 
 ## Build from Terminal or VS Code
-You can edit the app in VS Code or another editor and build it with `make`:
+Command-line tasks run through [mise](https://mise.jdx.dev). Install it once with `brew install mise`, then trust the project config:
 
 ```bash
 cd github-panel
-make build
+mise trust
+```
+
+List the available tasks with:
+
+```bash
+mise tasks
+```
+
+Build the app with:
+
+```bash
+mise run build
 ```
 
 Build and open the app with:
 
 ```bash
-make build-and-open
+mise run build-and-open
 ```
 
 Run the unit tests with:
 
 ```bash
-make test
+mise run test
 ```
 
-Create a release DMG with:
+`make build`, `make test`, and other `make <task>` commands still work. The `Makefile` forwards them to `mise run <task>`.
+
+Short tasks are defined in `mise.toml`. Longer tasks are scripts in `mise-tasks/` that share `scripts/lib.sh`. `mise run test` also dry-runs the release tasks to check the commands they would run. Set `DRY_RUN=1` on any build or release task to print its commands without running them:
 
 ```bash
-make dmg VERSION=1.3.0 BUILD_VERSION=4
-```
-
-The DMG is created at:
-
-```bash
-build/dist/GithubPanel-1.0.dmg
-```
-
-This creates a Developer ID signed, notarized, stapled DMG suitable for sharing with another Mac. It uses the same distribution flow as:
-
-```bash
-make notarized-dmg VERSION=1.0
-```
-
-For a quick unsigned DMG that stays on your development Mac, use:
-
-```bash
-make local-dmg VERSION=1.0
-```
-
-Do not send `local-dmg` output to another Mac. Gatekeeper may block it with "Apple could not verify" because it is intentionally not notarized.
-
-Create or update a GitHub release with the DMG attached:
-
-```bash
-make release VERSION=1.3.0 BUILD_VERSION=4 RELEASE_NOTES="Release 1.3.0"
-```
-
-This requires the GitHub CLI to be installed and authenticated with `gh auth login`. It uploads both the notarized DMG and the signed Sparkle `appcast.xml`. `VERSION` is the user-facing version and `BUILD_VERSION` is the monotonically increasing bundle build number.
-By default, `make release` uses the tag `v1.3.0` when `VERSION=1.3.0`. Override the release metadata when needed:
-
-```bash
-make release VERSION=1.3.0 BUILD_VERSION=4 RELEASE_TAG=v1.3.0 RELEASE_TITLE="GithubPanel 1.3.0" GH_RELEASE_FLAGS="--draft"
+DRY_RUN=1 VERSION=1.4.0 BUILD_VERSION=6 mise run release
 ```
 
 The debug app is created at:
@@ -87,35 +68,75 @@ build/DerivedData/Build/Products/Debug/GithubPanel.app
 To run it and see Swift `print(...)` output in the terminal, launch the app binary directly:
 
 ```bash
-make run
+mise run run
 ```
 
 Launching with `open GithubPanel.app` works for normal app testing, but `print(...)` output will not usually appear in your current terminal because macOS starts the app separately.
 
+## Releases
+Release tasks read their settings from environment variables:
+
+- `VERSION`: the user-facing version, for example `1.4.0`.
+- `BUILD_VERSION`: the bundle build number. It must increase with every release.
+- `BASE_BUILD_VERSION`: the previous release's build number. `BUILD_VERSION` must be greater than it.
+- `RELEASE_TAG`, `RELEASE_TITLE`, `RELEASE_NOTES`, `GH_RELEASE_FLAGS`: optional GitHub release metadata. The tag defaults to `v$VERSION`.
+
+Create a Developer ID signed, notarized, stapled DMG that can be shared with another Mac:
+
+```bash
+VERSION=1.4.0 BUILD_VERSION=6 BASE_BUILD_VERSION=5 mise run dmg
+```
+
+The DMG is created at `build/dist/GithubPanel-<VERSION>.dmg`.
+
+For a quick unsigned DMG that stays on your development Mac, use:
+
+```bash
+VERSION=1.4.0 mise run local-dmg
+```
+
+Do not send `local-dmg` output to another Mac. Gatekeeper may block it with "Apple could not verify" because it is intentionally not notarized.
+
+Create or update a GitHub release with the DMG attached:
+
+```bash
+VERSION=1.4.0 BUILD_VERSION=6 BASE_BUILD_VERSION=5 RELEASE_NOTES="Release 1.4.0" mise run release
+```
+
+This requires the GitHub CLI to be installed and authenticated with `gh auth login`. It uploads both the notarized DMG and the signed Sparkle `appcast.xml`. Override the release metadata when needed:
+
+```bash
+VERSION=1.4.0 BUILD_VERSION=6 BASE_BUILD_VERSION=5 RELEASE_TITLE="GithubPanel 1.4.0" GH_RELEASE_FLAGS="--draft" mise run release
+```
+
+Release tasks check the signing, notarization, Sparkle, and `gh` settings before building, so a missing setting fails right away instead of after notarization.
+
 ## Signing
 The checked-in project is configured for local development builds without a committed Apple Developer Team ID.
 
+mise loads `.env` (committed defaults) and then `.env.local` (your settings, ignored by Git). Both use dotenv syntax, so quote values that contain spaces.
+
 For personal development, add your Apple Developer Team ID to `.env.local`:
 
-```makefile
-GITHUB_PANEL_DEVELOPMENT_TEAM = YOUR_TEAM_ID
-GITHUB_PANEL_SPARKLE_BIN = /path/to/Sparkle/bin
+```bash
+GITHUB_PANEL_DEVELOPMENT_TEAM="YOUR_TEAM_ID"
+GITHUB_PANEL_SPARKLE_BIN="/path/to/Sparkle/bin"
 ```
 
 Then use the normal build commands:
 
 ```bash
-make test
-make build-and-open
+mise run test
+mise run build-and-open
 ```
 
-When `.env.local` sets `GITHUB_PANEL_DEVELOPMENT_TEAM`, `make` passes local signing settings to Xcode. Without `.env.local`, builds use the repo's default local signing behavior. `.env.local` is ignored so your Team ID stays out of Git.
+When `.env.local` sets `GITHUB_PANEL_DEVELOPMENT_TEAM`, the build tasks pass local signing settings to Xcode. Without `.env.local`, builds use the repo's default local signing behavior.
 
 For distribution builds, add your Developer ID Application identity and a notarytool keychain profile to `.env.local`:
 
-```makefile
-GITHUB_PANEL_DEVELOPER_ID_APPLICATION = Developer ID Application: Your Name (TEAMID)
-GITHUB_PANEL_NOTARY_PROFILE = githubpanel-notary
+```bash
+GITHUB_PANEL_DEVELOPER_ID_APPLICATION="Developer ID Application: Your Name (TEAMID)"
+GITHUB_PANEL_NOTARY_PROFILE="githubpanel-notary"
 ```
 
 Create the notary profile once with:
@@ -124,13 +145,7 @@ Create the notary profile once with:
 xcrun notarytool store-credentials githubpanel-notary
 ```
 
-Then build the shareable DMG:
-
-```bash
-make notarized-dmg VERSION=1.0
-```
-
-`make release` uses the notarized DMG so uploaded releases pass Gatekeeper on other Macs.
+`mise run release` uses the notarized DMG so uploaded releases pass Gatekeeper on other Macs.
 
 ## Automatic updates
 
@@ -142,7 +157,7 @@ Generate the Sparkle signing key once using the tool included with the resolved 
 /path/to/Sparkle/bin/generate_keys
 ```
 
-Keep the private key in the macOS login Keychain. Only the generated public key belongs in `GithubPanel/Info.plist`. Set `GITHUB_PANEL_SPARKLE_BIN` in `.env.local` to the directory containing `generate_appcast` before running `make release`.
+Keep the private key in the macOS login Keychain. Only the generated public key belongs in `GithubPanel/Info.plist`. Set `GITHUB_PANEL_SPARKLE_BIN` in `.env.local` to the directory containing `generate_appcast` before running `mise run release`.
 
 Versions through v1.2.1 do not contain Sparkle and cannot update themselves. Install the first Sparkle-enabled release manually; later releases update from inside the app.
 
@@ -150,7 +165,7 @@ Versions through v1.2.1 do not contain Sparkle and cannot update themselves. Ins
 Debug builds can show fixture PRs for visual testing instead of calling GitHub. Build with the command above, then launch with:
 
 ```bash
-make mock
+mise run mock
 ```
 
 The mock list includes PRs for ready-to-merge, enable auto-merge, disable auto-merge, merge queue, queued, failed, errored, waiting, draft, and unknown states. A `Mock GitHub PRs` banner appears at the top of the app when mock data is active.
@@ -159,7 +174,7 @@ To make normal launches of the debug app use mock data:
 
 ```bash
 defaults write com.githubpanel.app GithubPanel.useMockGitHubPRs -bool true
-make open
+mise run open
 ```
 
 To turn the persistent mock setting off:
@@ -171,5 +186,5 @@ defaults delete com.githubpanel.app GithubPanel.useMockGitHubPRs
 To clean the command-line build output:
 
 ```bash
-make clean
+mise run clean
 ```
