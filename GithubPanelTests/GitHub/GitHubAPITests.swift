@@ -275,6 +275,7 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertEqual(detail.deletions, 3)
         XCTAssertEqual(detail.changedFiles, 2)
         XCTAssertEqual(detail.commits, 4)
+        XCTAssertTrue(detail.canEdit)
 
         XCTAssertEqual(content.files, [
             PullRequestFile(filename: "Sources/New.swift",
@@ -301,6 +302,8 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertEqual(transport.requests[0].value(forHTTPHeaderField: "Authorization"), "Bearer token")
         let viewedBody = try transport.graphQLBody(at: 2)
         XCTAssertTrue(viewedBody.query.contains("viewerViewedState"))
+        XCTAssertTrue(viewedBody.query.contains("viewerDidAuthor"))
+        XCTAssertTrue(viewedBody.query.contains("viewerCanUpdate"))
         XCTAssertEqual(viewedBody.variables["owner"] as? String, "acme")
         XCTAssertEqual(viewedBody.variables["name"] as? String, "widgets")
         XCTAssertEqual(viewedBody.variables["number"] as? Int, 7)
@@ -317,6 +320,58 @@ final class GitHubAPITests: XCTestCase {
 
         XCTAssertEqual(content.files.map(\.filename), ["Sources/New.swift", "logo.png"])
         XCTAssertFalse(content.files.contains(where: \.isViewed))
+        XCTAssertFalse(content.detail.canEdit)
+    }
+
+    func testFetchPullRequestDetailOnlyLetsTheAuthorEdit() async throws {
+        let cases: [(json: String, canEdit: Bool)] = [
+            (#""viewerDidAuthor":true,"viewerCanUpdate":true"#, true),
+            (#""viewerDidAuthor":false,"viewerCanUpdate":true"#, false),
+            (#""viewerDidAuthor":true,"viewerCanUpdate":false"#, false)
+        ]
+        for testCase in cases {
+            let transport = MockHTTPTransport()
+            transport.enqueue(json: pullDetailResponse)
+            transport.enqueue(json: "[]")
+            transport.enqueue(json: #"{"data":{"repository":{"pullRequest":{\#(testCase.json),"files":{"nodes":[]}}}}}"#)
+
+            let content = try await GitHubAPI(transport: transport)
+                .fetchPullRequestDetail(token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7))
+
+            XCTAssertEqual(content.detail.canEdit, testCase.canEdit, testCase.json)
+        }
+    }
+
+    func testEditPullRequestPatchesTitleAndBody() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: #"{"number":7}"#)
+
+        try await GitHubAPI(transport: transport)
+            .editPullRequest(token: "token",
+                             reference: PullRequestReference(repoFullName: "acme/widgets", number: 7),
+                             title: "New title",
+                             body: "New **body**")
+
+        XCTAssertEqual(transport.requests.map(\.httpMethod), ["PATCH"])
+        XCTAssertEqual(transport.requests.map { $0.url?.path }, ["/repos/acme/widgets/pulls/7"])
+        XCTAssertEqual(transport.requests[0].value(forHTTPHeaderField: "Authorization"), "Bearer token")
+        XCTAssertEqual(transport.requests[0].jsonBody as? [String: String], ["title": "New title", "body": "New **body**"])
+    }
+
+    func testEditPullRequestSurfacesPermissionErrors() async {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: #"{"message":"Must have admin rights to Repository."}"#, statusCode: 403)
+
+        do {
+            try await GitHubAPI(transport: transport)
+                .editPullRequest(token: "token",
+                                 reference: PullRequestReference(repoFullName: "acme/widgets", number: 7),
+                                 title: "New title",
+                                 body: "")
+            XCTFail("Expected an error")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, "GitHub API error (403): Must have admin rights to Repository.")
+        }
     }
 
     func testSetFileViewedSendsMarkAndUnmarkMutations() async throws {
@@ -579,6 +634,8 @@ private let viewedFilesResponse = """
   "data": {
     "repository": {
       "pullRequest": {
+        "viewerDidAuthor": true,
+        "viewerCanUpdate": true,
         "files": {
           "nodes": [
             { "path": "Sources/New.swift", "viewerViewedState": "VIEWED" },

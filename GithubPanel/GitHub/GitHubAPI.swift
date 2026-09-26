@@ -203,9 +203,12 @@ final class GitHubAPI: GitHubAPIClient {
         let pull = try await decode(PullResponse.self, request: makeRequest(path: pullPath, token: token))
         // GitHub caps this at 100 files per page; later pages are not loaded yet.
         let files = try await decode([PullFileResponse].self, request: makeRequest(path: "\(pullPath)/files?per_page=100", token: token))
-        // Viewed marks are a nice-to-have; the diff still loads when GitHub does not return them.
-        let viewed = (try? await fetchViewedFiles(token: token, owner: parts[0], name: parts[1], number: reference.number)) ?? []
-        return PullRequestDetailContent(detail: pull.detail(reference: reference),
+        // Viewed marks and edit rights are a nice-to-have; the diff still loads when GitHub does not return them.
+        let viewer = try? await fetchViewerState(token: token, owner: parts[0], name: parts[1], number: reference.number)
+        let viewed = viewer?.viewedFiles ?? []
+        var detail = pull.detail(reference: reference)
+        detail.canEdit = viewer?.canEdit ?? false
+        return PullRequestDetailContent(detail: detail,
                                         files: files.map { file in
                                             var file = file.file
                                             file.isViewed = viewed.contains(file.filename)
@@ -304,23 +307,39 @@ final class GitHubAPI: GitHubAPIClient {
         _ = try await decode(Created.self, request: request)
     }
 
-    /// Paths the viewer marked as viewed. GitHub reports files changed since then as `DISMISSED`, not `VIEWED`.
-    private func fetchViewedFiles(token: String, owner: String, name: String, number: Int) async throws -> Set<String> {
+    /// Replaces the pull request's title and description.
+    func editPullRequest(token: String, reference: PullRequestReference, title: String, body: String) async throws {
+        let (owner, name) = try repoParts(reference.repoFullName)
+        var request = makeRequest(path: "/repos/\(owner)/\(name)/pulls/\(reference.number)", token: token)
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["title": title, "body": body])
+        struct Updated: Decodable { let number: Int }
+        _ = try await decode(Updated.self, request: request)
+    }
+
+    /// Paths the viewer marked as viewed, and whether they may edit the pull request.
+    /// GitHub reports files changed since they were viewed as `DISMISSED`, not `VIEWED`.
+    private func fetchViewerState(token: String, owner: String, name: String, number: Int) async throws -> (viewedFiles: Set<String>, canEdit: Bool) {
         let query = """
         query($owner: String!, $name: String!, $number: Int!) {
           repository(owner: $owner, name: $name) {
             pullRequest(number: $number) {
+              viewerDidAuthor
+              viewerCanUpdate
               files(first: 100) { nodes { path viewerViewedState } }
             }
           }
         }
         """
-        let response = try await graphQL(ViewedFilesResponse.self,
+        let response = try await graphQL(ViewerStateResponse.self,
                                          query: query,
                                          variables: ["owner": owner, "name": name, "number": number],
                                          token: token)
-        let nodes = response.repository?.pullRequest?.files?.nodes ?? []
-        return Set(nodes.filter { $0.viewerViewedState == "VIEWED" }.map(\.path))
+        let pullRequest = response.repository?.pullRequest
+        let nodes = pullRequest?.files?.nodes ?? []
+        let canEdit = pullRequest?.viewerDidAuthor == true && pullRequest?.viewerCanUpdate == true
+        return (Set(nodes.filter { $0.viewerViewedState == "VIEWED" }.map(\.path)), canEdit)
     }
 
     private func repoParts(_ repoFullName: String) throws -> (owner: String, name: String) {
@@ -549,9 +568,13 @@ private struct PullFileResponse: Decodable {
     }
 }
 
-private struct ViewedFilesResponse: Decodable {
+private struct ViewerStateResponse: Decodable {
     struct Repository: Decodable { let pullRequest: PullRequest? }
-    struct PullRequest: Decodable { let files: Files? }
+    struct PullRequest: Decodable {
+        let viewerDidAuthor: Bool?
+        let viewerCanUpdate: Bool?
+        let files: Files?
+    }
     struct Files: Decodable { let nodes: [File] }
     struct File: Decodable {
         let path: String

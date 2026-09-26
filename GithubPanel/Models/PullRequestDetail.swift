@@ -31,8 +31,8 @@ struct PullRequestDetail: Equatable {
     let reference: PullRequestReference
     /// The GraphQL node ID, used to mark files as viewed.
     let nodeID: String
-    let title: String
-    let body: String
+    var title: String
+    var body: String
     let authorLogin: String
     let state: State
     let baseRef: String
@@ -45,6 +45,8 @@ struct PullRequestDetail: Equatable {
     let deletions: Int
     let changedFiles: Int
     let commits: Int
+    /// Whether the viewer authored the pull request and GitHub lets them edit its title and description.
+    var canEdit = false
 }
 
 struct PullRequestFile: Identifiable, Equatable {

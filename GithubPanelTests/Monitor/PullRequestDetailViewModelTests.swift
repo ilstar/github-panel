@@ -290,6 +290,102 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         XCTAssertEqual(api.postCommentCalls.map(\.comment), [.general(body: "Hi")])
     }
 
+    func testEditSavesAndShowsTheNewTitleAndBody() async throws {
+        var edits: [(PullRequestReference, String, String)] = []
+        var fetches = 0
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+                                                   fetch: { [self] _ in
+                                                       fetches += 1
+                                                       return detailContent(title: "Old", files: [file("a.swift")], canEdit: true)
+                                                   },
+                                                   edit: { reference, title, body in edits.append((reference, title, body)) })
+        await viewModel.load()
+
+        try await viewModel.edit(title: "  New title \n", body: "New body")
+
+        XCTAssertEqual(edits.map(\.0), [reference])
+        XCTAssertEqual(edits.map(\.1), ["New title"])
+        XCTAssertEqual(edits.map(\.2), ["New body"])
+        XCTAssertEqual(viewModel.content?.detail.title, "New title")
+        XCTAssertEqual(viewModel.content?.detail.body, "New body")
+        XCTAssertEqual(viewModel.content?.files.map(\.filename), ["a.swift"])
+        XCTAssertEqual(fetches, 1)
+    }
+
+    func testEditSkipsPullRequestsTheViewerCannotEdit() async throws {
+        var edits = 0
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+                                                   fetch: { [self] _ in detailContent(title: "Theirs") },
+                                                   edit: { _, _, _ in edits += 1 })
+        await viewModel.load()
+
+        try await viewModel.edit(title: "Mine now", body: "")
+
+        XCTAssertEqual(edits, 0)
+        XCTAssertEqual(viewModel.content?.detail.title, "Theirs")
+    }
+
+    func testEditSkipsBlankTitles() async throws {
+        var edits = 0
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+                                                   fetch: { [self] _ in detailContent(title: "Old", canEdit: true) },
+                                                   edit: { _, _, _ in edits += 1 })
+        await viewModel.load()
+
+        try await viewModel.edit(title: "   ", body: "Body")
+
+        XCTAssertEqual(edits, 0)
+        XCTAssertEqual(viewModel.content?.detail.title, "Old")
+    }
+
+    func testFailedEditThrowsAndKeepsTheOldContent() async {
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+                                                   fetch: { [self] _ in detailContent(title: "Old", canEdit: true) },
+                                                   edit: { _, _, _ in
+                                                       throw GitHubAPIError(message: "Forbidden", documentationURL: nil, statusCode: 403)
+                                                   })
+        await viewModel.load()
+
+        do {
+            try await viewModel.edit(title: "New", body: "Body")
+            XCTFail("Expected an error")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, "GitHub API error (403): Forbidden")
+        }
+        XCTAssertEqual(viewModel.content?.detail.title, "Old")
+    }
+
+    func testMonitorEditsWithSessionTokenAndRefreshesTheList() async throws {
+        let api = FakeGitHubAPI()
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+
+        try await monitor.editPullRequest(reference, title: "New", body: "Body")
+
+        XCTAssertEqual(api.editCalls.map(\.token), ["token"])
+        XCTAssertEqual(api.editCalls.map(\.reference), [reference])
+        XCTAssertEqual(api.editCalls.map(\.title), ["New"])
+        XCTAssertEqual(api.editCalls.map(\.body), ["Body"])
+        XCTAssertEqual(api.fetchOpenPRTokens, ["token"])
+    }
+
+    func testMonitorEditWithoutTokenFails() async {
+        let api = FakeGitHubAPI()
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: nil))
+
+        do {
+            try await monitor.editPullRequest(reference, title: "New", body: "")
+            XCTFail("Expected an error")
+        } catch {
+            XCTAssertTrue(error is MissingTokenError)
+        }
+        XCTAssertTrue(api.editCalls.isEmpty)
+    }
+
+    func testEditSheetNeedsATitle() {
+        XCTAssertTrue(PullRequestEditSheet.canSave(title: "Fix bug"))
+        XCTAssertFalse(PullRequestEditSheet.canSave(title: " \n "))
+    }
+
     func testMonitorPostWithoutTokenFails() async {
         let api = FakeGitHubAPI()
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: nil))
@@ -331,7 +427,7 @@ final class PullRequestDetailViewModelTests: XCTestCase {
                         additions: 1, deletions: 1, patch: patch, isViewed: isViewed)
     }
 
-    private func detailContent(title: String, files: [PullRequestFile] = []) -> PullRequestDetailContent {
+    private func detailContent(title: String, files: [PullRequestFile] = [], canEdit: Bool = false) -> PullRequestDetailContent {
         PullRequestDetailContent(
             detail: PullRequestDetail(reference: reference,
                                       nodeID: "PR_node",
@@ -347,7 +443,8 @@ final class PullRequestDetailViewModelTests: XCTestCase {
                                       additions: 0,
                                       deletions: 0,
                                       changedFiles: 0,
-                                      commits: 1),
+                                      commits: 1,
+                                      canEdit: canEdit),
             files: files
         )
     }

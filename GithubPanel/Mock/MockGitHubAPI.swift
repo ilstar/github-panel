@@ -11,6 +11,8 @@ final class MockGitHubAPI: GitHubAPIClient {
     /// Comments, keyed by pull request reference ID. Filled with fixtures on first read.
     private var comments: [String: PullRequestComments] = [:]
     private var nextCommentID = 1_000
+    /// Edited titles and descriptions, keyed by pull request reference ID.
+    private var edits: [String: (title: String, body: String)] = [:]
 
     init(now: Date = Date(), isEmpty: Bool = false) {
         let rows = isEmpty ? [] : Self.makePullRequests().map {
@@ -75,17 +77,23 @@ final class MockGitHubAPI: GitHubAPIClient {
     }
 
     func fetchPullRequestDetail(token: String, reference: PullRequestReference) async throws -> PullRequestDetailContent {
-        let title = pullRequests[reference.id]?.title
+        let edit = edits[reference.id]
+        let title = edit?.title
+            ?? pullRequests[reference.id]?.title
             ?? history.first { $0.id == reference.id }?.title
             ?? reviewRequests.rows.first { $0.id == reference.id }?.title
             ?? "Mock pull request"
         let isDraft = pullRequests[reference.id]?.isDraft ?? false
         let nodeID = "mock-detail-\(reference.id)"
+        // Review requests were opened by someone else, so only those stay read-only.
+        let reviewAuthor = reviewRequests.rows.first { $0.id == reference.id }?.authorLogin
+        let isOwn = pullRequests[reference.id] != nil || reviewAuthor == nil
+        let authorLogin = isOwn ? user.login : reviewAuthor ?? user.login
         let detail = PullRequestDetail(reference: reference,
                                        nodeID: nodeID,
                                        title: title,
-                                       body: Self.detailBody,
-                                       authorLogin: user.login,
+                                       body: edit?.body ?? Self.detailBody,
+                                       authorLogin: authorLogin,
                                        state: isDraft ? .draft : .open,
                                        baseRef: "main",
                                        headRef: "mock-user/pr-\(reference.number)",
@@ -95,7 +103,8 @@ final class MockGitHubAPI: GitHubAPIClient {
                                        additions: Self.detailFiles.reduce(0) { $0 + $1.additions },
                                        deletions: Self.detailFiles.reduce(0) { $0 + $1.deletions },
                                        changedFiles: Self.detailFiles.count,
-                                       commits: 3)
+                                       commits: 3,
+                                       canEdit: isOwn)
         let viewed = viewedFiles[nodeID] ?? []
         let files = Self.detailFiles.map { file in
             var file = file
@@ -264,6 +273,13 @@ final class MockGitHubAPI: GitHubAPIClient {
                         patch: nil)
     ]
 
+    func editPullRequest(token: String, reference: PullRequestReference, title: String, body: String) async throws {
+        edits[reference.id] = (title, body)
+        if let row = pullRequests[reference.id] {
+            pullRequests[reference.id] = row.copy(title: title)
+        }
+    }
+
     private func updatePullRequest(with nodeID: String, transform: (PullRequestRow) -> PullRequestRow) {
         guard let match = pullRequests.first(where: { $0.value.nodeID == nodeID }) else { return }
         pullRequests[match.key] = transform(match.value)
@@ -385,7 +401,8 @@ final class MockGitHubAPI: GitHubAPIClient {
 }
 
 private extension PullRequestRow {
-    func copy(isDraft: Bool? = nil,
+    func copy(title: String? = nil,
+              isDraft: Bool? = nil,
               isAutoMergeEnabled: Bool? = nil,
               canEnableAutoMerge: Bool? = nil,
               canDisableAutoMerge: Bool? = nil,
@@ -394,7 +411,7 @@ private extension PullRequestRow {
               updatedAt: Date? = nil) -> PullRequestRow {
         PullRequestRow(id: id,
                          nodeID: nodeID,
-                        title: title,
+                        title: title ?? self.title,
                         number: number,
                         repoFullName: repoFullName,
                         htmlURL: htmlURL,

@@ -11,6 +11,7 @@ enum PullRequestDetailTab: String, CaseIterable, Identifiable {
 struct PullRequestDetailView: View {
     @StateObject private var viewModel: PullRequestDetailViewModel
     @State private var selectedTab: PullRequestDetailTab = .conversation
+    @State private var isEditing = false
 
     init(viewModel: @autoclosure @escaping () -> PullRequestDetailViewModel) {
         _viewModel = StateObject(wrappedValue: viewModel())
@@ -21,7 +22,8 @@ struct PullRequestDetailView: View {
             if let content = viewModel.content {
                 PullRequestDetailHeader(detail: content.detail,
                                         isLoading: viewModel.isLoading,
-                                        onRefresh: reload)
+                                        onRefresh: reload,
+                                        onEdit: { isEditing = true })
                     .padding(.horizontal, 24)
                     .padding(.top, 20)
                     .padding(.bottom, 12)
@@ -68,6 +70,16 @@ struct PullRequestDetailView: View {
         .frame(minWidth: 420, minHeight: 400)
         .background(Color(nsColor: .textBackgroundColor))
         .navigationTitle(navigationTitle)
+        .sheet(isPresented: $isEditing) {
+            if let detail = viewModel.content?.detail {
+                PullRequestEditSheet(detail: detail,
+                                     onCancel: { isEditing = false },
+                                     onSave: { title, body in
+                                         try await viewModel.edit(title: title, body: body)
+                                         isEditing = false
+                                     })
+            }
+        }
         .task {
             await viewModel.load()
         }
@@ -100,6 +112,7 @@ struct PullRequestDetailHeader: View {
     let detail: PullRequestDetail
     let isLoading: Bool
     let onRefresh: () -> Void
+    let onEdit: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -118,6 +131,11 @@ struct PullRequestDetailHeader: View {
                 }
                 .disabled(isLoading)
                 .help("Reload")
+
+                if detail.canEdit {
+                    Button("Edit", action: onEdit)
+                        .help("Edit the title and description")
+                }
 
                 Button("Open on GitHub") {
                     NSWorkspace.shared.open(detail.htmlURL)
@@ -146,6 +164,93 @@ struct PullRequestDetailHeader: View {
     private var summaryText: String {
         let commits = detail.commits == 1 ? "1 commit" : "\(detail.commits) commits"
         return "\(detail.authorLogin) wants to merge \(commits) into \(detail.baseRef) from \(detail.headRef) · \(detail.reference.repoFullName)"
+    }
+}
+
+/// Edits a pull request's title and description. Keeps the draft and shows the error when GitHub refuses it.
+struct PullRequestEditSheet: View {
+    let onCancel: () -> Void
+    let onSave: (String, String) async throws -> Void
+
+    @State private var title: String
+    @State private var bodyText: String
+    @State private var isSaving = false
+    @State private var errorMessage: String?
+
+    init(detail: PullRequestDetail,
+         onCancel: @escaping () -> Void,
+         onSave: @escaping (String, String) async throws -> Void) {
+        self.onCancel = onCancel
+        self.onSave = onSave
+        _title = State(initialValue: detail.title)
+        _bodyText = State(initialValue: detail.body)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Edit Pull Request")
+                .font(.headline)
+
+            TextField("Title", text: $title)
+                .textFieldStyle(.roundedBorder)
+
+            TextEditor(text: $bodyText)
+                .font(.body)
+                .scrollContentBackground(.hidden)
+                .padding(6)
+                .frame(minHeight: 240)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color(nsColor: .textBackgroundColor))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                )
+
+            HStack(spacing: 8) {
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .textSelection(.enabled)
+                        .lineLimit(3)
+                }
+                Spacer(minLength: 8)
+                if isSaving {
+                    ProgressView().controlSize(.small)
+                }
+                Button("Cancel", action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                    .disabled(isSaving)
+                Button("Save", action: save)
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .disabled(!Self.canSave(title: title) || isSaving)
+                    .help("Save (⌘Return)")
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 560, minHeight: 380)
+    }
+
+    /// GitHub requires a title, so a blank one cannot be saved.
+    static func canSave(title: String) -> Bool {
+        !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func save() {
+        guard Self.canSave(title: title), !isSaving else { return }
+        isSaving = true
+        errorMessage = nil
+        Task {
+            do {
+                try await onSave(title, bodyText)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isSaving = false
+        }
     }
 }
 
