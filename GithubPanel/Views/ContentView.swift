@@ -22,6 +22,28 @@ struct ContentView: View {
     }()
 
     var body: some View {
+        HSplitView {
+            listPane
+                .frame(minWidth: 420, idealWidth: 460, maxWidth: 640)
+            detailPane
+                .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(minWidth: 860, minHeight: 500)
+        .onAppear {
+            monitor.start()
+        }
+        .onReceive(minuteTicker) { tick in
+            now = tick
+        }
+        .onChange(of: monitor.lastRefreshAt) { _ in
+            now = Date()
+        }
+        .onChange(of: monitor.lastHistoryRefreshAt) { _ in
+            now = Date()
+        }
+    }
+
+    private var listPane: some View {
         ZStack {
             background
 
@@ -41,19 +63,29 @@ struct ContentView: View {
             .padding(.top, 20)
             .padding(.bottom, 16)
         }
-        .frame(minWidth: 420, minHeight: 300)
-        .onAppear {
-            monitor.start()
+    }
+
+    @ViewBuilder
+    private var detailPane: some View {
+        if let reference = selectedReference {
+            PullRequestDetailView(viewModel: PullRequestDetailViewModel(reference: reference) { [monitor] reference in
+                try await monitor.fetchPullRequestDetail(reference)
+            })
+            .id(reference)
+        } else {
+            Text(monitor.hasToken ? "Select a pull request" : "Add a GitHub token to begin.")
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(nsColor: .textBackgroundColor))
         }
-        .onReceive(minuteTicker) { tick in
-            now = tick
-        }
-        .onChange(of: monitor.lastRefreshAt) { _ in
-            now = Date()
-        }
-        .onChange(of: monitor.lastHistoryRefreshAt) { _ in
-            now = Date()
-        }
+    }
+
+    private var selectedReference: PullRequestReference? {
+        PullRequestSelection.reference(tab: monitor.selectedTab,
+                                       openRows: monitor.prRows,
+                                       historyRows: monitor.historyRows,
+                                       selectedOpenID: selectedPRID,
+                                       selectedHistoryID: selectedHistoryID)
     }
 
     private var mockDataBanner: some View {
@@ -179,7 +211,7 @@ struct ContentView: View {
                         .id(pr.id)
                         .onTapGesture {
                             selectedPRID = pr.id
-                            openPullRequest(pr.reference, htmlURL: pr.htmlURL)
+                            openOnGitHubIfCommandHeld(pr.htmlURL)
                         }
                         .contextMenu {
                             pullRequestContextMenu(pr.reference, htmlURL: pr.htmlURL)
@@ -233,7 +265,7 @@ struct ContentView: View {
                                             .id(pr.id)
                                             .onTapGesture {
                                                 selectedHistoryID = pr.id
-                                                openPullRequest(pr.reference, htmlURL: pr.htmlURL)
+                                                openOnGitHubIfCommandHeld(pr.htmlURL)
                                             }
                                             .contextMenu {
                                                 pullRequestContextMenu(pr.reference, htmlURL: pr.htmlURL)
@@ -412,8 +444,8 @@ struct ContentView: View {
         case 126: // up arrow
             moveSelection(delta: -1)
             return true
-        case 36, 76: // return, enter; ⌘-return opens GitHub
-            openSelectedPR(inBrowser: event.modifierFlags.contains(.command))
+        case 36, 76: // return, enter
+            openSelectedPR()
             return true
         default:
             return false
@@ -428,28 +460,22 @@ struct ContentView: View {
         selectedPRID = ids[nextIndex]
     }
 
-    private func openSelectedPR(inBrowser: Bool) {
+    private func openSelectedPR() {
         guard let id = selectedPRID,
               let pr = monitor.prRows.first(where: { $0.id == id }) else { return }
-        if inBrowser {
-            NSWorkspace.shared.open(pr.htmlURL)
-        } else {
-            openWindow(value: pr.reference)
-        }
+        NSWorkspace.shared.open(pr.htmlURL)
     }
 
-    /// Opens the detail window, or GitHub when ⌘ is held.
-    private func openPullRequest(_ reference: PullRequestReference, htmlURL: URL) {
+    /// Row clicks show the PR on the right; ⌘-click also opens it on GitHub.
+    private func openOnGitHubIfCommandHeld(_ htmlURL: URL) {
         if NSEvent.modifierFlags.contains(.command) {
             NSWorkspace.shared.open(htmlURL)
-        } else {
-            openWindow(value: reference)
         }
     }
 
     @ViewBuilder
     private func pullRequestContextMenu(_ reference: PullRequestReference, htmlURL: URL) -> some View {
-        Button("Open Details") {
+        Button("Open in New Window") {
             openWindow(value: reference)
         }
         Button("Open on GitHub") {

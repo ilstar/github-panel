@@ -18,9 +18,11 @@ Branch: `fred/pr-detail-view`
 - **State**: `PullRequestDetailViewModel` (`@MainActor`, `ObservableObject`)
   loads the detail and files through a fetch closure that `PRMonitor` provides,
   so the token stays inside `PRMonitor` and the view model is easy to test.
-- **UI**: a separate window per PR (`WindowGroup(for: PullRequestReference.self)`),
-  so the main panel stays small. The window has a header and two tabs:
-  *Conversation* (description) and *Files changed* (diff).
+- **UI**: split view in the main window — PR list on the left, the selected
+  PR's detail on the right (changed from a separate window at the user's
+  request). The detail pane has a header and two tabs: *Conversation*
+  (description) and *Files changed* (diff). A row's context menu can still open
+  a PR in its own window.
 - **Mock mode**: `MockGitHubAPI` returns a fixture detail and diff, so
   `mise run mock` shows the window without a token. (Done in step 2.)
 
@@ -33,15 +35,19 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 3. [x] `PullRequestDetailViewModel` + `PRMonitor.fetchPullRequestDetail`, with tests.
 4. [x] Detail window: header (title, number, author, branches, state, +/−) and
        Conversation tab showing the description (inline Markdown only).
-5. [x] Open the detail window from the Open and History lists (click / Return /
-       context menu); ⌘-click and ⌘-Return still open GitHub.
+5. [x] Show the selected PR from the Open and History lists. Clicking a row
+       selects it; ⌘-click and Return open GitHub; the context menu offers
+       "Open in New Window" and "Open on GitHub".
 6. [x] Files changed tab: file list and a colored, line-numbered diff per file.
+6b. [x] Split layout: list on the left, detail on the right.
 7. [ ] Block-level Markdown for the description (headings, lists, code blocks, quotes).
 8. [ ] README update; open a draft PR.
 
 ## Later (not in this branch unless time allows)
 
 - Images, tables, and task lists in the description.
+- Cache loaded details so switching between PRs does not refetch each time.
+- Auto-refresh the detail pane when the list refresh sees a new head SHA.
 - Checks list with each check's status and a link to its logs.
 - Commits tab.
 - Reviews and comments timeline; inline review comments on the diff.
@@ -55,3 +61,5 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 - 2026-09-25: Steps 1–5 done. Moved "open from lists" ahead of the diff view so
   each UI step can be tried in the app. The sandbox here has no screen-recording
   or accessibility access, so UI checks are offscreen renders plus a manual look.
+- 2026-09-25: Switched to a list/detail split view. Checked the layout with an
+  offscreen render of `ContentView` and `PullRequestFilesView` (mock data).

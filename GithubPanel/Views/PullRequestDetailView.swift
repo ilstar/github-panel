@@ -63,7 +63,7 @@ struct PullRequestDetailView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .frame(minWidth: 560, minHeight: 400)
+        .frame(minWidth: 420, minHeight: 400)
         .background(Color(nsColor: .textBackgroundColor))
         .navigationTitle(navigationTitle)
         .task {
