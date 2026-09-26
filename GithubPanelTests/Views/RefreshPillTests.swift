@@ -11,14 +11,14 @@ final class RefreshPillTests: XCTestCase {
     func testRefreshAnimationCompletesItsCurrentCycle() {
         let firstCycle = RefreshAnimation.stopPlan(elapsed: 0.4)
         XCTAssertEqual(firstCycle.cycle, 1)
-        XCTAssertEqual(firstCycle.delay, 1.2, accuracy: 0.000_001)
+        XCTAssertEqual(firstCycle.delay, 0.8, accuracy: 0.000_001)
 
-        let aligned = RefreshAnimation.stopPlan(elapsed: 1.6)
+        let aligned = RefreshAnimation.stopPlan(elapsed: 1.2)
         XCTAssertEqual(aligned.cycle, 1)
         XCTAssertEqual(aligned.delay, 0, accuracy: 0.000_001)
 
-        let secondCycle = RefreshAnimation.stopPlan(elapsed: 1.7)
+        let secondCycle = RefreshAnimation.stopPlan(elapsed: 1.3)
         XCTAssertEqual(secondCycle.cycle, 2)
-        XCTAssertEqual(secondCycle.delay, 1.5, accuracy: 0.000_001)
+        XCTAssertEqual(secondCycle.delay, 1.1, accuracy: 0.000_001)
     }
 }

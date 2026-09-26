@@ -195,19 +195,19 @@ struct PRRow: View {
                     .foregroundStyle(.green)
             case .noChecks:
                 Image(systemName: "minus.circle.fill")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.tertiary)
             case .failure, .error:
                 Image(systemName: "xmark.octagon.fill")
                     .symbolRenderingMode(.multicolor)
             case .pending:
                 Image(systemName: "clock.fill")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.orange)
             case .unknown:
                 Image(systemName: "questionmark.circle.fill")
                     .foregroundStyle(.secondary)
             }
         }
-        .font(.title)
+        .font(.title2)
         .frame(width: 30)
     }
 

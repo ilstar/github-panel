@@ -62,10 +62,10 @@ enum CheckState: String {
 
     var descriptionText: String {
         switch self {
-        case .success: return "All checks are done."
-        case .noChecks: return "No checks reported."
-        case .failure, .error: return "Checks failed."
-        case .pending: return "Still building."
+        case .success: return "All checks passed."
+        case .noChecks: return "No checks configured."
+        case .failure, .error: return "Some checks failed."
+        case .pending: return "Checks in progress."
         case .unknown: return "Status unavailable."
         }
     }
