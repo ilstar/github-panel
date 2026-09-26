@@ -8,6 +8,18 @@ struct PullRequestReference: Hashable, Codable, Identifiable {
     var id: String { "\(repoFullName)#\(number)" }
 }
 
+extension PullRequestRow {
+    var reference: PullRequestReference {
+        PullRequestReference(repoFullName: repoFullName, number: number)
+    }
+}
+
+extension PullRequestHistoryRow {
+    var reference: PullRequestReference {
+        PullRequestReference(repoFullName: repoFullName, number: number)
+    }
+}
+
 struct PullRequestDetail: Equatable {
     enum State: Equatable {
         case open

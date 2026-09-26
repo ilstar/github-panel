@@ -54,6 +54,14 @@ struct GithubPanelApp: App {
                 .disabled(!monitor.hasToken || monitor.isLoading)
             }
         }
+        WindowGroup("Pull Request", for: PullRequestReference.self) { $reference in
+            if let reference {
+                PullRequestDetailView(viewModel: PullRequestDetailViewModel(reference: reference) { [monitor] reference in
+                    try await monitor.fetchPullRequestDetail(reference)
+                })
+            }
+        }
+        .defaultSize(width: 960, height: 760)
         Settings {
             SettingsView()
                 .environmentObject(monitor)

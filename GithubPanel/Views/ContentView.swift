@@ -7,6 +7,7 @@ enum EmptyPullRequestsBackground {
 
 struct ContentView: View {
     @EnvironmentObject private var monitor: PRMonitor
+    @Environment(\.openWindow) private var openWindow
     @State private var tokenInput: String = ""
     @State private var isSaving = false
     @State private var now = Date()
@@ -178,7 +179,10 @@ struct ContentView: View {
                         .id(pr.id)
                         .onTapGesture {
                             selectedPRID = pr.id
-                            NSWorkspace.shared.open(pr.htmlURL)
+                            openPullRequest(pr.reference, htmlURL: pr.htmlURL)
+                        }
+                        .contextMenu {
+                            pullRequestContextMenu(pr.reference, htmlURL: pr.htmlURL)
                         }
                     }
                 }
@@ -229,7 +233,10 @@ struct ContentView: View {
                                             .id(pr.id)
                                             .onTapGesture {
                                                 selectedHistoryID = pr.id
-                                                NSWorkspace.shared.open(pr.htmlURL)
+                                                openPullRequest(pr.reference, htmlURL: pr.htmlURL)
+                                            }
+                                            .contextMenu {
+                                                pullRequestContextMenu(pr.reference, htmlURL: pr.htmlURL)
                                             }
                                     }
                                 }
@@ -405,8 +412,8 @@ struct ContentView: View {
         case 126: // up arrow
             moveSelection(delta: -1)
             return true
-        case 36, 76: // return, enter
-            openSelectedPR()
+        case 36, 76: // return, enter; ⌘-return opens GitHub
+            openSelectedPR(inBrowser: event.modifierFlags.contains(.command))
             return true
         default:
             return false
@@ -421,9 +428,32 @@ struct ContentView: View {
         selectedPRID = ids[nextIndex]
     }
 
-    private func openSelectedPR() {
+    private func openSelectedPR(inBrowser: Bool) {
         guard let id = selectedPRID,
               let pr = monitor.prRows.first(where: { $0.id == id }) else { return }
-        NSWorkspace.shared.open(pr.htmlURL)
+        if inBrowser {
+            NSWorkspace.shared.open(pr.htmlURL)
+        } else {
+            openWindow(value: pr.reference)
+        }
+    }
+
+    /// Opens the detail window, or GitHub when ⌘ is held.
+    private func openPullRequest(_ reference: PullRequestReference, htmlURL: URL) {
+        if NSEvent.modifierFlags.contains(.command) {
+            NSWorkspace.shared.open(htmlURL)
+        } else {
+            openWindow(value: reference)
+        }
+    }
+
+    @ViewBuilder
+    private func pullRequestContextMenu(_ reference: PullRequestReference, htmlURL: URL) -> some View {
+        Button("Open Details") {
+            openWindow(value: reference)
+        }
+        Button("Open on GitHub") {
+            NSWorkspace.shared.open(htmlURL)
+        }
     }
 }
