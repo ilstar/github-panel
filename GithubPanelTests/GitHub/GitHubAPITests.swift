@@ -209,6 +209,90 @@ final class GitHubAPITests: XCTestCase {
         }
     }
 
+    func testFetchPullRequestDetailDecodesPullAndFiles() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: pullDetailResponse)
+        transport.enqueue(json: pullFilesResponse)
+        let reference = PullRequestReference(repoFullName: "acme/widgets", number: 7)
+
+        let content = try await GitHubAPI(transport: transport).fetchPullRequestDetail(token: "token", reference: reference)
+
+        let detail = content.detail
+        XCTAssertEqual(detail.reference, reference)
+        XCTAssertEqual(detail.title, "Add tests")
+        XCTAssertEqual(detail.body, "Adds **tests**.")
+        XCTAssertEqual(detail.authorLogin, "octocat")
+        XCTAssertEqual(detail.state, .open)
+        XCTAssertEqual(detail.baseRef, "main")
+        XCTAssertEqual(detail.headRef, "octocat/tests")
+        XCTAssertEqual(detail.htmlURL.absoluteString, "https://github.com/acme/widgets/pull/7")
+        XCTAssertEqual(detail.createdAt, ISO8601DateFormatter().date(from: "2026-04-10T08:00:00Z"))
+        XCTAssertEqual(detail.additions, 12)
+        XCTAssertEqual(detail.deletions, 3)
+        XCTAssertEqual(detail.changedFiles, 2)
+        XCTAssertEqual(detail.commits, 4)
+
+        XCTAssertEqual(content.files, [
+            PullRequestFile(filename: "Sources/New.swift",
+                            previousFilename: "Sources/Old.swift",
+                            status: .renamed,
+                            additions: 1,
+                            deletions: 1,
+                            patch: "@@ -1 +1 @@\n-a\n+b"),
+            PullRequestFile(filename: "logo.png",
+                            previousFilename: nil,
+                            status: .added,
+                            additions: 0,
+                            deletions: 0,
+                            patch: nil)
+        ])
+
+        XCTAssertEqual(transport.requests.map { $0.url?.path }, [
+            "/repos/acme/widgets/pulls/7",
+            "/repos/acme/widgets/pulls/7/files"
+        ])
+        XCTAssertEqual(transport.requests[1].url?.query, "per_page=100")
+        XCTAssertEqual(transport.requests[0].value(forHTTPHeaderField: "Authorization"), "Bearer token")
+    }
+
+    func testFetchPullRequestDetailResolvesState() async throws {
+        let cases: [(json: String, state: PullRequestDetail.State)] = [
+            (#""state":"open","draft":true,"merged_at":null"#, .draft),
+            (#""state":"closed","draft":false,"merged_at":null"#, .closed),
+            (#""state":"closed","draft":false,"merged_at":"2026-04-11T08:00:00Z""#, .merged)
+        ]
+        for testCase in cases {
+            let transport = MockHTTPTransport()
+            transport.enqueue(json: pullDetailResponse.replacingOccurrences(
+                of: #""state":"open","draft":false,"merged_at":null"#,
+                with: testCase.json
+            ))
+            transport.enqueue(json: "[]")
+
+            let content = try await GitHubAPI(transport: transport)
+                .fetchPullRequestDetail(token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7))
+
+            XCTAssertEqual(content.detail.state, testCase.state, testCase.json)
+        }
+    }
+
+    func testFetchPullRequestDetailSurfacesRESTErrors() async {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: #"{"message":"Not Found"}"#, statusCode: 404)
+
+        do {
+            _ = try await GitHubAPI(transport: transport)
+                .fetchPullRequestDetail(token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7))
+            XCTFail("Expected an error")
+        } catch let error as GitHubAPIError {
+            XCTAssertEqual(error.statusCode, 404)
+            XCTAssertEqual(error.message, "Not Found")
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+        XCTAssertEqual(transport.requests.count, 1)
+    }
+
     func testGraphQLMutationPayloads() async throws {
         let enqueueTransport = MockHTTPTransport()
         enqueueTransport.enqueue(json: #"{"data":{"enqueuePullRequest":{"mergeQueueEntry":{"id":"entry"}}}}"#)
@@ -238,6 +322,42 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertTrue(body.query.contains("disablePullRequestAutoMerge"))
     }
 }
+
+private let pullDetailResponse = """
+{
+  "title": "Add tests",
+  "body": "Adds **tests**.",
+  "user": { "login": "octocat" },
+  "state":"open","draft":false,"merged_at":null,
+  "base": { "ref": "main" },
+  "head": { "ref": "octocat/tests" },
+  "html_url": "https://github.com/acme/widgets/pull/7",
+  "created_at": "2026-04-10T08:00:00Z",
+  "additions": 12,
+  "deletions": 3,
+  "changed_files": 2,
+  "commits": 4
+}
+"""
+
+private let pullFilesResponse = """
+[
+  {
+    "filename": "Sources/New.swift",
+    "previous_filename": "Sources/Old.swift",
+    "status": "renamed",
+    "additions": 1,
+    "deletions": 1,
+    "patch": "@@ -1 +1 @@\\n-a\\n+b"
+  },
+  {
+    "filename": "logo.png",
+    "status": "added",
+    "additions": 0,
+    "deletions": 0
+  }
+]
+"""
 
 private final class MockHTTPTransport: HTTPTransport {
     struct QueuedResponse {
