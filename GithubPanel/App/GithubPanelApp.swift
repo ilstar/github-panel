@@ -88,6 +88,10 @@ struct GithubPanelApp: App {
 
     @MainActor
     private static func makeMonitor() -> PRMonitor {
+        if ProcessInfo.processInfo.isRunningTests {
+            return PRMonitor(tokenStore: InMemoryTokenStore())
+        }
+
         #if DEBUG
         if ProcessInfo.processInfo.usesMockGitHubPRs {
             return PRMonitor(api: MockGitHubAPI(isEmpty: ProcessInfo.processInfo.usesEmptyMockGitHubPRs),
