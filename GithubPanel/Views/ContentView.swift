@@ -154,14 +154,7 @@ struct ContentView: View {
     private var prSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .center) {
-                Picker("", selection: $monitor.selectedTab) {
-                    ForEach(PullRequestTab.allCases) { tab in
-                        Text(tab.title).tag(tab)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 280)
-                .labelsHidden()
+                PullRequestTabPicker(selection: $monitor.selectedTab)
 
                 Spacer()
                 refreshPill
@@ -607,5 +600,22 @@ struct ContentView: View {
         Button("Open on GitHub") {
             NSWorkspace.shared.open(htmlURL)
         }
+    }
+}
+
+/// Sized to its segments so its leading edge lines up with the pull request list;
+/// a wider fixed frame centers the control and indents it past the rows.
+struct PullRequestTabPicker: View {
+    @Binding var selection: PullRequestTab
+
+    var body: some View {
+        Picker("", selection: $selection) {
+            ForEach(PullRequestTab.allCases) { tab in
+                Text(tab.title).tag(tab)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .fixedSize()
     }
 }
