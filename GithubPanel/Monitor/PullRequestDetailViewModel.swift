@@ -1,6 +1,7 @@
 import Foundation
 
 /// Loads one pull request's detail and changed files for the detail window.
+/// Starts from the shared cache when it has the pull request, then reloads it in the background.
 @MainActor
 final class PullRequestDetailViewModel: ObservableObject {
     typealias Fetch = (PullRequestReference) async throws -> PullRequestDetailContent
@@ -30,6 +31,7 @@ final class PullRequestDetailViewModel: ObservableObject {
     private let fetchComments: FetchComments
     private let sendComment: PostComment
     private let sendEdit: Edit
+    private let cache: PullRequestDetailCache?
     /// Presentations built so far, keyed by filename and whether whitespace changes are hidden.
     private var presentations: [PresentationKey: DiffPresentation] = [:]
 
@@ -43,13 +45,21 @@ final class PullRequestDetailViewModel: ObservableObject {
          setViewed: @escaping SetViewed = { _, _, _ in },
          fetchComments: @escaping FetchComments = { _ in .empty },
          postComment: @escaping PostComment = { _, _ in },
-         edit: @escaping Edit = { _, _, _ in }) {
+         edit: @escaping Edit = { _, _, _ in },
+         cache: PullRequestDetailCache? = nil) {
         self.reference = reference
         self.fetch = fetch
         self.syncViewed = setViewed
         self.fetchComments = fetchComments
         self.sendComment = postComment
         self.sendEdit = edit
+        self.cache = cache
+        if let cached = cache?.entry(for: reference) {
+            apply(cached.content)
+            if let comments = cached.comments {
+                apply(comments)
+            }
+        }
     }
 
     /// Talks to GitHub through the monitor, which holds the token.
@@ -65,31 +75,57 @@ final class PullRequestDetailViewModel: ObservableObject {
                   },
                   edit: { [monitor] reference, title, body in
                       try await monitor.editPullRequest(reference, title: title, body: body)
-                  })
+                  },
+                  cache: monitor.detailCache)
     }
 
     func load() async {
         guard !isLoading else { return }
         isLoading = true
         defer { isLoading = false }
+        // The comments load alongside the diff, which shows as soon as it arrives.
+        async let loadedComments = fetchComments(reference)
         do {
-            let loaded = try await fetch(reference)
-            diffLines = Dictionary(loaded.files.map { ($0.filename, DiffParser.parse($0.patch ?? "")) },
-                                   uniquingKeysWith: { first, _ in first })
-            presentations = [:]
-            viewedFiles = Set(loaded.files.filter(\.isViewed).map(\.filename))
-            content = loaded
+            apply(try await fetch(reference))
+            cacheContent()
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
             return
         }
-        // The diff shows while the comments load.
         do {
-            try await reloadComments()
+            let comments = try await loadedComments
+            apply(comments)
+            cache?.store(comments, for: reference)
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    /// Shows loaded content. Skips identical content so a reload does not rebuild the diff.
+    private func apply(_ loaded: PullRequestDetailContent) {
+        guard loaded != content else { return }
+        diffLines = Dictionary(loaded.files.map { ($0.filename, DiffParser.parse($0.patch ?? "")) },
+                               uniquingKeysWith: { first, _ in first })
+        presentations = [:]
+        viewedFiles = Set(loaded.files.filter(\.isViewed).map(\.filename))
+        content = loaded
+    }
+
+    private func apply(_ loaded: PullRequestComments) {
+        threadIndexes = Dictionary(grouping: loaded.threads, by: \.path).mapValues(ReviewThreadIndex.init)
+        comments = loaded
+    }
+
+    /// Saves the shown content, with the current viewed marks, to the shared cache.
+    private func cacheContent() {
+        guard let cache, let content else { return }
+        let files = content.files.map { file in
+            var file = file
+            file.isViewed = viewedFiles.contains(file.filename)
+            return file
+        }
+        cache.store(PullRequestDetailContent(detail: content.detail, files: files))
     }
 
     /// Posts a comment, then reloads the comments so it shows with GitHub's IDs.
@@ -115,6 +151,7 @@ final class PullRequestDetailViewModel: ObservableObject {
         detail.title = title ?? detail.title
         detail.body = body ?? detail.body
         content = PullRequestDetailContent(detail: detail, files: current.files)
+        cacheContent()
     }
 
     /// Posts a new review thread on a diff line, against the head commit that was loaded.
@@ -134,8 +171,8 @@ final class PullRequestDetailViewModel: ObservableObject {
 
     private func reloadComments() async throws {
         let loaded = try await fetchComments(reference)
-        threadIndexes = Dictionary(grouping: loaded.threads, by: \.path).mapValues(ReviewThreadIndex.init)
-        comments = loaded
+        apply(loaded)
+        cache?.store(loaded, for: reference)
     }
 
     /// The file's diff with word highlights, built on first use and then reused.
@@ -165,5 +202,6 @@ final class PullRequestDetailViewModel: ObservableObject {
         } else {
             viewedFiles.remove(filename)
         }
+        cacheContent()
     }
 }

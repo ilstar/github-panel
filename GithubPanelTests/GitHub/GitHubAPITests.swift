@@ -252,9 +252,9 @@ final class GitHubAPITests: XCTestCase {
 
     func testFetchPullRequestDetailDecodesPullAndFiles() async throws {
         let transport = MockHTTPTransport()
-        transport.enqueue(json: pullDetailResponse)
-        transport.enqueue(json: pullFilesResponse)
-        transport.enqueue(json: viewedFilesResponse)
+        transport.enqueue(json: pullDetailResponse, path: pullPath)
+        transport.enqueue(json: pullFilesResponse, path: filesPath)
+        transport.enqueue(json: viewedFilesResponse, path: "/graphql")
         let reference = PullRequestReference(repoFullName: "acme/widgets", number: 7)
 
         let content = try await GitHubAPI(transport: transport).fetchPullRequestDetail(token: "token", reference: reference)
@@ -271,6 +271,7 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertEqual(detail.headSHA, "abc123")
         XCTAssertEqual(detail.htmlURL.absoluteString, "https://github.com/acme/widgets/pull/7")
         XCTAssertEqual(detail.createdAt, ISO8601DateFormatter().date(from: "2026-04-10T08:00:00Z"))
+        XCTAssertEqual(detail.updatedAt, ISO8601DateFormatter().date(from: "2026-04-12T09:30:00Z"))
         XCTAssertEqual(detail.additions, 12)
         XCTAssertEqual(detail.deletions, 3)
         XCTAssertEqual(detail.changedFiles, 2)
@@ -293,14 +294,13 @@ final class GitHubAPITests: XCTestCase {
                             patch: nil)
         ])
 
-        XCTAssertEqual(transport.requests.map { $0.url?.path }, [
-            "/repos/acme/widgets/pulls/7",
-            "/repos/acme/widgets/pulls/7/files",
-            "/graphql"
-        ])
-        XCTAssertEqual(transport.requests[1].url?.query, "per_page=100")
-        XCTAssertEqual(transport.requests[0].value(forHTTPHeaderField: "Authorization"), "Bearer token")
-        let viewedBody = try transport.graphQLBody(at: 2)
+        // The three requests run at the same time, so their order is not fixed.
+        XCTAssertEqual(Set(transport.requests.compactMap { $0.url?.path }), [pullPath, filesPath, "/graphql"])
+        XCTAssertEqual(transport.requests.count, 3)
+        XCTAssertEqual(try transport.request(path: filesPath).url?.query, "per_page=100")
+        XCTAssertEqual(try transport.request(path: pullPath).value(forHTTPHeaderField: "Authorization"), "Bearer token")
+        let graphQLIndex = try XCTUnwrap(transport.requests.firstIndex { $0.url?.path == "/graphql" })
+        let viewedBody = try transport.graphQLBody(at: graphQLIndex)
         XCTAssertTrue(viewedBody.query.contains("viewerViewedState"))
         XCTAssertTrue(viewedBody.query.contains("viewerDidAuthor"))
         XCTAssertTrue(viewedBody.query.contains("viewerCanUpdate"))
@@ -311,9 +311,9 @@ final class GitHubAPITests: XCTestCase {
 
     func testFetchPullRequestDetailLoadsFilesWhenViewedStateFails() async throws {
         let transport = MockHTTPTransport()
-        transport.enqueue(json: pullDetailResponse)
-        transport.enqueue(json: pullFilesResponse)
-        transport.enqueue(json: #"{"errors":[{"message":"Resource not accessible"}]}"#)
+        transport.enqueue(json: pullDetailResponse, path: pullPath)
+        transport.enqueue(json: pullFilesResponse, path: filesPath)
+        transport.enqueue(json: #"{"errors":[{"message":"Resource not accessible"}]}"#, path: "/graphql")
 
         let content = try await GitHubAPI(transport: transport)
             .fetchPullRequestDetail(token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7))
@@ -331,9 +331,10 @@ final class GitHubAPITests: XCTestCase {
         ]
         for testCase in cases {
             let transport = MockHTTPTransport()
-            transport.enqueue(json: pullDetailResponse)
-            transport.enqueue(json: "[]")
-            transport.enqueue(json: #"{"data":{"repository":{"pullRequest":{\#(testCase.json),"files":{"nodes":[]}}}}}"#)
+            transport.enqueue(json: pullDetailResponse, path: pullPath)
+            transport.enqueue(json: "[]", path: filesPath)
+            transport.enqueue(json: #"{"data":{"repository":{"pullRequest":{\#(testCase.json),"files":{"nodes":[]}}}}}"#,
+                              path: "/graphql")
 
             let content = try await GitHubAPI(transport: transport)
                 .fetchPullRequestDetail(token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7))
@@ -417,8 +418,8 @@ final class GitHubAPITests: XCTestCase {
             transport.enqueue(json: pullDetailResponse.replacingOccurrences(
                 of: #""state":"open","draft":false,"merged_at":null"#,
                 with: testCase.json
-            ))
-            transport.enqueue(json: "[]")
+            ), path: pullPath)
+            transport.enqueue(json: "[]", path: filesPath)
 
             let content = try await GitHubAPI(transport: transport)
                 .fetchPullRequestDetail(token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7))
@@ -429,7 +430,8 @@ final class GitHubAPITests: XCTestCase {
 
     func testFetchPullRequestDetailSurfacesRESTErrors() async {
         let transport = MockHTTPTransport()
-        transport.enqueue(json: #"{"message":"Not Found"}"#, statusCode: 404)
+        transport.enqueue(json: #"{"message":"Not Found"}"#, statusCode: 404, path: pullPath)
+        transport.enqueue(json: "[]", path: filesPath)
 
         do {
             _ = try await GitHubAPI(transport: transport)
@@ -441,7 +443,6 @@ final class GitHubAPITests: XCTestCase {
         } catch {
             XCTFail("Unexpected error: \(error)")
         }
-        XCTAssertEqual(transport.requests.count, 1)
     }
 
     func testFetchPullRequestCommentsDecodesCommentsAndThreads() async throws {
@@ -562,6 +563,9 @@ final class GitHubAPITests: XCTestCase {
     }
 }
 
+private let pullPath = "/repos/acme/widgets/pulls/7"
+private let filesPath = "/repos/acme/widgets/pulls/7/files"
+
 private let pullDetailResponse = """
 {
   "node_id": "PR_node",
@@ -573,6 +577,7 @@ private let pullDetailResponse = """
   "head": { "ref": "octocat/tests", "sha": "abc123" },
   "html_url": "https://github.com/acme/widgets/pull/7",
   "created_at": "2026-04-10T08:00:00Z",
+  "updated_at": "2026-04-12T09:30:00Z",
   "additions": 12,
   "deletions": 3,
   "changed_files": 2,
@@ -653,20 +658,37 @@ private final class MockHTTPTransport: HTTPTransport {
     struct QueuedResponse {
         let data: Data
         let statusCode: Int
+        /// Only a request to this URL path takes the response. Nil matches any request, in order.
+        let path: String?
     }
 
-    private(set) var requests: [URLRequest] = []
+    /// Requests can arrive from several tasks at once, so the queues are guarded by a lock.
+    private let lock = NSLock()
+    private var recordedRequests: [URLRequest] = []
     private var responses: [QueuedResponse] = []
 
-    func enqueue(json: String, statusCode: Int = 200) {
-        responses.append(QueuedResponse(data: Data(json.utf8), statusCode: statusCode))
+    var requests: [URLRequest] {
+        lock.withLock { recordedRequests }
+    }
+
+    /// Queues a response. Pass `path` for requests that run at the same time, whose order is not fixed.
+    func enqueue(json: String, statusCode: Int = 200, path: String? = nil) {
+        lock.withLock {
+            responses.append(QueuedResponse(data: Data(json.utf8), statusCode: statusCode, path: path))
+        }
+    }
+
+    func request(path: String) throws -> URLRequest {
+        try XCTUnwrap(requests.first { $0.url?.path == path })
     }
 
     func data(for request: URLRequest) async throws -> (Data, URLResponse) {
-        requests.append(request)
-        let response = responses.isEmpty
-            ? QueuedResponse(data: Data(), statusCode: 200)
-            : responses.removeFirst()
+        let response = lock.withLock {
+            recordedRequests.append(request)
+            let index = responses.firstIndex { $0.path == nil || $0.path == request.url?.path }
+            return index.map { responses.remove(at: $0) }
+                ?? QueuedResponse(data: Data(), statusCode: 200, path: nil)
+        }
         let http = HTTPURLResponse(url: request.url!,
                                    statusCode: response.statusCode,
                                    httpVersion: nil,

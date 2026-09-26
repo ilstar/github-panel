@@ -200,11 +200,15 @@ final class GitHubAPI: GitHubAPIClient {
         guard parts.count == 2 else { throw URLError(.badURL) }
         let pullPath = "/repos/\(parts[0])/\(parts[1])/pulls/\(reference.number)"
 
-        let pull = try await decode(PullResponse.self, request: makeRequest(path: pullPath, token: token))
+        // The three requests do not depend on each other, so they run at the same time.
+        async let pullRequest = decode(PullResponse.self, request: makeRequest(path: pullPath, token: token))
         // GitHub caps this at 100 files per page; later pages are not loaded yet.
-        let files = try await decode([PullFileResponse].self, request: makeRequest(path: "\(pullPath)/files?per_page=100", token: token))
+        async let fileList = decode([PullFileResponse].self, request: makeRequest(path: "\(pullPath)/files?per_page=100", token: token))
         // Viewed marks and edit rights are a nice-to-have; the diff still loads when GitHub does not return them.
-        let viewer = try? await fetchViewerState(token: token, owner: parts[0], name: parts[1], number: reference.number)
+        async let viewerState = try? fetchViewerState(token: token, owner: parts[0], name: parts[1], number: reference.number)
+        let pull = try await pullRequest
+        let files = try await fileList
+        let viewer = await viewerState
         let viewed = viewer?.viewedFiles ?? []
         var detail = pull.detail(reference: reference)
         detail.canEdit = viewer?.canEdit ?? false
@@ -505,6 +509,7 @@ private struct PullResponse: Decodable {
     let head: Ref
     let htmlURL: URL
     let createdAt: Date
+    let updatedAt: Date?
     let additions: Int
     let deletions: Int
     let changedFiles: Int
@@ -516,6 +521,7 @@ private struct PullResponse: Decodable {
         case mergedAt = "merged_at"
         case htmlURL = "html_url"
         case createdAt = "created_at"
+        case updatedAt = "updated_at"
         case changedFiles = "changed_files"
     }
 
@@ -544,7 +550,8 @@ private struct PullResponse: Decodable {
                                  additions: additions,
                                  deletions: deletions,
                                  changedFiles: changedFiles,
-                                 commits: commits)
+                                 commits: commits,
+                                 updatedAt: updatedAt)
     }
 }
 
