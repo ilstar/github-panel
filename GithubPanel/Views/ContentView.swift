@@ -85,9 +85,9 @@ struct ContentView: View {
             .id(reference)
             .environment(\.pageScroller, pageScroller)
         } else {
-            Text(monitor.hasToken ? "Select a pull request" : "Add a GitHub token to begin.")
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            EmptyStateView(systemImage: "arrow.triangle.pull",
+                           title: monitor.hasToken ? "Select a pull request" : "Welcome to GithubPanel",
+                           message: monitor.hasToken ? "Choose a pull request to read the conversation and review changes." : "Add a GitHub token to begin.")
                 .background(Color(nsColor: .textBackgroundColor))
         }
     }
@@ -144,24 +144,27 @@ struct ContentView: View {
         .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.white.opacity(0.7))
+                .fill(PanelStyle.surface)
         )
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
         )
     }
 
     private var prSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .center) {
-                PullRequestTabPicker(selection: $monitor.selectedTab)
-
+                Text("Pull Requests")
+                    .font(.system(size: 24, weight: .bold))
                 Spacer()
                 refreshPill
                     .fixedSize()
             }
+            .padding(.bottom, 4)
+
+            PullRequestTabPicker(selection: $monitor.selectedTab)
 
             switch monitor.selectedTab {
             case .open:
@@ -197,7 +200,7 @@ struct ContentView: View {
     private var openPullRequestsList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 10) {
+                LazyVStack(spacing: 6) {
                     if monitor.prRows.isEmpty {
                         emptyStateSpacer
                     } else {
@@ -376,7 +379,7 @@ struct ContentView: View {
                 VStack(spacing: 10) {
                     ScrollViewReader { proxy in
                         ScrollView {
-                            LazyVStack(spacing: 10) {
+                            LazyVStack(spacing: 6) {
                                 if monitor.historyRows.isEmpty {
                                     emptyStateSpacer
                                 } else {
@@ -511,10 +514,7 @@ struct ContentView: View {
 
     private var background: some View {
         ZStack {
-            LinearGradient(colors: [
-                Color.white,
-                Color(red: 0.96, green: 0.96, blue: 0.97)
-            ], startPoint: .top, endPoint: .bottom)
+            PanelStyle.sidebar
 
             if showsEmptyPullRequestBackground {
                 GeometryReader { proxy in

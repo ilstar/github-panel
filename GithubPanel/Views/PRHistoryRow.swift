@@ -14,8 +14,9 @@ struct PRHistoryRow: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(pr.title)
-                    .font(.headline.weight(.semibold))
-                    .lineLimit(1)
+                    .font(.system(size: 14, weight: .semibold))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
                     .help(pr.title)
 
                 Text("\(pr.repoFullName)#\(String(pr.number))")
@@ -37,26 +38,9 @@ struct PRHistoryRow: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .frame(width: 26, height: 26)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.white.opacity(isHovering ? 0.95 : 0.7))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(Color.black.opacity(0.08), lineWidth: 1)
-                )
+
         }
-        .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(cardFill)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.black.opacity(0.1), lineWidth: 1)
-        )
-        .shadow(color: Color.black.opacity(isHovering ? 0.08 : 0.04), radius: 8, x: 0, y: 2)
-        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .modifier(PullRequestRowSurface(isSelected: isSelected, isHovering: isHovering))
         .animation(.easeInOut(duration: 0.15), value: isHovering)
         .onHover { hovering in
             isHovering = hovering
@@ -65,9 +49,9 @@ struct PRHistoryRow: View {
 
     private var outcomeIcon: some View {
         Image(systemName: pr.outcome.iconName)
-            .font(.title)
+            .font(.system(size: 18, weight: .medium))
             .foregroundStyle(outcomeColor)
-            .frame(width: 30)
+            .frame(width: 22, height: 22)
     }
 
     private var outcomeBadge: some View {
@@ -90,21 +74,11 @@ struct PRHistoryRow: View {
     private var outcomeColor: Color {
         switch pr.outcome {
         case .merged:
-            return Color(red: 0.10, green: 0.43, blue: 0.24)
+            return Color.green
         case .closed:
-            return Color(red: 0.72, green: 0.16, blue: 0.16)
+            return Color.red
         }
     }
 
-    private var cardFill: AnyShapeStyle {
-        if isSelected {
-            return AnyShapeStyle(
-                LinearGradient(colors: [
-                    Color(red: 0.93, green: 0.96, blue: 1.0),
-                    Color(red: 0.98, green: 0.99, blue: 1.0)
-                ], startPoint: .topLeading, endPoint: .bottomTrailing)
-            )
-        }
-        return AnyShapeStyle(Color.white.opacity(isHovering ? 0.95 : 0.9))
-    }
+
 }

@@ -145,10 +145,6 @@ struct PullRequestDetailHeader: View {
             } else {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     titleText
-                    Text("#\(String(detail.reference.number))")
-                        .font(.title2)
-                        .foregroundStyle(.secondary)
-
                     if detail.canEdit {
                         Button {
                             isEditingTitle = true
@@ -158,20 +154,25 @@ struct PullRequestDetailHeader: View {
                         .buttonStyle(.borderless)
                         .help("Edit title")
                     }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
 
-                    Spacer(minLength: 12)
-
-                    Button(action: onRefresh) {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .disabled(isLoading)
-                    .help("Reload")
-
-                    Button("Open on GitHub") {
-                        NSWorkspace.shared.open(detail.htmlURL)
-                    }
+            HStack(spacing: 8) {
+                Text("#\(String(detail.reference.number))")
+                    .font(.callout.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                Button(action: onRefresh) {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .disabled(isLoading)
+                .help("Reload")
+                Button("Open on GitHub") {
+                    NSWorkspace.shared.open(detail.htmlURL)
                 }
             }
+            .controlSize(.small)
 
             HStack(spacing: 8) {
                 PullRequestStateBadge(state: detail.state)
@@ -196,7 +197,8 @@ struct PullRequestDetailHeader: View {
     @ViewBuilder
     private var titleText: some View {
         let title = Text(detail.title)
-            .font(.title2.weight(.semibold))
+            .font(.system(size: 23, weight: .semibold))
+            .fixedSize(horizontal: false, vertical: true)
         if detail.canEdit {
             title
                 .onTapGesture(count: 2) { isEditingTitle = true }

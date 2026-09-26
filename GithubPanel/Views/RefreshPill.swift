@@ -52,7 +52,7 @@ struct RefreshPill: View {
                     refreshIcon(rotation: 0)
                 }
                 Text("Refresh")
-                    .font(.subheadline.weight(.semibold))
+                    .font(.caption.weight(.medium))
                     .padding(.trailing, 2)
                 lastUpdatedView
             }
@@ -60,11 +60,11 @@ struct RefreshPill: View {
             .padding(.vertical, 6)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.white.opacity(0.8))
+                    .fill(PanelStyle.surface)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                    .stroke(Color.primary.opacity(0.06), lineWidth: 1)
             )
         }
         .buttonStyle(.plain)
@@ -119,7 +119,7 @@ struct RefreshPill: View {
 
     private func refreshIcon(rotation: Double) -> some View {
         Image(systemName: "arrow.clockwise")
-            .font(.body.weight(.semibold))
+            .font(.caption.weight(.medium))
             .rotationEffect(.degrees(rotation))
     }
 
