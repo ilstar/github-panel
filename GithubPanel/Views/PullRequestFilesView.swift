@@ -35,6 +35,8 @@ struct PullRequestFilesView: View {
     @State private var scrollRequest: ScrollRequest?
     /// The diff line with an open new-comment box. One at a time, like on GitHub.
     @State private var composingAnchor: DiffCommentAnchor?
+    /// Lets diff lines ignore the pointer while the list scrolls under it.
+    @State private var scrollActivity = ScrollActivity()
     @FocusState private var isFilterFocused: Bool
 
     private struct ScrollRequest: Equatable {
@@ -330,6 +332,7 @@ struct PullRequestFilesView: View {
                 .padding(.bottom, 24 - Self.fileSpacing)
                 .padding(.top, 8 + Self.fileSpacing)
                 .background(PageScrollAnchor())
+                .background(ScrollActivityMonitor(activity: scrollActivity))
             }
             .onChange(of: scrollRequest) { request in
                 guard let request else { return }
@@ -361,7 +364,9 @@ struct PullRequestFilesView: View {
             // Drawn as the section header instead; see `diffList`.
             EmptyView()
         case let .unified(path, _, line):
-            DiffLineRow(line: line, onAddComment: addCommentAction(DiffCommentAnchor.unified(path: path, line: line)))
+            DiffLineRow(line: line,
+                        onAddComment: addCommentAction(DiffCommentAnchor.unified(path: path, line: line)),
+                        scrollActivity: scrollActivity)
                 .fileCardEdges(.middle)
         case let .split(path, _, row):
             splitRow(row, path: path)
@@ -397,11 +402,12 @@ struct PullRequestFilesView: View {
     private func splitRow(_ row: SplitDiffRow, path: String) -> some View {
         switch row {
         case .full:
-            SplitDiffRowView(row: row)
+            SplitDiffRowView(row: row, scrollActivity: scrollActivity)
         case let .pair(left, right):
             SplitDiffRowView(row: row,
                              onAddLeftComment: addCommentAction(DiffCommentAnchor.split(path: path, line: left, side: .left)),
-                             onAddRightComment: addCommentAction(DiffCommentAnchor.split(path: path, line: right, side: .right)))
+                             onAddRightComment: addCommentAction(DiffCommentAnchor.split(path: path, line: right, side: .right)),
+                             scrollActivity: scrollActivity)
         }
     }
 
@@ -668,9 +674,11 @@ struct DiffLineRow: View {
     let line: DiffDisplayLine
     /// Opens a new-comment box on this line. Nil for lines GitHub cannot take comments on.
     var onAddComment: (() -> Void)?
+    var scrollActivity: ScrollActivity?
 
     var body: some View {
-        DiffLineHalf(line: line, numbers: [line.oldLineNumber, line.newLineNumber], onAddComment: onAddComment)
+        DiffLineHalf(line: line, numbers: [line.oldLineNumber, line.newLineNumber], onAddComment: onAddComment,
+                     scrollActivity: scrollActivity)
     }
 }
 
@@ -679,11 +687,12 @@ struct SplitDiffRowView: View {
     let row: SplitDiffRow
     var onAddLeftComment: (() -> Void)?
     var onAddRightComment: (() -> Void)?
+    var scrollActivity: ScrollActivity?
 
     var body: some View {
         switch row {
         case let .full(line):
-            DiffLineHalf(line: line, numbers: [nil], onAddComment: nil)
+            DiffLineHalf(line: line, numbers: [nil], onAddComment: nil, scrollActivity: scrollActivity)
         case let .pair(left, right):
             // The backgrounds fill the row behind both halves, so a half with a shorter line needs no
             // stretching to match the taller one.
@@ -704,7 +713,8 @@ struct SplitDiffRowView: View {
     @ViewBuilder
     private func half(_ line: DiffDisplayLine?, number: Int?, onAddComment: (() -> Void)?) -> some View {
         if let line {
-            DiffLineHalf(line: line, numbers: [number], onAddComment: onAddComment, fillsBackground: false)
+            DiffLineHalf(line: line, numbers: [number], onAddComment: onAddComment, scrollActivity: scrollActivity,
+                         fillsBackground: false)
         } else {
             Color.clear
                 .frame(maxWidth: .infinity, maxHeight: 0)
@@ -726,6 +736,8 @@ private struct DiffLineHalf: View {
     /// The line number columns; nil leaves a column blank.
     let numbers: [Int?]
     var onAddComment: (() -> Void)?
+    /// While this says the list is scrolling, the line does not react to the pointer. See `ScrollActivity`.
+    var scrollActivity: ScrollActivity?
     /// Off in the split view, which fills each half's background across the whole row.
     var fillsBackground = true
 
@@ -770,9 +782,16 @@ private struct DiffLineHalf: View {
                 .help("Add a comment on this line")
             }
         }
-        .onHover { hovering in
-            isHovering = hovering
-            if hovering, !isSelectable { isSelectable = true }
+        // Continuous so a line skipped while the list scrolled still reacts once the pointer moves again.
+        .onContinuousHover { phase in
+            switch phase {
+            case .active:
+                guard !isHovering, scrollActivity?.isScrolling() != true else { return }
+                isHovering = true
+                if !isSelectable { isSelectable = true }
+            case .ended:
+                if isHovering { isHovering = false }
+            }
         }
     }
 
