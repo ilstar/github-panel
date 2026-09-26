@@ -56,7 +56,7 @@ fail() {
   exit 1
 }
 
-# xcodebuild_app <configuration> <action>
+# xcodebuild_app <configuration> <action> [xcodebuild args...]
 xcodebuild_app() {
   local args=(
     -project "$PROJECT"
@@ -73,7 +73,7 @@ xcodebuild_app() {
       CODE_SIGN_STYLE=Automatic
     )
   fi
-  run xcodebuild "${args[@]}" "$2"
+  run xcodebuild "${args[@]}" "${@:2}"
 }
 
 # Checked before a release build starts so a missing setting fails fast
