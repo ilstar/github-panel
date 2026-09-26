@@ -98,4 +98,28 @@ final class MockGitHubAPICommentTests: XCTestCase {
         XCTAssertEqual(after.threads.first?.comments.last?.body, "Done")
         XCTAssertEqual(after.threads.first?.comments.count, replyTarget.comments.count + 1)
     }
+
+    func testMockHandlesConcurrentPreloading() async throws {
+        let api = MockGitHubAPI()
+        let references = (1...200).map { PullRequestReference(repoFullName: "mock/concurrent", number: $0) }
+
+        let counts = try await withThrowingTaskGroup(of: Int.self) { group in
+            for reference in references {
+                group.addTask {
+                    async let detail = api.fetchPullRequestDetail(token: "token", reference: reference)
+                    async let comments = api.fetchPullRequestComments(token: "token", reference: reference)
+                    try await api.postPullRequestComment(token: "token", reference: reference, comment: .general(body: "Hi"))
+                    _ = try await detail
+                    return try await comments.comments.count
+                }
+            }
+            return try await group.reduce(into: [Int]()) { $0.append($1) }
+        }
+
+        XCTAssertEqual(counts.count, references.count)
+        for reference in references {
+            let comments = try await api.fetchPullRequestComments(token: "token", reference: reference)
+            XCTAssertEqual(comments.comments.last?.body, "Hi", reference.id)
+        }
+    }
 }

@@ -1,7 +1,9 @@
 import Foundation
 
 #if DEBUG
-final class MockGitHubAPI: GitHubAPIClient {
+/// Detail preloading calls the mock from many concurrent tasks, so all mutable state is guarded by `lock`.
+final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
+    private let lock = NSLock()
     private let user = GitHubUser(login: "mock-user")
     private var pullRequests: [String: PullRequestRow]
     private let history: [PullRequestHistoryRow]
@@ -29,7 +31,7 @@ final class MockGitHubAPI: GitHubAPIClient {
     }
 
     func fetchOpenPRs(token: String) async throws -> OpenPullRequests {
-        let rows = pullRequests.values.sorted { $0.updatedAt > $1.updatedAt }
+        let rows = locked { pullRequests.values }.sorted { $0.updatedAt > $1.updatedAt }
         return OpenPullRequests(login: user.login, rows: Array(rows.prefix(10)))
     }
 
@@ -73,11 +75,15 @@ final class MockGitHubAPI: GitHubAPIClient {
     }
 
     func mergePullRequest(token: String, repoFullName: String, number: Int) async throws -> Bool {
-        pullRequests.removeValue(forKey: "\(repoFullName)#\(number)")
+        locked { _ = pullRequests.removeValue(forKey: "\(repoFullName)#\(number)") }
         return true
     }
 
     func fetchPullRequestDetail(token: String, reference: PullRequestReference) async throws -> PullRequestDetailContent {
+        locked { makeDetail(reference: reference) }
+    }
+
+    private func makeDetail(reference: PullRequestReference) -> PullRequestDetailContent {
         let title = editedTitles[reference.id]
             ?? pullRequests[reference.id]?.title
             ?? history.first { $0.id == reference.id }?.title
@@ -116,14 +122,20 @@ final class MockGitHubAPI: GitHubAPIClient {
     }
 
     func setFileViewed(token: String, pullRequestID: String, path: String, viewed: Bool) async throws {
-        if viewed {
-            viewedFiles[pullRequestID, default: []].insert(path)
-        } else {
-            viewedFiles[pullRequestID]?.remove(path)
+        locked {
+            if viewed {
+                viewedFiles[pullRequestID, default: []].insert(path)
+            } else {
+                viewedFiles[pullRequestID]?.remove(path)
+            }
         }
     }
 
     func fetchPullRequestComments(token: String, reference: PullRequestReference) async throws -> PullRequestComments {
+        locked { storedComments(for: reference) }
+    }
+
+    private func storedComments(for reference: PullRequestReference) -> PullRequestComments {
         if let stored = comments[reference.id] { return stored }
         let fixtures = Self.makeComments(now: Date())
         comments[reference.id] = fixtures
@@ -131,7 +143,11 @@ final class MockGitHubAPI: GitHubAPIClient {
     }
 
     func postPullRequestComment(token: String, reference: PullRequestReference, comment: NewPullRequestComment) async throws {
-        let current = try await fetchPullRequestComments(token: token, reference: reference)
+        locked { appendComment(comment, to: reference) }
+    }
+
+    private func appendComment(_ comment: NewPullRequestComment, to reference: PullRequestReference) {
+        let current = storedComments(for: reference)
         nextCommentID += 1
         func makeComment(_ body: String) -> PullRequestComment {
             PullRequestComment(id: "mock-comment-\(nextCommentID)", databaseID: nextCommentID, authorLogin: user.login,
@@ -275,19 +291,29 @@ final class MockGitHubAPI: GitHubAPIClient {
     ]
 
     func editPullRequest(token: String, reference: PullRequestReference, title: String?, body: String?) async throws {
-        if let body {
-            editedBodies[reference.id] = body
-        }
-        guard let title else { return }
-        editedTitles[reference.id] = title
-        if let row = pullRequests[reference.id] {
-            pullRequests[reference.id] = row.copy(title: title)
+        locked {
+            if let body {
+                editedBodies[reference.id] = body
+            }
+            guard let title else { return }
+            editedTitles[reference.id] = title
+            if let row = pullRequests[reference.id] {
+                pullRequests[reference.id] = row.copy(title: title)
+            }
         }
     }
 
     private func updatePullRequest(with nodeID: String, transform: (PullRequestRow) -> PullRequestRow) {
-        guard let match = pullRequests.first(where: { $0.value.nodeID == nodeID }) else { return }
-        pullRequests[match.key] = transform(match.value)
+        locked {
+            guard let match = pullRequests.first(where: { $0.value.nodeID == nodeID }) else { return }
+            pullRequests[match.key] = transform(match.value)
+        }
+    }
+
+    private func locked<T>(_ body: () throws -> T) rethrows -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return try body()
     }
 
     private static func makePullRequests() -> [PullRequestRow] {
