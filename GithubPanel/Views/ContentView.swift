@@ -37,6 +37,7 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 1000, minHeight: 500)
+        .background(paneBackgrounds)
         .background(KeyCommandMonitor(handler: handleKeyCommand))
         .focusedSceneValue(\.pullRequestList, listActions)
         .onAppear {
@@ -56,25 +57,35 @@ struct ContentView: View {
         }
     }
 
+    /// Both panes' backgrounds, drawn behind the whole window so they run up under the hidden title bar.
+    private var paneBackgrounds: some View {
+        GeometryReader { proxy in
+            HStack(spacing: 0) {
+                Theme.listBackground
+                    .frame(width: ListPaneLayout.clampedWidth(listPaneWidth, totalWidth: proxy.size.width))
+                Color(nsColor: .separatorColor)
+                    .frame(width: ListPaneLayout.dividerWidth)
+                Color(nsColor: .textBackgroundColor)
+            }
+        }
+        .ignoresSafeArea()
+    }
+
     private var listPane: some View {
         ZStack {
             background
 
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 16) {
                 if monitor.isUsingMockData {
                     mockDataBanner
-                }
-
-                if !monitor.hasToken {
-                    tokenCallout
-
+                        .padding(.horizontal, 10)
                 }
 
                 prSection
             }
-            .padding(.horizontal, 24)
-            .padding(.top, 20)
-            .padding(.bottom, 16)
+            .padding(.horizontal, 14)
+            .padding(.top, 12)
+            .padding(.bottom, 12)
         }
     }
 
@@ -84,11 +95,18 @@ struct ContentView: View {
             PullRequestDetailView(viewModel: PullRequestDetailViewModel(reference: reference, monitor: monitor))
             .id(reference)
             .environment(\.pageScroller, pageScroller)
+            .background(Color(nsColor: .textBackgroundColor).ignoresSafeArea())
         } else {
-            Text(monitor.hasToken ? "Select a pull request" : "Add a GitHub token to begin.")
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(nsColor: .textBackgroundColor))
+            VStack(spacing: 10) {
+                Image(systemName: monitor.hasToken ? "arrow.triangle.pull" : "key")
+                    .font(.system(size: 30, weight: .light))
+                    .foregroundStyle(.tertiary)
+                Text(monitor.hasToken ? "Select a pull request" : "Add a GitHub token to begin.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(nsColor: .textBackgroundColor).ignoresSafeArea())
         }
     }
 
@@ -103,24 +121,17 @@ struct ContentView: View {
     }
 
     private var mockDataBanner: some View {
-        Text("Mock GitHub PRs")
+        Label("Mock GitHub PRs", systemImage: "testtube.2")
             .font(.caption.weight(.semibold))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color(red: 0.95, green: 0.98, blue: 1.0))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Color(red: 0.50, green: 0.68, blue: 0.86).opacity(0.45), lineWidth: 1)
-            )
-            .foregroundStyle(Color(red: 0.14, green: 0.36, blue: 0.62))
+            .padding(.horizontal, 9)
+            .padding(.vertical, 4)
+            .background(Capsule().fill(Color.accentColor.opacity(0.12)))
+            .foregroundStyle(Color.accentColor)
     }
 
     private var tokenCallout: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("GitHub Token")
+            Label("GitHub Token", systemImage: "key.fill")
                 .font(.headline)
             Text("Create a personal access token in GitHub and paste it here.")
                 .font(.caption)
@@ -138,19 +149,22 @@ struct ContentView: View {
                 Button(isSaving ? "Saving..." : "Save Token") {
                     saveToken()
                 }
+                .buttonStyle(.borderedProminent)
                 .disabled(isSaving || tokenInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
+            .padding(.top, 4)
         }
-        .padding(12)
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.white.opacity(0.7))
+                .fill(Color(nsColor: .textBackgroundColor))
         )
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                .strokeBorder(Theme.hairline)
         )
+        .padding(.horizontal, 10)
     }
 
     private var prSection: some View {
@@ -161,6 +175,16 @@ struct ContentView: View {
                 Spacer()
                 refreshPill
                     .fixedSize()
+            }
+            .padding(.horizontal, 10)
+
+            listTitle
+                .padding(.horizontal, 10)
+                .padding(.top, 14)
+                .padding(.bottom, 4)
+
+            if !monitor.hasToken {
+                tokenCallout
             }
 
             switch monitor.selectedTab {
@@ -174,22 +198,45 @@ struct ContentView: View {
         }
     }
 
+    /// A large heading for the visible tab, like a list title in Things.
+    private var listTitle: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: monitor.selectedTab.systemImage)
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(monitor.selectedTab.tint)
+            Text(monitor.selectedTab.title)
+                .font(.system(size: 26, weight: .bold))
+            if let count = listCount, count > 0 {
+                Text(String(count))
+                    .font(.system(size: 20, weight: .medium))
+                    .monospacedDigit()
+                    .foregroundStyle(.tertiary)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var listCount: Int? {
+        guard monitor.hasToken else { return nil }
+        switch monitor.selectedTab {
+        case .open:
+            return monitor.prRows.count
+        case .reviews:
+            return monitor.reviewRequests.rows.count
+        case .history:
+            return nil
+        }
+    }
+
     private var openPullRequestsSection: some View {
         Group {
             if let error = monitor.lastError {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                Text("Common fixes: ensure your token has `repo` (private) or `public_repo` scopes, and authorize SSO for org repos.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                errorNote(error,
+                          hint: "Common fixes: ensure your token has `repo` (private) or `public_repo` scopes, and authorize SSO for org repos.")
             }
 
             if monitor.hasToken {
                 openPullRequestsList
-            } else {
-                Text("Add a GitHub token to begin.")
-                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -197,7 +244,7 @@ struct ContentView: View {
     private var openPullRequestsList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 10) {
+                LazyVStack(spacing: 2) {
                     if monitor.prRows.isEmpty {
                         emptyStateSpacer
                     } else {
@@ -223,7 +270,6 @@ struct ContentView: View {
                         }
                     }
                 }
-                .padding(.top, 6)
                 .padding(.bottom, 8)
             }
             .scrollIndicators(.hidden)
@@ -274,9 +320,6 @@ struct ContentView: View {
                 case .list:
                     reviewRequestsList
                 }
-            } else {
-                Text("Add a GitHub token to begin.")
-                    .foregroundStyle(.secondary)
             }
         }
         .onAppear {
@@ -301,12 +344,11 @@ struct ContentView: View {
     private var reviewRequestsList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
+                LazyVStack(alignment: .leading, spacing: 2) {
                     ForEach(ReviewRequestGroup.allCases) { group in
                         reviewRequestGroup(group)
                     }
                 }
-                .padding(.top, 6)
                 .padding(.bottom, 8)
             }
             .scrollIndicators(.hidden)
@@ -319,33 +361,32 @@ struct ContentView: View {
     @ViewBuilder
     private func reviewRequestGroup(_ group: ReviewRequestGroup) -> some View {
         let rows = monitor.reviewRequests.rows(in: group)
-        HStack(spacing: 6) {
-            Text(group.title.uppercased())
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .tracking(0.4)
-            Text(String(rows.count))
-                .font(.caption2.weight(.bold))
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 1)
-                .background(Capsule().fill(Color.secondary.opacity(0.14)))
+        // A section heading with a hairline under it, like a heading inside a Things list.
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(group.title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+                Text(String(rows.count))
+                    .font(.caption.weight(.medium))
+                    .monospacedDigit()
+                    .foregroundStyle(.tertiary)
+            }
+            Rectangle()
+                .fill(Theme.hairline)
+                .frame(height: 1)
         }
-        .padding(.leading, 4)
-        .padding(.top, group == ReviewRequestGroup.allCases.first ? 0 : 12)
+        .padding(.horizontal, 10)
+        .padding(.top, group == ReviewRequestGroup.allCases.first ? 4 : 20)
+        .padding(.bottom, 4)
 
         if rows.isEmpty {
             Text(group.emptyText)
                 .font(.callout)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.tertiary)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-                .background(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(Color.secondary.opacity(0.25), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
-                )
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
         } else {
             ForEach(rows) { pr in
                 PRReviewRequestRow(pr: pr,
@@ -367,16 +408,14 @@ struct ContentView: View {
     private var historySection: some View {
         Group {
             if let error = monitor.lastHistoryError {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.red)
+                errorNote(error, hint: nil)
             }
 
             if monitor.hasToken {
-                VStack(spacing: 10) {
+                VStack(spacing: 6) {
                     ScrollViewReader { proxy in
                         ScrollView {
-                            LazyVStack(spacing: 10) {
+                            LazyVStack(spacing: 2) {
                                 if monitor.historyRows.isEmpty {
                                     emptyStateSpacer
                                 } else {
@@ -396,7 +435,6 @@ struct ContentView: View {
                                     }
                                 }
                             }
-                            .padding(.top, 6)
                             .padding(.bottom, 8)
                         }
                         .scrollIndicators(.hidden)
@@ -425,17 +463,37 @@ struct ContentView: View {
 
                     historyPagination
                 }
-            } else {
-                Text("Add a GitHub token to begin.")
-                    .foregroundStyle(.secondary)
             }
         }
+    }
+
+    private func errorNote(_ message: String, hint: String?) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(Theme.red)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(message)
+                    .foregroundStyle(Theme.red)
+                if let hint {
+                    Text(hint)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .font(.caption)
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.rowCornerRadius, style: .continuous)
+                .fill(Theme.red.opacity(0.08))
+        )
     }
 
     private var lastUpdatedView: some View {
         Text("Updated \(lastUpdatedText)")
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.tertiary)
             .frame(width: 110, alignment: .trailing)
     }
 
@@ -469,13 +527,13 @@ struct ContentView: View {
     }
 
     private var historyPagination: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 4) {
             Button {
                 Task { await monitor.loadPreviousHistoryPage() }
             } label: {
                 Image(systemName: "chevron.left")
                     .font(.caption.weight(.bold))
-                    .frame(width: 44, height: 36)
+                    .frame(width: 30, height: 26)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -483,7 +541,8 @@ struct ContentView: View {
             .help("Previous page")
 
             Text(monitor.historyRangeText)
-                .font(.caption.weight(.semibold))
+                .font(.caption.weight(.medium))
+                .monospacedDigit()
                 .foregroundStyle(.secondary)
                 .frame(minWidth: 86)
 
@@ -492,7 +551,7 @@ struct ContentView: View {
             } label: {
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.bold))
-                    .frame(width: 44, height: 36)
+                    .frame(width: 30, height: 26)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -501,6 +560,8 @@ struct ContentView: View {
 
             Spacer()
         }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 4)
     }
 
     private var emptyStateSpacer: some View {
@@ -511,10 +572,7 @@ struct ContentView: View {
 
     private var background: some View {
         ZStack {
-            LinearGradient(colors: [
-                Color.white,
-                Color(red: 0.96, green: 0.96, blue: 0.97)
-            ], startPoint: .top, endPoint: .bottom)
+            Theme.listBackground
 
             if showsEmptyPullRequestBackground {
                 GeometryReader { proxy in
@@ -680,5 +738,24 @@ struct PullRequestTabPicker: View {
         .pickerStyle(.segmented)
         .labelsHidden()
         .fixedSize()
+    }
+}
+
+
+private extension PullRequestTab {
+    var systemImage: String {
+        switch self {
+        case .open: return "arrow.triangle.pull"
+        case .reviews: return "eye"
+        case .history: return "clock.arrow.circlepath"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .open: return .accentColor
+        case .reviews: return Theme.amber
+        case .history: return .secondary
+        }
     }
 }

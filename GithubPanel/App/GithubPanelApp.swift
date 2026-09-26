@@ -33,6 +33,8 @@ struct GithubPanelApp: App {
             ContentView()
                 .environmentObject(monitor)
         }
+        // The list and the pull request run up to the top edge, with the window buttons over the list.
+        .windowStyle(.hiddenTitleBar)
         .commands {
             AppCommands(monitor: monitor)
         }

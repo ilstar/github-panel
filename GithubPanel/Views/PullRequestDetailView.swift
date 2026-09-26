@@ -27,13 +27,13 @@ struct PullRequestDetailView: View {
                                         isEditingTitle: $isEditingTitle,
                                         onRefresh: reload,
                                         onSaveTitle: { title in try await viewModel.edit(title: title) })
-                    .padding(.horizontal, 24)
-                    .padding(.top, 20)
-                    .padding(.bottom, 12)
+                    .padding(.horizontal, 28)
+                    .padding(.top, 18)
+                    .padding(.bottom, 14)
 
                 if let error = viewModel.errorMessage {
                     errorText(error)
-                        .padding(.horizontal, 24)
+                        .padding(.horizontal, 28)
                         .padding(.bottom, 8)
                 }
 
@@ -44,10 +44,12 @@ struct PullRequestDetailView: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .fixedSize()
-                .padding(.horizontal, 24)
+                .padding(.horizontal, 28)
                 .padding(.bottom, 12)
 
-                Divider()
+                Rectangle()
+                    .fill(Theme.hairline)
+                    .frame(height: 1)
 
                 switch selectedTab {
                 case .conversation:
@@ -146,8 +148,8 @@ struct PullRequestDetailHeader: View {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     titleText
                     Text("#\(String(detail.reference.number))")
-                        .font(.title2)
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 22, weight: .regular))
+                        .foregroundStyle(.tertiary)
 
                     if detail.canEdit {
                         Button {
@@ -155,7 +157,7 @@ struct PullRequestDetailHeader: View {
                         } label: {
                             Image(systemName: "pencil")
                         }
-                        .buttonStyle(.borderless)
+                        .buttonStyle(QuietButtonStyle())
                         .help("Edit title")
                     }
 
@@ -164,12 +166,16 @@ struct PullRequestDetailHeader: View {
                     Button(action: onRefresh) {
                         Image(systemName: "arrow.clockwise")
                     }
+                    .buttonStyle(QuietButtonStyle())
                     .disabled(isLoading)
                     .help("Reload")
 
-                    Button("Open on GitHub") {
+                    Button {
                         NSWorkspace.shared.open(detail.htmlURL)
+                    } label: {
+                        Label("Open on GitHub", systemImage: "arrow.up.right")
                     }
+                    .buttonStyle(QuietButtonStyle())
                 }
             }
 
@@ -180,6 +186,7 @@ struct PullRequestDetailHeader: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
+                    .padding(.leading, 2)
 
                 Spacer(minLength: 12)
 
@@ -196,7 +203,7 @@ struct PullRequestDetailHeader: View {
     @ViewBuilder
     private var titleText: some View {
         let title = Text(detail.title)
-            .font(.title2.weight(.semibold))
+            .font(.system(size: 22, weight: .bold))
         if detail.canEdit {
             title
                 .onTapGesture(count: 2) { isEditingTitle = true }
@@ -431,11 +438,11 @@ struct PullRequestStateBadge: View {
 
     var body: some View {
         Label(title, systemImage: iconName)
-            .font(.callout.weight(.semibold))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-            .background(Capsule().fill(color))
-            .foregroundStyle(.white)
+            .font(.caption.weight(.semibold))
+            .padding(.horizontal, 9)
+            .padding(.vertical, 3)
+            .background(Capsule().fill(color.opacity(0.13)))
+            .foregroundStyle(color)
     }
 
     private var title: String {
@@ -457,10 +464,10 @@ struct PullRequestStateBadge: View {
 
     private var color: Color {
         switch state {
-        case .open: return Color(red: 0.12, green: 0.53, blue: 0.24)
-        case .draft: return Color(red: 0.40, green: 0.43, blue: 0.47)
-        case .merged: return Color(red: 0.51, green: 0.31, blue: 0.85)
-        case .closed: return Color(red: 0.81, green: 0.13, blue: 0.18)
+        case .open: return Theme.green
+        case .draft: return .secondary
+        case .merged: return Theme.purple
+        case .closed: return Theme.red
         }
     }
 }
@@ -484,9 +491,12 @@ struct PullRequestConversationView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     VStack(alignment: .leading, spacing: 12) {
-                        HStack(spacing: 8) {
-                            Text("\(detail.authorLogin) opened this pull request \(detail.createdAt.formatted(.relative(presentation: .named)))")
+                        HStack(spacing: 6) {
+                            Text(detail.authorLogin)
                                 .font(.callout.weight(.semibold))
+                            Text("opened this pull request \(detail.createdAt.formatted(.relative(presentation: .named)))")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
                             Spacer(minLength: 8)
                             if detail.canEdit && !isEditingBody {
                                 Button {
@@ -494,7 +504,7 @@ struct PullRequestConversationView: View {
                                 } label: {
                                     Image(systemName: "pencil")
                                 }
-                                .buttonStyle(.borderless)
+                                .buttonStyle(QuietButtonStyle())
                                 .help("Edit description")
                             }
                         }
@@ -516,10 +526,10 @@ struct PullRequestConversationView: View {
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(16)
+                        .padding(18)
                         .background(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .strokeBorder(Theme.hairline)
                         )
                     }
 
@@ -528,8 +538,8 @@ struct PullRequestConversationView: View {
                             PullRequestCommentView(comment: comment)
                                 .padding(16)
                                 .background(
-                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                        .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .fill(Theme.cardFill)
                                 )
                         }
                     } else {
@@ -537,8 +547,6 @@ struct PullRequestConversationView: View {
                             .controlSize(.small)
                             .frame(maxWidth: .infinity)
                     }
-
-                    Divider()
 
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Add a comment")
@@ -550,7 +558,8 @@ struct PullRequestConversationView: View {
                     }
                     .id(Self.composerID)
                 }
-                .padding(24)
+                .padding(.horizontal, 28)
+                .padding(.vertical, 24)
                 .frame(maxWidth: 900, alignment: .leading)
                 .background(PageScrollAnchor())
             }
