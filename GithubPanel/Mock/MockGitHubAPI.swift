@@ -104,7 +104,8 @@ final class MockGitHubAPI: GitHubAPIClient {
                                        deletions: Self.detailFiles.reduce(0) { $0 + $1.deletions },
                                        changedFiles: Self.detailFiles.count,
                                        commits: 3,
-                                       canEdit: isOwn)
+                                       canEdit: isOwn,
+                                       updatedAt: pullRequests[reference.id]?.updatedAt)
         let viewed = viewedFiles[nodeID] ?? []
         let files = Self.detailFiles.map { file in
             var file = file

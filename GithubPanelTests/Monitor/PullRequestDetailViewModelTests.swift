@@ -191,19 +191,125 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.errorMessage, "Comments failed")
     }
 
-    func testFailedDetailLoadSkipsComments() async {
-        var commentFetches = 0
+    func testFailedDetailLoadShowsNoComments() async {
         let viewModel = PullRequestDetailViewModel(reference: reference,
                                                    fetch: { _ in throw GraphQLError(message: "Detail failed") },
-                                                   fetchComments: { _ in
-                                                       commentFetches += 1
-                                                       return .empty
+                                                   fetchComments: { [self] _ in
+                                                       PullRequestComments(comments: [comment(1)], threads: [])
                                                    })
 
         await viewModel.load()
 
-        XCTAssertEqual(commentFetches, 0)
+        XCTAssertNil(viewModel.content)
+        XCTAssertNil(viewModel.comments)
         XCTAssertEqual(viewModel.errorMessage, "Detail failed")
+    }
+
+    func testLoadFetchesDetailAndCommentsAtTheSameTime() async {
+        let gate = DetailLoadGate()
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+                                                   fetch: { [self] _ in
+                                                       // Finishes only once the comments request has started.
+                                                       await gate.waitForComments()
+                                                       return detailContent(title: "Parallel")
+                                                   },
+                                                   fetchComments: { _ in
+                                                       await gate.commentsStarted()
+                                                       return .empty
+                                                   })
+
+        // Loading one after the other would never finish, so fail after a timeout instead of hanging.
+        let loaded = expectation(description: "Loaded")
+        Task {
+            await viewModel.load()
+            loaded.fulfill()
+        }
+        await fulfillment(of: [loaded], timeout: 5)
+
+        XCTAssertEqual(viewModel.content?.detail.title, "Parallel")
+        XCTAssertEqual(viewModel.comments, .empty)
+    }
+
+    func testStartsFromTheCacheBeforeLoading() {
+        let cache = PullRequestDetailCache()
+        let comments = PullRequestComments(comments: [comment(1)], threads: [thread("t1", path: "a.swift", line: 2)])
+        cache.store(detailContent(title: "Cached", files: [file("a.swift", patch: "@@ -1 +1 @@\n-a\n+b", isViewed: true)]))
+        cache.store(comments, for: reference)
+
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+                                                   fetch: { [self] _ in detailContent(title: "Fresh") },
+                                                   cache: cache)
+
+        XCTAssertEqual(viewModel.content?.detail.title, "Cached")
+        XCTAssertEqual(viewModel.viewedFiles, ["a.swift"])
+        XCTAssertEqual(viewModel.diffLines["a.swift"]?.count, 3)
+        XCTAssertEqual(viewModel.comments, comments)
+        XCTAssertEqual(viewModel.threadIndex(for: "a.swift").threads.map(\.id), ["t1"])
+    }
+
+    func testLoadReplacesCachedContentAndStoresIt() async {
+        let cache = PullRequestDetailCache()
+        cache.store(detailContent(title: "Cached"))
+        let comments = PullRequestComments(comments: [comment(2)], threads: [])
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+                                                   fetch: { [self] _ in detailContent(title: "Fresh") },
+                                                   fetchComments: { _ in comments },
+                                                   cache: cache)
+
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.content?.detail.title, "Fresh")
+        XCTAssertEqual(cache.entry(for: reference)?.content.detail.title, "Fresh")
+        XCTAssertEqual(cache.entry(for: reference)?.comments, comments)
+    }
+
+    func testFailedLoadKeepsCachedContent() async {
+        let cache = PullRequestDetailCache()
+        cache.store(detailContent(title: "Cached"))
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+                                                   fetch: { _ in throw GraphQLError(message: "Offline") },
+                                                   cache: cache)
+
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.content?.detail.title, "Cached")
+        XCTAssertEqual(viewModel.errorMessage, "Offline")
+        XCTAssertEqual(cache.entry(for: reference)?.content.detail.title, "Cached")
+    }
+
+    func testViewedMarksAndEditsUpdateTheCache() async throws {
+        let cache = PullRequestDetailCache()
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+                                                   fetch: { [self] _ in
+                                                       detailContent(title: "Old", files: [file("a.swift"), file("b.swift")], canEdit: true)
+                                                   },
+                                                   cache: cache)
+        await viewModel.load()
+
+        await viewModel.setViewed(true, filename: "b.swift")
+        try await viewModel.edit(title: "New", body: "Body")
+
+        let cached = try XCTUnwrap(cache.entry(for: reference)?.content)
+        XCTAssertEqual(cached.detail.title, "New")
+        XCTAssertEqual(cached.detail.body, "Body")
+        XCTAssertEqual(cached.files.filter(\.isViewed).map(\.filename), ["b.swift"])
+    }
+
+    func testPostedCommentsUpdateTheCache() async throws {
+        let cache = PullRequestDetailCache()
+        var stored = PullRequestComments.empty
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+                                                   fetch: { [self] _ in detailContent(title: "Comments") },
+                                                   fetchComments: { _ in stored },
+                                                   postComment: { [self] _, _ in
+                                                       stored = PullRequestComments(comments: [comment(5)], threads: [])
+                                                   },
+                                                   cache: cache)
+        await viewModel.load()
+
+        try await viewModel.post(.general(body: "Hi"))
+
+        XCTAssertEqual(cache.entry(for: reference)?.comments?.comments.map(\.databaseID), [5])
     }
 
     func testPostSendsCommentThenReloadsComments() async throws {
@@ -470,5 +576,22 @@ final class PullRequestDetailViewModelTests: XCTestCase {
                                       canEdit: canEdit),
             files: files
         )
+    }
+}
+
+/// Holds back the detail until the comments request starts, proving the two run at the same time.
+private actor DetailLoadGate {
+    private var started = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func commentsStarted() {
+        started = true
+        waiters.forEach { $0.resume() }
+        waiters = []
+    }
+
+    func waitForComments() async {
+        guard !started else { return }
+        await withCheckedContinuation { waiters.append($0) }
     }
 }

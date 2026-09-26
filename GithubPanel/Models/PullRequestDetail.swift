@@ -47,6 +47,8 @@ struct PullRequestDetail: Equatable {
     let commits: Int
     /// Whether the viewer authored the pull request and GitHub lets them edit its title and description.
     var canEdit = false
+    /// When GitHub last changed the pull request. Compared with the list's `updatedAt` to tell whether a cached copy is stale.
+    var updatedAt: Date?
 }
 
 struct PullRequestFile: Identifiable, Equatable {

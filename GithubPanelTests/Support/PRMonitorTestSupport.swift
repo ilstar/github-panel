@@ -45,6 +45,7 @@ final class FakeGitHubAPI: GitHubAPIClient {
     var detailHandler: ((PullRequestReference) async throws -> PullRequestDetailContent)?
     private(set) var setFileViewedCalls: [(token: String, pullRequestID: String, path: String, viewed: Bool)] = []
     var comments: PullRequestComments = .empty
+    var commentsHandler: ((PullRequestReference) async throws -> PullRequestComments)?
     private(set) var commentsCalls: [(token: String, reference: PullRequestReference)] = []
     private(set) var postCommentCalls: [(token: String, reference: PullRequestReference, comment: NewPullRequestComment)] = []
     private(set) var editCalls: [(token: String, reference: PullRequestReference, title: String?, body: String?)] = []
@@ -127,6 +128,7 @@ final class FakeGitHubAPI: GitHubAPIClient {
     func fetchPullRequestComments(token: String, reference: PullRequestReference) async throws -> PullRequestComments {
         if let error { throw error }
         commentsCalls.append((token, reference))
+        if let commentsHandler { return try await commentsHandler(reference) }
         return comments
     }
 
@@ -360,7 +362,8 @@ func row(number: Int,
                  mergeQueue: Bool = false,
                  inMergeQueue: Bool = false,
                  isDraft: Bool = false,
-                 mergeStateStatus: String = "CLEAN") -> PullRequestRow {
+                 mergeStateStatus: String = "CLEAN",
+                 updatedAt: Date? = nil) -> PullRequestRow {
     PullRequestRow(id: "acme/widgets#\(number)",
                    nodeID: "node-\(number)",
                    title: "PR \(number)",
@@ -376,7 +379,7 @@ func row(number: Int,
                    isMergeQueueEnabled: mergeQueue,
                    isInMergeQueue: inMergeQueue,
                    mergeStateStatus: mergeStateStatus,
-                   updatedAt: Date(timeIntervalSince1970: TimeInterval(number)))
+                   updatedAt: updatedAt ?? Date(timeIntervalSince1970: TimeInterval(number)))
 }
 
 func reviewRequestRow(number: Int, author: String? = "octocat") -> ReviewRequestRow {
@@ -388,4 +391,28 @@ func reviewRequestRow(number: Int, author: String? = "octocat") -> ReviewRequest
                      authorLogin: author,
                      isDraft: false,
                      updatedAt: Date(timeIntervalSince1970: TimeInterval(number)))
+}
+
+func detailContent(for reference: PullRequestReference,
+                   title: String = "PR",
+                   updatedAt: Date? = nil) -> PullRequestDetailContent {
+    PullRequestDetailContent(
+        detail: PullRequestDetail(reference: reference,
+                                  nodeID: "node-\(reference.number)",
+                                  title: title,
+                                  body: "",
+                                  authorLogin: "octocat",
+                                  state: .open,
+                                  baseRef: "main",
+                                  headRef: "feature",
+                                  headSHA: "sha-\(reference.number)",
+                                  htmlURL: URL(string: "https://github.com/\(reference.repoFullName)/pull/\(reference.number)")!,
+                                  createdAt: Date(timeIntervalSince1970: 0),
+                                  additions: 0,
+                                  deletions: 0,
+                                  changedFiles: 0,
+                                  commits: 1,
+                                  updatedAt: updatedAt),
+        files: []
+    )
 }

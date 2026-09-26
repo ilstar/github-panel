@@ -24,6 +24,8 @@ final class PRMonitor: ObservableObject {
     @Published var historyPage: Int = 1
     @Published var historyTotalCount: Int = 0
     let isUsingMockData: Bool
+    /// Details and comments of pull requests loaded so far, shared by every detail view.
+    let detailCache = PullRequestDetailCache()
     @Published var refreshInterval: TimeInterval {
         didSet {
             defaults.set(refreshInterval, forKey: DefaultsKeys.refreshInterval)
@@ -57,6 +59,7 @@ final class PRMonitor: ObservableObject {
     private var activeRefreshID: UUID?
     private var refreshQueued = false
     private var refreshRevision = 0
+    private var prefetchTask: Task<Void, Never>?
     private var historyLoadedSuccessfully = false
     private var lastStates: [String: CheckState] = [:]
     private var nextTimerRefreshAt: Date?
@@ -141,6 +144,9 @@ final class PRMonitor: ObservableObject {
         historyLoadedSuccessfully = false
         nextTimerRefreshAt = nil
         consecutiveThrottledFailures = 0
+        prefetchTask?.cancel()
+        prefetchTask = nil
+        detailCache.removeAll()
         isLoading = false
         isHistoryLoading = false
         isReviewRequestsLoading = false
@@ -333,6 +339,7 @@ final class PRMonitor: ObservableObject {
                     updateNotificationsForRows(result.rows)
                     setPRRows(result.rows)
                     lastRefreshAt = dateProvider.now
+                    prefetchDetails(for: result.rows)
                 }
             } catch {
                 guard session == credentialSession else { return }
@@ -352,6 +359,45 @@ final class PRMonitor: ObservableObject {
         activeRefreshTask = nil
         activeRefreshID = nil
         isLoading = false
+    }
+
+    /// Loads, one pull request at a time, the details of open pull requests that changed since they were cached,
+    /// so they show right away when opened. Unchanged pull requests cost no requests.
+    private func prefetchDetails(for rows: [PullRequestRow]) {
+        guard prefetchTask == nil, let token = loadSessionToken() else { return }
+        let references = rows.filter { detailCache.needsRefresh($0.reference, updatedAt: $0.updatedAt) }.map(\.reference)
+        guard !references.isEmpty else { return }
+        let session = credentialSession
+        prefetchTask = Task { @MainActor [weak self] in
+            await self?.prefetch(references, token: token, session: session)
+        }
+    }
+
+    private func prefetch(_ references: [PullRequestReference], token: String, session: UUID) async {
+        defer {
+            if session == credentialSession {
+                prefetchTask = nil
+            }
+        }
+        for reference in references {
+            guard !Task.isCancelled, session == credentialSession else { return }
+            do {
+                async let comments = api.fetchPullRequestComments(token: token, reference: reference)
+                let content = try await api.fetchPullRequestDetail(token: token, reference: reference)
+                let loadedComments = try await comments
+                guard session == credentialSession else { return }
+                detailCache.store(content)
+                detailCache.store(loadedComments, for: reference)
+            } catch {
+                // Prefetching is best effort. Stop when GitHub throttles, so the list refresh keeps its budget.
+                if Self.isThrottlingError(error) { return }
+            }
+        }
+    }
+
+    /// Waits for the background detail prefetch to finish. Used by tests.
+    func waitForPrefetch() async {
+        await prefetchTask?.value
     }
 
     private func scheduleNextTimerRefresh(after error: Error?) {
