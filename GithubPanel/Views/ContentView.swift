@@ -24,11 +24,11 @@ struct ContentView: View {
     var body: some View {
         HSplitView {
             listPane
-                .frame(minWidth: 420, idealWidth: 460, maxWidth: 640)
+                .frame(minWidth: 580, idealWidth: 600, maxWidth: 760)
             detailPane
                 .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(minWidth: 860, minHeight: 500)
+        .frame(minWidth: 1000, minHeight: 500)
         .onAppear {
             monitor.start()
         }
@@ -156,6 +156,7 @@ struct ContentView: View {
 
                 Spacer()
                 refreshPill
+                    .fixedSize()
             }
             .onChange(of: monitor.selectedTab) { tab in
                 if tab == .history {
