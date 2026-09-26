@@ -78,9 +78,13 @@ struct ContentView: View {
     @ViewBuilder
     private var detailPane: some View {
         if let reference = selectedReference {
-            PullRequestDetailView(viewModel: PullRequestDetailViewModel(reference: reference) { [monitor] reference in
-                try await monitor.fetchPullRequestDetail(reference)
-            })
+            PullRequestDetailView(viewModel: PullRequestDetailViewModel(
+                reference: reference,
+                fetch: { [monitor] reference in try await monitor.fetchPullRequestDetail(reference) },
+                setViewed: { [monitor] pullRequestID, path, viewed in
+                    try await monitor.setFileViewed(pullRequestID: pullRequestID, path: path, viewed: viewed)
+                }
+            ))
             .id(reference)
         } else {
             Text(monitor.hasToken ? "Select a pull request" : "Add a GitHub token to begin.")

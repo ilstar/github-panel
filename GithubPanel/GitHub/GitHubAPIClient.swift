@@ -11,6 +11,7 @@ protocol GitHubAPIClient {
     func disableAutoMerge(token: String, pullRequestID: String) async throws
     func mergePullRequest(token: String, repoFullName: String, number: Int) async throws -> Bool
     func fetchPullRequestDetail(token: String, reference: PullRequestReference) async throws -> PullRequestDetailContent
+    func setFileViewed(token: String, pullRequestID: String, path: String, viewed: Bool) async throws
 }
 
 protocol HTTPTransport {

@@ -6,6 +6,8 @@ final class MockGitHubAPI: GitHubAPIClient {
     private var pullRequests: [String: PullRequestRow]
     private let history: [PullRequestHistoryRow]
     private let reviewRequests: ReviewRequests
+    /// Viewed file paths, keyed by pull request node ID.
+    private var viewedFiles: [String: Set<String>] = [:]
 
     init(now: Date = Date(), isEmpty: Bool = false) {
         let rows = isEmpty ? [] : Self.makePullRequests().map {
@@ -75,7 +77,9 @@ final class MockGitHubAPI: GitHubAPIClient {
             ?? reviewRequests.rows.first { $0.id == reference.id }?.title
             ?? "Mock pull request"
         let isDraft = pullRequests[reference.id]?.isDraft ?? false
+        let nodeID = "mock-detail-\(reference.id)"
         let detail = PullRequestDetail(reference: reference,
+                                       nodeID: nodeID,
                                        title: title,
                                        body: Self.detailBody,
                                        authorLogin: user.login,
@@ -88,7 +92,21 @@ final class MockGitHubAPI: GitHubAPIClient {
                                        deletions: Self.detailFiles.reduce(0) { $0 + $1.deletions },
                                        changedFiles: Self.detailFiles.count,
                                        commits: 3)
-        return PullRequestDetailContent(detail: detail, files: Self.detailFiles)
+        let viewed = viewedFiles[nodeID] ?? []
+        let files = Self.detailFiles.map { file in
+            var file = file
+            file.isViewed = viewed.contains(file.filename)
+            return file
+        }
+        return PullRequestDetailContent(detail: detail, files: files)
+    }
+
+    func setFileViewed(token: String, pullRequestID: String, path: String, viewed: Bool) async throws {
+        if viewed {
+            viewedFiles[pullRequestID, default: []].insert(path)
+        } else {
+            viewedFiles[pullRequestID]?.remove(path)
+        }
     }
 
     private static let detailBody = """
@@ -115,8 +133,8 @@ final class MockGitHubAPI: GitHubAPIClient {
         PullRequestFile(filename: "Sources/Widget.swift",
                         previousFilename: nil,
                         status: .modified,
-                        additions: 3,
-                        deletions: 1,
+                        additions: 6,
+                        deletions: 4,
                         patch: """
                         @@ -10,6 +10,8 @@ struct Widget {
                              let name: String
@@ -127,6 +145,16 @@ final class MockGitHubAPI: GitHubAPIClient {
                         +    let isEnabled: Bool
                          
                              var description: String {
+                        @@ -20,6 +22,6 @@ struct Widget {
+                             func greet() -> String {
+                        -        return "hello world"
+                        +        return "hello claude"
+                             }
+                        -  func reset() {
+                        -    size = 0
+                        +    func reset() {
+                        +        size = 0
+                             }
                         """),
         PullRequestFile(filename: "Sources/WidgetView.swift",
                         previousFilename: nil,
@@ -150,6 +178,18 @@ final class MockGitHubAPI: GitHubAPIClient {
                         @@ -1,2 +0,0 @@
                         -// Old code
                         -struct Legacy {}
+                        """),
+        PullRequestFile(filename: "Sources/Settings/Panels/General.swift",
+                        previousFilename: nil,
+                        status: .modified,
+                        additions: 1,
+                        deletions: 1,
+                        patch: """
+                        @@ -3,3 +3,3 @@ struct GeneralPanel: View {
+                             var body: some View {
+                        -        Toggle("Launch at login", isOn: $launchAtLogin)
+                        +        Toggle("Open at login", isOn: $launchAtLogin)
+                             }
                         """),
         PullRequestFile(filename: "Resources/logo.png",
                         previousFilename: nil,

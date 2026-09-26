@@ -203,8 +203,46 @@ final class GitHubAPI: GitHubAPIClient {
         let pull = try await decode(PullResponse.self, request: makeRequest(path: pullPath, token: token))
         // GitHub caps this at 100 files per page; later pages are not loaded yet.
         let files = try await decode([PullFileResponse].self, request: makeRequest(path: "\(pullPath)/files?per_page=100", token: token))
+        // Viewed marks are a nice-to-have; the diff still loads when GitHub does not return them.
+        let viewed = (try? await fetchViewedFiles(token: token, owner: parts[0], name: parts[1], number: reference.number)) ?? []
         return PullRequestDetailContent(detail: pull.detail(reference: reference),
-                                        files: files.map(\.file))
+                                        files: files.map { file in
+                                            var file = file.file
+                                            file.isViewed = viewed.contains(file.filename)
+                                            return file
+                                        })
+    }
+
+    func setFileViewed(token: String, pullRequestID: String, path: String, viewed: Bool) async throws {
+        let mutation = viewed ? "markFileAsViewed" : "unmarkFileAsViewed"
+        let query = """
+        mutation($id: ID!, $path: String!) {
+          \(mutation)(input: { pullRequestId: $id, path: $path }) {
+            pullRequest { id }
+          }
+        }
+        """
+        struct Response: Decodable {}
+        _ = try await graphQL(Response.self, query: query, variables: ["id": pullRequestID, "path": path], token: token)
+    }
+
+    /// Paths the viewer marked as viewed. GitHub reports files changed since then as `DISMISSED`, not `VIEWED`.
+    private func fetchViewedFiles(token: String, owner: String, name: String, number: Int) async throws -> Set<String> {
+        let query = """
+        query($owner: String!, $name: String!, $number: Int!) {
+          repository(owner: $owner, name: $name) {
+            pullRequest(number: $number) {
+              files(first: 100) { nodes { path viewerViewedState } }
+            }
+          }
+        }
+        """
+        let response = try await graphQL(ViewedFilesResponse.self,
+                                         query: query,
+                                         variables: ["owner": owner, "name": name, "number": number],
+                                         token: token)
+        let nodes = response.repository?.pullRequest?.files?.nodes ?? []
+        return Set(nodes.filter { $0.viewerViewedState == "VIEWED" }.map(\.path))
     }
 
     private func makeRequest(path: String, token: String) -> URLRequest {
@@ -349,6 +387,7 @@ private struct PullResponse: Decodable {
         let ref: String
     }
 
+    let nodeID: String
     let title: String
     let body: String?
     let user: User
@@ -366,6 +405,7 @@ private struct PullResponse: Decodable {
 
     enum CodingKeys: String, CodingKey {
         case title, body, user, state, draft, base, head, additions, deletions, commits
+        case nodeID = "node_id"
         case mergedAt = "merged_at"
         case htmlURL = "html_url"
         case createdAt = "created_at"
@@ -384,6 +424,7 @@ private struct PullResponse: Decodable {
             detailState = .open
         }
         return PullRequestDetail(reference: reference,
+                                 nodeID: nodeID,
                                  title: title,
                                  body: body ?? "",
                                  authorLogin: user.login,
@@ -420,6 +461,18 @@ private struct PullFileResponse: Decodable {
                         deletions: deletions,
                         patch: patch)
     }
+}
+
+private struct ViewedFilesResponse: Decodable {
+    struct Repository: Decodable { let pullRequest: PullRequest? }
+    struct PullRequest: Decodable { let files: Files? }
+    struct Files: Decodable { let nodes: [File] }
+    struct File: Decodable {
+        let path: String
+        let viewerViewedState: String
+    }
+
+    let repository: Repository?
 }
 
 private struct OpenPullRequestsResponse: Decodable {
