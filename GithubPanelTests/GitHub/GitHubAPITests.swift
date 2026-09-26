@@ -135,6 +135,47 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertTrue(request.url?.query?.contains("per_page=10") == true)
     }
 
+    func testFetchReviewRequestsSplitsDirectAndTeamRequestsInOneRequest() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: """
+        {"data":{
+          "direct":{"nodes":[
+            {"id":"PR_a","title":"Direct","number":4,"url":"https://github.com/acme/widgets/pull/4",
+             "updatedAt":"2026-04-12T12:34:56Z","isDraft":false,
+             "repository":{"nameWithOwner":"acme/widgets"},"author":{"login":"octocat"}}
+          ]},
+          "all":{"nodes":[
+            {"id":"PR_b","title":"Team","number":9,"url":"https://github.com/acme/gears/pull/9",
+             "updatedAt":"2026-04-13T12:34:56Z","isDraft":true,
+             "repository":{"nameWithOwner":"acme/gears"},"author":null},
+            {"id":"PR_a","title":"Direct","number":4,"url":"https://github.com/acme/widgets/pull/4",
+             "updatedAt":"2026-04-12T12:34:56Z","isDraft":false,
+             "repository":{"nameWithOwner":"acme/widgets"},"author":{"login":"octocat"}}
+          ]}
+        }}
+        """)
+
+        let requests = try await GitHubAPI(transport: transport).fetchReviewRequests(token: "token")
+
+        XCTAssertEqual(requests.fromMe.map(\.id), ["acme/widgets#4"])
+        XCTAssertEqual(requests.fromMyTeams.map(\.id), ["acme/gears#9"])
+        let direct = try XCTUnwrap(requests.fromMe.first)
+        XCTAssertEqual(direct.title, "Direct")
+        XCTAssertEqual(direct.authorLogin, "octocat")
+        XCTAssertEqual(direct.htmlURL.absoluteString, "https://github.com/acme/widgets/pull/4")
+        XCTAssertEqual(direct.updatedAt, ISO8601DateFormatter().date(from: "2026-04-12T12:34:56Z"))
+        XCTAssertFalse(direct.isDraft)
+        let team = try XCTUnwrap(requests.fromMyTeams.first)
+        XCTAssertNil(team.authorLogin)
+        XCTAssertTrue(team.isDraft)
+        XCTAssertEqual(transport.requests.count, 1)
+        XCTAssertEqual(transport.requests.first?.url?.path, "/graphql")
+        let body = try transport.graphQLBody(at: 0)
+        XCTAssertTrue(body.query.contains("user-review-requested:@me"))
+        XCTAssertTrue(body.query.contains(" review-requested:@me"))
+        XCTAssertTrue(body.query.contains("is:pr is:open archived:false"))
+    }
+
     func testGraphQLErrorsAreSurfaced() async throws {
         let transport = MockHTTPTransport()
         transport.enqueue(json: #"{"data":null,"errors":[{"message":"Nope"},{"message":"Still nope"}]}"#)

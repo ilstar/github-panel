@@ -5,6 +5,7 @@ final class MockGitHubAPI: GitHubAPIClient {
     private let user = GitHubUser(login: "mock-user")
     private var pullRequests: [String: PullRequestRow]
     private let history: [PullRequestHistoryRow]
+    private let reviewRequests: ReviewRequests
 
     init(now: Date = Date(), isEmpty: Bool = false) {
         let rows = isEmpty ? [] : Self.makePullRequests().map {
@@ -12,6 +13,7 @@ final class MockGitHubAPI: GitHubAPIClient {
         }
         self.pullRequests = Dictionary(uniqueKeysWithValues: rows.map { ("\($0.repoFullName)#\($0.number)", $0) })
         self.history = isEmpty ? [] : Self.makeHistory(now: now)
+        self.reviewRequests = isEmpty ? .empty : Self.makeReviewRequests(now: now)
     }
 
     func fetchCurrentUser(token: String) async throws -> GitHubUser {
@@ -32,6 +34,10 @@ final class MockGitHubAPI: GitHubAPIClient {
                                       page: safePage,
                                       perPage: safePerPage,
                                       totalCount: history.count)
+    }
+
+    func fetchReviewRequests(token: String) async throws -> ReviewRequests {
+        reviewRequests
     }
 
     func enqueuePullRequest(token: String, pullRequestID: String) async throws {
@@ -66,6 +72,7 @@ final class MockGitHubAPI: GitHubAPIClient {
     func fetchPullRequestDetail(token: String, reference: PullRequestReference) async throws -> PullRequestDetailContent {
         let title = pullRequests[reference.id]?.title
             ?? history.first { $0.id == reference.id }?.title
+            ?? reviewRequests.rows.first { $0.id == reference.id }?.title
             ?? "Mock pull request"
         let isDraft = pullRequests[reference.id]?.isDraft ?? false
         let detail = PullRequestDetail(reference: reference,
@@ -221,6 +228,26 @@ final class MockGitHubAPI: GitHubAPIClient {
                                          closedAt: closedAt,
                                          mergedAt: mergedAt)
         }
+    }
+
+    private static func makeReviewRequests(now: Date) -> ReviewRequests {
+        func request(number: Int, title: String, author: String, isDraft: Bool = false) -> ReviewRequestRow {
+            ReviewRequestRow(id: "mock/github-panel#\(number)",
+                             title: title,
+                             number: number,
+                             repoFullName: "mock/github-panel",
+                             htmlURL: URL(string: "https://github.com/mock/github-panel/pull/\(number)")!,
+                             authorLogin: author,
+                             isDraft: isDraft,
+                             updatedAt: now.addingTimeInterval(TimeInterval(-(number - 300) * 3_600)))
+        }
+        return ReviewRequests(fromMe: [
+            request(number: 301, title: "Review: tidy the settings window", author: "octocat"),
+            request(number: 302, title: "Review: faster diff parsing", author: "hubot")
+        ], fromMyTeams: [
+            request(number: 303, title: "Team review: rename the release task", author: "monalisa"),
+            request(number: 304, title: "Team review: draft icon refresh", author: "octocat", isDraft: true)
+        ])
     }
 
     private static func pullRequest(number: Int,

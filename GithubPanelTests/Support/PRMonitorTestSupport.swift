@@ -23,6 +23,9 @@ final class FakeGitHubAPI: GitHubAPIClient {
     var user = GitHubUser(login: "fred")
     var rows: [PullRequestRow] = []
     var historyPages: [Int: PullRequestHistoryPage] = [:]
+    var reviewRequests: ReviewRequests = .empty
+    var reviewRequestsHandler: ((String) async throws -> ReviewRequests)?
+    private(set) var fetchReviewRequestsTokens: [String] = []
     var error: Error?
     var mergeResult = true
 
@@ -67,6 +70,13 @@ final class FakeGitHubAPI: GitHubAPIClient {
                                                             page: page,
                                                             perPage: perPage,
                                                             totalCount: 0)
+    }
+
+    func fetchReviewRequests(token: String) async throws -> ReviewRequests {
+        if let error { throw error }
+        fetchReviewRequestsTokens.append(token)
+        if let reviewRequestsHandler { return try await reviewRequestsHandler(token) }
+        return reviewRequests
     }
 
     func enqueuePullRequest(token: String, pullRequestID: String) async throws {
@@ -341,4 +351,15 @@ func row(number: Int,
                    isInMergeQueue: inMergeQueue,
                    mergeStateStatus: mergeStateStatus,
                    updatedAt: Date(timeIntervalSince1970: TimeInterval(number)))
+}
+
+func reviewRequestRow(number: Int, author: String? = "octocat") -> ReviewRequestRow {
+    ReviewRequestRow(id: "acme/widgets#\(number)",
+                     title: "Review \(number)",
+                     number: number,
+                     repoFullName: "acme/widgets",
+                     htmlURL: URL(string: "https://github.com/acme/widgets/pull/\(number)")!,
+                     authorLogin: author,
+                     isDraft: false,
+                     updatedAt: Date(timeIntervalSince1970: TimeInterval(number)))
 }

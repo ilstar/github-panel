@@ -11,6 +11,15 @@ final class MockGitHubAPITests: XCTestCase {
         XCTAssertTrue(result.rows.isEmpty)
     }
 
+    func testMockReviewRequestsCoverBothGroups() async throws {
+        let requests = try await MockGitHubAPI().fetchReviewRequests(token: "token")
+        let empty = try await MockGitHubAPI(isEmpty: true).fetchReviewRequests(token: "token")
+
+        XCTAssertFalse(requests.fromMe.isEmpty)
+        XCTAssertFalse(requests.fromMyTeams.isEmpty)
+        XCTAssertEqual(empty, .empty)
+    }
+
     func testMockDetailUsesTheListTitleAndParsableDiffs() async throws {
         let api = MockGitHubAPI()
         let reference = PullRequestReference(repoFullName: "mock/github-panel", number: 109)

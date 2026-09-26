@@ -4,6 +4,7 @@ protocol GitHubAPIClient {
     func fetchCurrentUser(token: String) async throws -> GitHubUser
     func fetchOpenPRs(token: String) async throws -> OpenPullRequests
     func fetchClosedPRs(token: String, username: String, page: Int, perPage: Int) async throws -> PullRequestHistoryPage
+    func fetchReviewRequests(token: String) async throws -> ReviewRequests
     func enqueuePullRequest(token: String, pullRequestID: String) async throws
     func markPullRequestReadyForReview(token: String, pullRequestID: String) async throws
     func enableAutoMerge(token: String, pullRequestID: String) async throws
