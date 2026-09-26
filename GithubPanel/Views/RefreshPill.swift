@@ -6,7 +6,7 @@ struct RefreshAnimationStopPlan: Equatable {
 }
 
 enum RefreshAnimation {
-    static let spinDuration: TimeInterval = 1.6
+    static let spinDuration: TimeInterval = 1.2
 
     static func shouldUpdateTimeline(isLoading: Bool, isSettling: Bool) -> Bool {
         isLoading || isSettling
