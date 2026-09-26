@@ -37,6 +37,81 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.diffLines["logo.png"], [])
     }
 
+    func testLoadReadsViewedFiles() async {
+        let files = [
+            file("a.swift", isViewed: true),
+            file("b.swift", isViewed: false)
+        ]
+        let viewModel = PullRequestDetailViewModel(reference: reference) { [self] _ in
+            detailContent(title: "Viewed", files: files)
+        }
+
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.viewedFiles, ["a.swift"])
+    }
+
+    func testSetViewedUpdatesRightAwayAndSyncs() async {
+        var calls: [(String, String, Bool)] = []
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+                                                   fetch: { [self] _ in detailContent(title: "Viewed", files: [file("a.swift")]) },
+                                                   setViewed: { id, path, viewed in calls.append((id, path, viewed)) })
+        await viewModel.load()
+
+        await viewModel.setViewed(true, filename: "a.swift")
+        XCTAssertEqual(viewModel.viewedFiles, ["a.swift"])
+
+        await viewModel.setViewed(true, filename: "a.swift")
+        await viewModel.setViewed(false, filename: "a.swift")
+
+        XCTAssertEqual(viewModel.viewedFiles, [])
+        XCTAssertEqual(calls.map(\.0), ["PR_node", "PR_node"])
+        XCTAssertEqual(calls.map(\.1), ["a.swift", "a.swift"])
+        XCTAssertEqual(calls.map(\.2), [true, false])
+        XCTAssertNil(viewModel.errorMessage)
+    }
+
+    func testFailedSetViewedRestoresMarkAndShowsError() async {
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+                                                   fetch: { [self] _ in detailContent(title: "Viewed", files: [file("a.swift")]) },
+                                                   setViewed: { _, _, _ in
+                                                       throw GraphQLError(message: "Resource not accessible")
+                                                   })
+        await viewModel.load()
+
+        await viewModel.setViewed(true, filename: "a.swift")
+
+        XCTAssertEqual(viewModel.viewedFiles, [])
+        XCTAssertEqual(viewModel.errorMessage, "Resource not accessible")
+    }
+
+    func testSetViewedBeforeLoadDoesNothing() async {
+        var calls = 0
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+                                                   fetch: { [self] _ in detailContent(title: "Viewed") },
+                                                   setViewed: { _, _, _ in calls += 1 })
+
+        await viewModel.setViewed(true, filename: "a.swift")
+
+        XCTAssertEqual(calls, 0)
+        XCTAssertEqual(viewModel.viewedFiles, [])
+    }
+
+    func testPresentationHonorsHiddenWhitespace() async {
+        let patch = "@@ -1,2 +1,2 @@\n-  a\n-b\n+    a\n+c"
+        let viewModel = PullRequestDetailViewModel(reference: reference) { [self] _ in
+            detailContent(title: "Diff", files: [file("a.swift", patch: patch)])
+        }
+        await viewModel.load()
+
+        let shown = viewModel.presentation(for: "a.swift", hideWhitespace: false)
+        let hidden = viewModel.presentation(for: "a.swift", hideWhitespace: true)
+
+        XCTAssertEqual(shown.unified.map(\.kind), [.hunk, .deletion, .deletion, .addition, .addition])
+        XCTAssertEqual(hidden.unified.map(\.kind), [.hunk, .context, .deletion, .addition])
+        XCTAssertEqual(viewModel.presentation(for: "missing.swift", hideWhitespace: false).unified, [])
+    }
+
     func testFailedReloadKeepsPreviousContentAndShowsError() async {
         let content = detailContent(title: "First")
         var shouldFail = false
@@ -71,6 +146,18 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         XCTAssertEqual(api.detailCalls.map(\.reference), [reference])
     }
 
+    func testMonitorSetsFileViewedWithSessionToken() async throws {
+        let api = FakeGitHubAPI()
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+
+        try await monitor.setFileViewed(pullRequestID: "PR_node", path: "a.swift", viewed: true)
+
+        XCTAssertEqual(api.setFileViewedCalls.map(\.token), ["token"])
+        XCTAssertEqual(api.setFileViewedCalls.map(\.pullRequestID), ["PR_node"])
+        XCTAssertEqual(api.setFileViewedCalls.map(\.path), ["a.swift"])
+        XCTAssertEqual(api.setFileViewedCalls.map(\.viewed), [true])
+    }
+
     func testMonitorFetchWithoutTokenFails() async {
         let api = FakeGitHubAPI()
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: nil))
@@ -84,9 +171,15 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         XCTAssertTrue(api.detailCalls.isEmpty)
     }
 
+    private func file(_ filename: String, patch: String? = nil, isViewed: Bool = false) -> PullRequestFile {
+        PullRequestFile(filename: filename, previousFilename: nil, status: .modified,
+                        additions: 1, deletions: 1, patch: patch, isViewed: isViewed)
+    }
+
     private func detailContent(title: String, files: [PullRequestFile] = []) -> PullRequestDetailContent {
         PullRequestDetailContent(
             detail: PullRequestDetail(reference: reference,
+                                      nodeID: "PR_node",
                                       title: title,
                                       body: "",
                                       authorLogin: "octocat",

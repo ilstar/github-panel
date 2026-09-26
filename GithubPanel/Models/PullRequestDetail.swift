@@ -29,6 +29,8 @@ struct PullRequestDetail: Equatable {
     }
 
     let reference: PullRequestReference
+    /// The GraphQL node ID, used to mark files as viewed.
+    let nodeID: String
     let title: String
     let body: String
     let authorLogin: String
@@ -62,6 +64,8 @@ struct PullRequestFile: Identifiable, Equatable {
     let deletions: Int
     /// Unified diff hunks. GitHub leaves this out for binary files and very large diffs.
     let patch: String?
+    /// Whether the viewer marked this file as viewed on GitHub. A file changed since it was viewed is not viewed.
+    var isViewed = false
 }
 
 /// A pull request's detail and changed files, loaded together for the detail window.

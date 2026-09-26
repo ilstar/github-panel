@@ -460,6 +460,11 @@ final class PRMonitor: ObservableObject {
         return try await api.fetchPullRequestDetail(token: token, reference: reference)
     }
 
+    func setFileViewed(pullRequestID: String, path: String, viewed: Bool) async throws {
+        guard let token = loadSessionToken() else { throw MissingTokenError() }
+        try await api.setFileViewed(token: token, pullRequestID: pullRequestID, path: path, viewed: viewed)
+    }
+
     func requestMarkReady(for row: PullRequestRow) async {
         guard row.isDraft, let token = loadSessionToken() else { return }
         let session = credentialSession

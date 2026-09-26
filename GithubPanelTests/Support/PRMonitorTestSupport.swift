@@ -43,6 +43,7 @@ final class FakeGitHubAPI: GitHubAPIClient {
     private(set) var mergePullRequestCalls: [(repoFullName: String, number: Int)] = []
     private(set) var detailCalls: [(token: String, reference: PullRequestReference)] = []
     var detailHandler: ((PullRequestReference) async throws -> PullRequestDetailContent)?
+    private(set) var setFileViewedCalls: [(token: String, pullRequestID: String, path: String, viewed: Bool)] = []
     var enableHandler: ((String) async -> Void)?
     var enqueueHandler: ((String) async -> Void)?
 
@@ -112,6 +113,11 @@ final class FakeGitHubAPI: GitHubAPIClient {
         detailCalls.append((token, reference))
         guard let detailHandler else { throw URLError(.fileDoesNotExist) }
         return try await detailHandler(reference)
+    }
+
+    func setFileViewed(token: String, pullRequestID: String, path: String, viewed: Bool) async throws {
+        if let error { throw error }
+        setFileViewedCalls.append((token, pullRequestID, path, viewed))
     }
 }
 

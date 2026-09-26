@@ -254,12 +254,14 @@ final class GitHubAPITests: XCTestCase {
         let transport = MockHTTPTransport()
         transport.enqueue(json: pullDetailResponse)
         transport.enqueue(json: pullFilesResponse)
+        transport.enqueue(json: viewedFilesResponse)
         let reference = PullRequestReference(repoFullName: "acme/widgets", number: 7)
 
         let content = try await GitHubAPI(transport: transport).fetchPullRequestDetail(token: "token", reference: reference)
 
         let detail = content.detail
         XCTAssertEqual(detail.reference, reference)
+        XCTAssertEqual(detail.nodeID, "PR_node")
         XCTAssertEqual(detail.title, "Add tests")
         XCTAssertEqual(detail.body, "Adds **tests**.")
         XCTAssertEqual(detail.authorLogin, "octocat")
@@ -279,7 +281,8 @@ final class GitHubAPITests: XCTestCase {
                             status: .renamed,
                             additions: 1,
                             deletions: 1,
-                            patch: "@@ -1 +1 @@\n-a\n+b"),
+                            patch: "@@ -1 +1 @@\n-a\n+b",
+                            isViewed: true),
             PullRequestFile(filename: "logo.png",
                             previousFilename: nil,
                             status: .added,
@@ -290,10 +293,60 @@ final class GitHubAPITests: XCTestCase {
 
         XCTAssertEqual(transport.requests.map { $0.url?.path }, [
             "/repos/acme/widgets/pulls/7",
-            "/repos/acme/widgets/pulls/7/files"
+            "/repos/acme/widgets/pulls/7/files",
+            "/graphql"
         ])
         XCTAssertEqual(transport.requests[1].url?.query, "per_page=100")
         XCTAssertEqual(transport.requests[0].value(forHTTPHeaderField: "Authorization"), "Bearer token")
+        let viewedBody = try transport.graphQLBody(at: 2)
+        XCTAssertTrue(viewedBody.query.contains("viewerViewedState"))
+        XCTAssertEqual(viewedBody.variables["owner"] as? String, "acme")
+        XCTAssertEqual(viewedBody.variables["name"] as? String, "widgets")
+        XCTAssertEqual(viewedBody.variables["number"] as? Int, 7)
+    }
+
+    func testFetchPullRequestDetailLoadsFilesWhenViewedStateFails() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: pullDetailResponse)
+        transport.enqueue(json: pullFilesResponse)
+        transport.enqueue(json: #"{"errors":[{"message":"Resource not accessible"}]}"#)
+
+        let content = try await GitHubAPI(transport: transport)
+            .fetchPullRequestDetail(token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7))
+
+        XCTAssertEqual(content.files.map(\.filename), ["Sources/New.swift", "logo.png"])
+        XCTAssertFalse(content.files.contains(where: \.isViewed))
+    }
+
+    func testSetFileViewedSendsMarkAndUnmarkMutations() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: #"{"data":{"markFileAsViewed":{"pullRequest":{"id":"PR_node"}}}}"#)
+        transport.enqueue(json: #"{"data":{"unmarkFileAsViewed":{"pullRequest":{"id":"PR_node"}}}}"#)
+        let api = GitHubAPI(transport: transport)
+
+        try await api.setFileViewed(token: "token", pullRequestID: "PR_node", path: "Sources/New.swift", viewed: true)
+        try await api.setFileViewed(token: "token", pullRequestID: "PR_node", path: "Sources/New.swift", viewed: false)
+
+        let mark = try transport.graphQLBody(at: 0)
+        XCTAssertTrue(mark.query.contains("markFileAsViewed(input: { pullRequestId: $id, path: $path })"))
+        XCTAssertFalse(mark.query.contains("unmarkFileAsViewed"))
+        XCTAssertEqual(mark.variables["id"] as? String, "PR_node")
+        XCTAssertEqual(mark.variables["path"] as? String, "Sources/New.swift")
+        let unmark = try transport.graphQLBody(at: 1)
+        XCTAssertTrue(unmark.query.contains("unmarkFileAsViewed(input: { pullRequestId: $id, path: $path })"))
+    }
+
+    func testSetFileViewedSurfacesGraphQLErrors() async {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: #"{"errors":[{"message":"Could not resolve to a node"}]}"#)
+
+        do {
+            try await GitHubAPI(transport: transport)
+                .setFileViewed(token: "token", pullRequestID: "PR_node", path: "a.swift", viewed: true)
+            XCTFail("Expected an error")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, "Could not resolve to a node")
+        }
     }
 
     func testFetchPullRequestDetailResolvesState() async throws {
@@ -366,6 +419,7 @@ final class GitHubAPITests: XCTestCase {
 
 private let pullDetailResponse = """
 {
+  "node_id": "PR_node",
   "title": "Add tests",
   "body": "Adds **tests**.",
   "user": { "login": "octocat" },
@@ -398,6 +452,23 @@ private let pullFilesResponse = """
     "deletions": 0
   }
 ]
+"""
+
+private let viewedFilesResponse = """
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "files": {
+          "nodes": [
+            { "path": "Sources/New.swift", "viewerViewedState": "VIEWED" },
+            { "path": "logo.png", "viewerViewedState": "DISMISSED" }
+          ]
+        }
+      }
+    }
+  }
+}
 """
 
 private final class MockHTTPTransport: HTTPTransport {

@@ -48,8 +48,8 @@ struct PullRequestDetailView: View {
                 case .conversation:
                     PullRequestConversationView(detail: content.detail)
                 case .files:
-                    PullRequestFilesView(files: content.files,
-                                         diffLines: viewModel.diffLines,
+                    PullRequestFilesView(viewModel: viewModel,
+                                         files: content.files,
                                          filesURL: content.detail.htmlURL.appendingPathComponent("files"))
                 }
             } else if let error = viewModel.errorMessage {
@@ -283,4 +283,37 @@ enum DiffColors {
     static let additionBackground = Color.green.opacity(0.14)
     static let deletionBackground = Color.red.opacity(0.12)
     static let hunkBackground = Color.blue.opacity(0.08)
+    /// Stronger fills for the words that changed inside a line.
+    static let additionHighlight = Color.green.opacity(0.4)
+    static let deletionHighlight = Color.red.opacity(0.32)
+
+    static func background(for kind: DiffLine.Kind) -> Color {
+        switch kind {
+        case .addition: return additionBackground
+        case .deletion: return deletionBackground
+        case .hunk: return hunkBackground
+        case .context, .note: return .clear
+        }
+    }
+
+    static func gutterBackground(for kind: DiffLine.Kind) -> Color {
+        switch kind {
+        case .addition, .deletion, .hunk: return background(for: kind)
+        case .context, .note: return Color.secondary.opacity(0.04)
+        }
+    }
+
+    /// The line's text with its changed words filled in.
+    static func attributedText(_ line: DiffDisplayLine) -> AttributedString {
+        let highlight = line.kind == .addition ? additionHighlight : deletionHighlight
+        var text = AttributedString()
+        for segment in line.segments {
+            var part = AttributedString(segment.text)
+            if segment.isChanged {
+                part.backgroundColor = highlight
+            }
+            text += part
+        }
+        return text.characters.isEmpty ? AttributedString(" ") : text
+    }
 }
