@@ -227,7 +227,8 @@ struct PullRequestFilesView: View {
     private var diffList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 16) {
+                // One lazy row per diff line, so only the lines on screen are built.
+                LazyVStack(alignment: .leading, spacing: 0) {
                     if files.isEmpty {
                         Text("No files changed.")
                             .foregroundStyle(.secondary)
@@ -236,12 +237,13 @@ struct PullRequestFilesView: View {
                             .foregroundStyle(.secondary)
                     }
 
-                    ForEach(visibleFiles) { file in
-                        fileSection(file)
-                            .id(file.filename)
+                    ForEach(diffRows) { row in
+                        diffRow(row)
                     }
                 }
-                .padding(24)
+                .padding(.horizontal, 24)
+                .padding(.bottom, 24)
+                .padding(.top, 8)
             }
             .onChange(of: scrollRequest) { request in
                 guard let request else { return }
@@ -251,65 +253,33 @@ struct PullRequestFilesView: View {
         .frame(maxWidth: .infinity)
     }
 
-    private func fileSection(_ file: PullRequestFile) -> some View {
-        let isCollapsed = collapsed.contains(file.filename)
-        let isViewed = viewModel.viewedFiles.contains(file.filename)
-        return VStack(alignment: .leading, spacing: 0) {
-            PullRequestFileHeader(file: file,
-                                  isCollapsed: isCollapsed,
-                                  isViewed: isViewed,
-                                  onToggle: {
-                                      if isCollapsed {
-                                          collapsed.remove(file.filename)
-                                      } else {
-                                          collapsed.insert(file.filename)
-                                      }
-                                  },
-                                  onSetViewed: { viewed in
-                                      // Marking a file viewed folds it; unmarking unfolds it.
-                                      if viewed {
-                                          collapsed.insert(file.filename)
-                                      } else {
-                                          collapsed.remove(file.filename)
-                                      }
-                                      Task { await viewModel.setViewed(viewed, filename: file.filename) }
-                                  })
-
-            if !isCollapsed {
-                Divider()
-                fileBody(file)
-            }
+    private var diffRows: [DiffListRow] {
+        DiffListRow.rows(files: visibleFiles,
+                         collapsed: collapsed,
+                         mode: mode,
+                         hideWhitespace: hideWhitespace) { filename in
+            guard let lines = viewModel.diffLines[filename], !lines.isEmpty else { return nil }
+            return viewModel.presentation(for: filename, hideWhitespace: hideWhitespace)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
-        )
     }
 
     @ViewBuilder
-    private func fileBody(_ file: PullRequestFile) -> some View {
-        if let lines = viewModel.diffLines[file.filename], !lines.isEmpty {
-            let presentation = viewModel.presentation(for: file.filename, hideWhitespace: hideWhitespace)
-            if hideWhitespace && !presentation.hasChanges {
-                fileMessage("Only whitespace changed.")
-            } else {
-                switch mode {
-                case .unified:
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(presentation.unified.enumerated()), id: \.offset) { _, line in
-                            DiffLineRow(line: line)
-                        }
-                    }
-                case .split:
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(presentation.split.enumerated()), id: \.offset) { _, row in
-                            SplitDiffRowView(row: row)
-                        }
-                    }
-                }
-            }
-        } else {
+    private func diffRow(_ row: DiffListRow) -> some View {
+        switch row {
+        case let .header(file):
+            fileHeader(file)
+                .padding(.top, 16)
+        case let .unified(_, _, line):
+            DiffLineRow(line: line)
+                .fileCardEdges(.middle)
+        case let .split(_, _, row):
+            SplitDiffRowView(row: row)
+                .fileCardEdges(.middle)
+        case let .message(_, text):
+            fileMessage(text)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fileCardEdges(.middle)
+        case let .noDiff(file):
             HStack(spacing: 4) {
                 Text(file.patch == nil ? "Binary file or diff too large to show here." : "No changes to show.")
                 Link("View on GitHub", destination: filesURL)
@@ -317,7 +287,39 @@ struct PullRequestFilesView: View {
             .font(.callout)
             .foregroundStyle(.secondary)
             .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fileCardEdges(.middle)
+        case .footer:
+            Color.clear
+                .frame(height: FileCardEdges.cornerRadius)
+                .fileCardEdges(.bottom)
         }
+    }
+
+    private func fileHeader(_ file: PullRequestFile) -> some View {
+        let isCollapsed = collapsed.contains(file.filename)
+        let isViewed = viewModel.viewedFiles.contains(file.filename)
+        return PullRequestFileHeader(file: file,
+                                     isCollapsed: isCollapsed,
+                                     isViewed: isViewed,
+                                     onToggle: {
+                                         if isCollapsed {
+                                             collapsed.remove(file.filename)
+                                         } else {
+                                             collapsed.insert(file.filename)
+                                         }
+                                     },
+                                     onSetViewed: { viewed in
+                                         // Marking a file viewed folds it; unmarking unfolds it.
+                                         if viewed {
+                                             collapsed.insert(file.filename)
+                                         } else {
+                                             collapsed.remove(file.filename)
+                                         }
+                                         Task { await viewModel.setViewed(viewed, filename: file.filename) }
+                                     })
+            // A folded file is a whole card; an open one continues into its diff rows.
+            .fileCardEdges(isCollapsed ? .all : .top)
     }
 
     private func fileMessage(_ message: String) -> some View {
@@ -418,6 +420,72 @@ struct PullRequestFileHeader: View {
     static func copyPath(_ path: String, to pasteboard: NSPasteboard = .general) {
         pasteboard.clearContents()
         pasteboard.setString(path, forType: .string)
+    }
+}
+
+/// Draws one row's share of a file's rounded card: the header is the top, diff lines are the sides, and the
+/// footer is the bottom. The rows are separate so the diff list can build them lazily.
+struct FileCardEdges: Shape {
+    enum Part {
+        case all
+        case top
+        case middle
+        case bottom
+    }
+
+    static let cornerRadius: CGFloat = 8
+
+    let part: Part
+
+    func path(in rect: CGRect) -> Path {
+        let rect = rect.insetBy(dx: 0.5, dy: 0)
+        let radius = Self.cornerRadius
+        var path = Path()
+        switch part {
+        case .all:
+            path.addRoundedRect(in: rect.insetBy(dx: 0, dy: 0.5), cornerSize: CGSize(width: radius, height: radius), style: .continuous)
+        case .top:
+            // Closed along the bottom, which draws the line between the header and the diff.
+            let rect = rect.insetBy(dx: 0, dy: 0.5)
+            path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + radius))
+            path.addArc(tangent1End: CGPoint(x: rect.minX, y: rect.minY), tangent2End: CGPoint(x: rect.minX + radius, y: rect.minY), radius: radius)
+            path.addLine(to: CGPoint(x: rect.maxX - radius, y: rect.minY))
+            path.addArc(tangent1End: CGPoint(x: rect.maxX, y: rect.minY), tangent2End: CGPoint(x: rect.maxX, y: rect.minY + radius), radius: radius)
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+            path.closeSubpath()
+        case .middle:
+            path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+            path.move(to: CGPoint(x: rect.maxX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        case .bottom:
+            let rect = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: rect.height - 0.5)
+            path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY - radius))
+            path.addArc(tangent1End: CGPoint(x: rect.minX, y: rect.maxY), tangent2End: CGPoint(x: rect.minX + radius, y: rect.maxY), radius: radius)
+            path.addLine(to: CGPoint(x: rect.maxX - radius, y: rect.maxY))
+            path.addArc(tangent1End: CGPoint(x: rect.maxX, y: rect.maxY), tangent2End: CGPoint(x: rect.maxX, y: rect.maxY - radius), radius: radius)
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        }
+        return path
+    }
+}
+
+extension View {
+    /// Clips the row to its part of the file card and draws that part of the border.
+    @ViewBuilder
+    func fileCardEdges(_ part: FileCardEdges.Part) -> some View {
+        let border = FileCardEdges(part: part).stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+        switch part {
+        case .all:
+            clipShape(RoundedRectangle(cornerRadius: FileCardEdges.cornerRadius, style: .continuous)).overlay(border)
+        case .top:
+            clipShape(FileCardEdges(part: .top)).overlay(border)
+        case .middle, .bottom:
+            // Only the header has corners to clip; the diff rows are square, so skip the mask.
+            overlay(border)
+        }
     }
 }
 
