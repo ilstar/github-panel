@@ -68,6 +68,7 @@ struct ContentView: View {
                 Color(nsColor: .textBackgroundColor)
             }
         }
+        .overlay(TitleBarDoubleClickArea())
         .ignoresSafeArea()
     }
 

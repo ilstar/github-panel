@@ -134,6 +134,7 @@ struct PullRequestDetailHeader: View {
     let onRefresh: () -> Void
     /// Saves a new title. Throws to keep the draft and show the error.
     let onSaveTitle: (String) async throws -> Void
+    @State private var copiedBranchNotice = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -185,8 +186,23 @@ struct PullRequestDetailHeader: View {
                 Text(summaryText)
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                    .tint(Theme.branch)
                     .lineLimit(2)
                     .padding(.leading, 2)
+                    .environment(\.openURL, OpenURLAction { url in
+                        guard let branch = BranchLink.branch(from: url) else { return .systemAction }
+                        Pasteboard.copy(branch)
+                        showCopiedBranch()
+                        return .handled
+                    })
+                    .help("Click a branch name to copy it")
+
+                if copiedBranchNotice {
+                    Text("Copied")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .transition(.opacity)
+                }
 
                 Spacer(minLength: 12)
 
@@ -214,9 +230,53 @@ struct PullRequestDetailHeader: View {
         }
     }
 
-    private var summaryText: String {
+    private var summaryText: AttributedString {
+        Self.summary(for: detail)
+    }
+
+    /// The line under the title, with each branch name as a link that copies it.
+    static func summary(for detail: PullRequestDetail) -> AttributedString {
         let commits = detail.commits == 1 ? "1 commit" : "\(detail.commits) commits"
-        return "\(detail.authorLogin) wants to merge \(commits) into \(detail.baseRef) from \(detail.headRef) · \(detail.reference.repoFullName)"
+        var text = AttributedString("\(detail.authorLogin) wants to merge \(commits) into ")
+        text += BranchLink.text(detail.baseRef)
+        text += AttributedString(" from ")
+        text += BranchLink.text(detail.headRef)
+        text += AttributedString(" · \(detail.reference.repoFullName)")
+        return text
+    }
+
+    private func showCopiedBranch() {
+        withAnimation(.easeOut(duration: 0.15)) { copiedBranchNotice = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            withAnimation(.easeOut(duration: 0.3)) { copiedBranchNotice = false }
+        }
+    }
+}
+
+/// Branch names in the header are links with this scheme, so clicking one copies it instead of opening a page.
+enum BranchLink {
+    static let scheme = "githubpanel-copy-branch"
+
+    static func url(for branch: String) -> URL? {
+        var components = URLComponents()
+        components.scheme = scheme
+        components.host = "branch"
+        components.queryItems = [URLQueryItem(name: "name", value: branch)]
+        return components.url
+    }
+
+    static func branch(from url: URL) -> String? {
+        guard url.scheme == scheme,
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        else { return nil }
+        return components.queryItems?.first { $0.name == "name" }?.value
+    }
+
+    static func text(_ branch: String) -> AttributedString {
+        var text = AttributedString(branch)
+        text.link = url(for: branch)
+        text.font = .callout.monospaced()
+        return text
     }
 }
 

@@ -21,6 +21,9 @@ enum Theme {
                               dark: NSColor(red: 0.70, green: 0.55, blue: 1.00, alpha: 1))
     static let amber = Color(light: NSColor(red: 0.80, green: 0.50, blue: 0.05, alpha: 1),
                              dark: NSColor(red: 1.00, green: 0.72, blue: 0.30, alpha: 1))
+    /// Branch names, which can be clicked to copy them.
+    static let branch = Color(light: NSColor(red: 0.04, green: 0.41, blue: 0.85, alpha: 1),
+                              dark: NSColor(red: 0.35, green: 0.65, blue: 1.00, alpha: 1))
 
     static let rowCornerRadius: CGFloat = 8
 }
