@@ -6,11 +6,22 @@ import SwiftUI
 /// Guards fast scrolling in Files changed. Each test scrolls the real diff list and a plain list of one text per
 /// line through the same window, then compares the two. Comparing against a plain list in the same run keeps the
 /// check about the diff rows themselves, not about how fast or busy the machine is.
+///
+/// The ratios still vary between runs, so these tests only run with `mise run test-performance`, which sets
+/// `RUN_PERFORMANCE_TESTS=1`. `mise run test` skips them.
 @MainActor
 final class DiffScrollPerformanceTests: XCTestCase {
     /// About one frame of a fast trackpad flick.
     private static let step: CGFloat = 120
     private static let steps = 100
+
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["RUN_PERFORMANCE_TESTS"] == "1",
+            "Performance tests run only with `mise run test-performance`"
+        )
+    }
 
     override func tearDown() {
         UserDefaults.standard.removeObject(forKey: PullRequestFilesView.viewModeDefaultsKey)

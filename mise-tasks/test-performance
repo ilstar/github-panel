@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+#MISE description="Run the scroll performance tests that 'mise run test' skips"
+source "$MISE_PROJECT_ROOT/scripts/lib.sh"
+
+# xcodebuild passes TEST_RUNNER_-prefixed variables to the test process without the prefix.
+export TEST_RUNNER_RUN_PERFORMANCE_TESTS=1
+xcodebuild_app "$CONFIGURATION" test -only-testing:GithubPanelTests/DiffScrollPerformanceTests

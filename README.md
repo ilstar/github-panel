@@ -60,6 +60,12 @@ Run the unit tests with:
 mise run test
 ```
 
+`mise run test` skips the scroll performance tests because their results vary between runs. Run them on their own with:
+
+```bash
+mise run test-performance
+```
+
 `make build`, `make test`, and other `make <task>` commands still work. The `Makefile` forwards them to `mise run <task>`.
 
 Short tasks are defined in `mise.toml`. Longer tasks are scripts in `mise-tasks/` that share `scripts/lib.sh`. `mise run test` also dry-runs the release tasks to check the commands they would run. Set `DRY_RUN=1` on any build or release task to print its commands without running them:
