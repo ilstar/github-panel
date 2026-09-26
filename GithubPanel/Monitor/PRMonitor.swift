@@ -392,6 +392,11 @@ final class PRMonitor: ObservableObject {
         }
     }
 
+    func fetchPullRequestDetail(_ reference: PullRequestReference) async throws -> PullRequestDetailContent {
+        guard let token = loadSessionToken() else { throw MissingTokenError() }
+        return try await api.fetchPullRequestDetail(token: token, reference: reference)
+    }
+
     func requestMarkReady(for row: PullRequestRow) async {
         guard row.isDraft, let token = loadSessionToken() else { return }
         let session = credentialSession
@@ -436,6 +441,10 @@ final class PRMonitor: ObservableObject {
             lastError = error.localizedDescription
         }
     }
+}
+
+struct MissingTokenError: LocalizedError {
+    var errorDescription: String? { "Add a GitHub token to load pull requests." }
 }
 
 private enum DefaultsKeys {
