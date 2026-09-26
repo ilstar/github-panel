@@ -475,8 +475,8 @@ final class PRMonitor: ObservableObject {
         try await api.postPullRequestComment(token: token, reference: reference, comment: comment)
     }
 
-    /// Saves a new title and description, then refreshes the list so the row shows the new title.
-    func editPullRequest(_ reference: PullRequestReference, title: String, body: String) async throws {
+    /// Saves a new title, description, or both, then refreshes the list so the row shows the new title.
+    func editPullRequest(_ reference: PullRequestReference, title: String?, body: String?) async throws {
         guard let token = loadSessionToken() else { throw MissingTokenError() }
         let session = credentialSession
         try await api.editPullRequest(token: token, reference: reference, title: title, body: body)

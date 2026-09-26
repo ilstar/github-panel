@@ -12,7 +12,8 @@ final class MockGitHubAPI: GitHubAPIClient {
     private var comments: [String: PullRequestComments] = [:]
     private var nextCommentID = 1_000
     /// Edited titles and descriptions, keyed by pull request reference ID.
-    private var edits: [String: (title: String, body: String)] = [:]
+    private var editedTitles: [String: String] = [:]
+    private var editedBodies: [String: String] = [:]
 
     init(now: Date = Date(), isEmpty: Bool = false) {
         let rows = isEmpty ? [] : Self.makePullRequests().map {
@@ -77,8 +78,7 @@ final class MockGitHubAPI: GitHubAPIClient {
     }
 
     func fetchPullRequestDetail(token: String, reference: PullRequestReference) async throws -> PullRequestDetailContent {
-        let edit = edits[reference.id]
-        let title = edit?.title
+        let title = editedTitles[reference.id]
             ?? pullRequests[reference.id]?.title
             ?? history.first { $0.id == reference.id }?.title
             ?? reviewRequests.rows.first { $0.id == reference.id }?.title
@@ -92,7 +92,7 @@ final class MockGitHubAPI: GitHubAPIClient {
         let detail = PullRequestDetail(reference: reference,
                                        nodeID: nodeID,
                                        title: title,
-                                       body: edit?.body ?? Self.detailBody,
+                                       body: editedBodies[reference.id] ?? Self.detailBody,
                                        authorLogin: authorLogin,
                                        state: isDraft ? .draft : .open,
                                        baseRef: "main",
@@ -273,8 +273,12 @@ final class MockGitHubAPI: GitHubAPIClient {
                         patch: nil)
     ]
 
-    func editPullRequest(token: String, reference: PullRequestReference, title: String, body: String) async throws {
-        edits[reference.id] = (title, body)
+    func editPullRequest(token: String, reference: PullRequestReference, title: String?, body: String?) async throws {
+        if let body {
+            editedBodies[reference.id] = body
+        }
+        guard let title else { return }
+        editedTitles[reference.id] = title
         if let row = pullRequests[reference.id] {
             pullRequests[reference.id] = row.copy(title: title)
         }

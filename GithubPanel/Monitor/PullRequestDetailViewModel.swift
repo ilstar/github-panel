@@ -8,8 +8,8 @@ final class PullRequestDetailViewModel: ObservableObject {
     typealias SetViewed = (String, String, Bool) async throws -> Void
     typealias FetchComments = (PullRequestReference) async throws -> PullRequestComments
     typealias PostComment = (NewPullRequestComment, PullRequestReference) async throws -> Void
-    /// Saves a new title and description.
-    typealias Edit = (PullRequestReference, String, String) async throws -> Void
+    /// Saves a new title, description, or both. Nil leaves that field as it is on GitHub.
+    typealias Edit = (PullRequestReference, String?, String?) async throws -> Void
 
     let reference: PullRequestReference
     /// The last loaded content. Kept when a reload fails so the window does not go blank.
@@ -104,16 +104,16 @@ final class PullRequestDetailViewModel: ObservableObject {
         }
     }
 
-    /// Saves a new title and description and shows them right away.
+    /// Saves a new title, description, or both and shows them right away. A blank title is ignored, since GitHub requires one.
     /// Throws when GitHub refuses the edit, so the editor can keep the draft.
-    func edit(title: String, body: String) async throws {
-        let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard content?.detail.canEdit == true, !title.isEmpty else { return }
+    func edit(title: String? = nil, body: String? = nil) async throws {
+        let title = title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard content?.detail.canEdit == true, title != nil || body != nil, title?.isEmpty != true else { return }
         try await sendEdit(reference, title, body)
         guard let current = content else { return }
         var detail = current.detail
-        detail.title = title
-        detail.body = body
+        detail.title = title ?? detail.title
+        detail.body = body ?? detail.body
         content = PullRequestDetailContent(detail: detail, files: current.files)
     }
 

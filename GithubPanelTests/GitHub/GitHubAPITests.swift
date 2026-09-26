@@ -342,20 +342,21 @@ final class GitHubAPITests: XCTestCase {
         }
     }
 
-    func testEditPullRequestPatchesTitleAndBody() async throws {
+    func testEditPullRequestPatchesOnlyTheGivenFields() async throws {
         let transport = MockHTTPTransport()
         transport.enqueue(json: #"{"number":7}"#)
+        transport.enqueue(json: #"{"number":7}"#)
+        let api = GitHubAPI(transport: transport)
+        let reference = PullRequestReference(repoFullName: "acme/widgets", number: 7)
 
-        try await GitHubAPI(transport: transport)
-            .editPullRequest(token: "token",
-                             reference: PullRequestReference(repoFullName: "acme/widgets", number: 7),
-                             title: "New title",
-                             body: "New **body**")
+        try await api.editPullRequest(token: "token", reference: reference, title: "New title", body: nil)
+        try await api.editPullRequest(token: "token", reference: reference, title: nil, body: "")
 
-        XCTAssertEqual(transport.requests.map(\.httpMethod), ["PATCH"])
-        XCTAssertEqual(transport.requests.map { $0.url?.path }, ["/repos/acme/widgets/pulls/7"])
+        XCTAssertEqual(transport.requests.map(\.httpMethod), ["PATCH", "PATCH"])
+        XCTAssertEqual(transport.requests.map { $0.url?.path }, ["/repos/acme/widgets/pulls/7", "/repos/acme/widgets/pulls/7"])
         XCTAssertEqual(transport.requests[0].value(forHTTPHeaderField: "Authorization"), "Bearer token")
-        XCTAssertEqual(transport.requests[0].jsonBody as? [String: String], ["title": "New title", "body": "New **body**"])
+        XCTAssertEqual(transport.requests[0].jsonBody as? [String: String], ["title": "New title"])
+        XCTAssertEqual(transport.requests[1].jsonBody as? [String: String], ["body": ""])
     }
 
     func testEditPullRequestSurfacesPermissionErrors() async {

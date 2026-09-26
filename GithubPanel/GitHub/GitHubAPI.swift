@@ -307,13 +307,16 @@ final class GitHubAPI: GitHubAPIClient {
         _ = try await decode(Created.self, request: request)
     }
 
-    /// Replaces the pull request's title and description.
-    func editPullRequest(token: String, reference: PullRequestReference, title: String, body: String) async throws {
+    /// Replaces the pull request's title, description, or both. Fields left nil are not sent, so GitHub keeps them.
+    func editPullRequest(token: String, reference: PullRequestReference, title: String?, body: String?) async throws {
         let (owner, name) = try repoParts(reference.repoFullName)
         var request = makeRequest(path: "/repos/\(owner)/\(name)/pulls/\(reference.number)", token: token)
         request.httpMethod = "PATCH"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: ["title": title, "body": body])
+        var fields: [String: String] = [:]
+        fields["title"] = title
+        fields["body"] = body
+        request.httpBody = try JSONSerialization.data(withJSONObject: fields)
         struct Updated: Decodable { let number: Int }
         _ = try await decode(Updated.self, request: request)
     }

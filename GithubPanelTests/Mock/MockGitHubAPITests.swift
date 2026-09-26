@@ -51,7 +51,8 @@ final class MockGitHubAPITests: XCTestCase {
         XCTAssertFalse(reviewDetail.canEdit)
         XCTAssertEqual(reviewDetail.authorLogin, reviewRow.authorLogin)
 
-        try await api.editPullRequest(token: "token", reference: own, title: "Renamed", body: "New body")
+        try await api.editPullRequest(token: "token", reference: own, title: "Renamed", body: nil)
+        try await api.editPullRequest(token: "token", reference: own, title: nil, body: "New body")
 
         let edited = try await api.fetchPullRequestDetail(token: "token", reference: own).detail
         XCTAssertEqual(edited.title, "Renamed")

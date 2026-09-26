@@ -290,26 +290,42 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         XCTAssertEqual(api.postCommentCalls.map(\.comment), [.general(body: "Hi")])
     }
 
-    func testEditSavesAndShowsTheNewTitleAndBody() async throws {
-        var edits: [(PullRequestReference, String, String)] = []
+    func testEditTitleSavesOnlyTheTitle() async throws {
+        var edits: [(PullRequestReference, String?, String?)] = []
         var fetches = 0
         let viewModel = PullRequestDetailViewModel(reference: reference,
                                                    fetch: { [self] _ in
                                                        fetches += 1
-                                                       return detailContent(title: "Old", files: [file("a.swift")], canEdit: true)
+                                                       return detailContent(title: "Old", body: "Old body", files: [file("a.swift")], canEdit: true)
                                                    },
                                                    edit: { reference, title, body in edits.append((reference, title, body)) })
         await viewModel.load()
 
-        try await viewModel.edit(title: "  New title \n", body: "New body")
+        try await viewModel.edit(title: "  New title \n")
 
         XCTAssertEqual(edits.map(\.0), [reference])
         XCTAssertEqual(edits.map(\.1), ["New title"])
-        XCTAssertEqual(edits.map(\.2), ["New body"])
+        XCTAssertEqual(edits.map(\.2), [nil])
         XCTAssertEqual(viewModel.content?.detail.title, "New title")
-        XCTAssertEqual(viewModel.content?.detail.body, "New body")
+        XCTAssertEqual(viewModel.content?.detail.body, "Old body")
         XCTAssertEqual(viewModel.content?.files.map(\.filename), ["a.swift"])
         XCTAssertEqual(fetches, 1)
+    }
+
+    func testEditBodySavesOnlyTheBodyAndAllowsClearingIt() async throws {
+        var edits: [(String?, String?)] = []
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+                                                   fetch: { [self] _ in detailContent(title: "Title", body: "Old body", canEdit: true) },
+                                                   edit: { _, title, body in edits.append((title, body)) })
+        await viewModel.load()
+
+        try await viewModel.edit(body: "New **body**")
+        try await viewModel.edit(body: "")
+
+        XCTAssertEqual(edits.map(\.0), [nil, nil])
+        XCTAssertEqual(edits.map(\.1), ["New **body**", ""])
+        XCTAssertEqual(viewModel.content?.detail.title, "Title")
+        XCTAssertEqual(viewModel.content?.detail.body, "")
     }
 
     func testEditSkipsPullRequestsTheViewerCannotEdit() async throws {
@@ -319,20 +335,22 @@ final class PullRequestDetailViewModelTests: XCTestCase {
                                                    edit: { _, _, _ in edits += 1 })
         await viewModel.load()
 
-        try await viewModel.edit(title: "Mine now", body: "")
+        try await viewModel.edit(title: "Mine now")
+        try await viewModel.edit(body: "Mine now")
 
         XCTAssertEqual(edits, 0)
         XCTAssertEqual(viewModel.content?.detail.title, "Theirs")
     }
 
-    func testEditSkipsBlankTitles() async throws {
+    func testEditSkipsBlankTitlesAndEmptyEdits() async throws {
         var edits = 0
         let viewModel = PullRequestDetailViewModel(reference: reference,
                                                    fetch: { [self] _ in detailContent(title: "Old", canEdit: true) },
                                                    edit: { _, _, _ in edits += 1 })
         await viewModel.load()
 
-        try await viewModel.edit(title: "   ", body: "Body")
+        try await viewModel.edit(title: "   ")
+        try await viewModel.edit()
 
         XCTAssertEqual(edits, 0)
         XCTAssertEqual(viewModel.content?.detail.title, "Old")
@@ -347,7 +365,7 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         await viewModel.load()
 
         do {
-            try await viewModel.edit(title: "New", body: "Body")
+            try await viewModel.edit(title: "New")
             XCTFail("Expected an error")
         } catch {
             XCTAssertEqual(error.localizedDescription, "GitHub API error (403): Forbidden")
@@ -359,12 +377,12 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         let api = FakeGitHubAPI()
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
 
-        try await monitor.editPullRequest(reference, title: "New", body: "Body")
+        try await monitor.editPullRequest(reference, title: "New", body: nil)
 
         XCTAssertEqual(api.editCalls.map(\.token), ["token"])
         XCTAssertEqual(api.editCalls.map(\.reference), [reference])
         XCTAssertEqual(api.editCalls.map(\.title), ["New"])
-        XCTAssertEqual(api.editCalls.map(\.body), ["Body"])
+        XCTAssertEqual(api.editCalls.map(\.body), [nil])
         XCTAssertEqual(api.fetchOpenPRTokens, ["token"])
     }
 
@@ -373,7 +391,7 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: nil))
 
         do {
-            try await monitor.editPullRequest(reference, title: "New", body: "")
+            try await monitor.editPullRequest(reference, title: "New", body: nil)
             XCTFail("Expected an error")
         } catch {
             XCTAssertTrue(error is MissingTokenError)
@@ -381,9 +399,14 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         XCTAssertTrue(api.editCalls.isEmpty)
     }
 
-    func testEditSheetNeedsATitle() {
-        XCTAssertTrue(PullRequestEditSheet.canSave(title: "Fix bug"))
-        XCTAssertFalse(PullRequestEditSheet.canSave(title: " \n "))
+    func testTitleEditorNeedsATitle() {
+        XCTAssertTrue(PullRequestTitleEditor.canSave("Fix bug"))
+        XCTAssertFalse(PullRequestTitleEditor.canSave(" \n "))
+    }
+
+    func testBodyEditorPreviewTreatsWhitespaceAsBlank() {
+        XCTAssertTrue(PullRequestBodyEditor.isBlank(" \n "))
+        XCTAssertFalse(PullRequestBodyEditor.isBlank("## Summary"))
     }
 
     func testMonitorPostWithoutTokenFails() async {
@@ -427,12 +450,12 @@ final class PullRequestDetailViewModelTests: XCTestCase {
                         additions: 1, deletions: 1, patch: patch, isViewed: isViewed)
     }
 
-    private func detailContent(title: String, files: [PullRequestFile] = [], canEdit: Bool = false) -> PullRequestDetailContent {
+    private func detailContent(title: String, body: String = "", files: [PullRequestFile] = [], canEdit: Bool = false) -> PullRequestDetailContent {
         PullRequestDetailContent(
             detail: PullRequestDetail(reference: reference,
                                       nodeID: "PR_node",
                                       title: title,
-                                      body: "",
+                                      body: body,
                                       authorLogin: "octocat",
                                       state: .open,
                                       baseRef: "main",
