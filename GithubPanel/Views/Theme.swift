@@ -74,6 +74,42 @@ extension View {
     }
 }
 
+/// The small second line of a list row. The faint detail, such as "Updated 1 hr. ago", drops out
+/// when the row is too narrow for it rather than trailing off as "Upda…".
+struct RowSubtitle<Leading: View>: View {
+    let text: String
+    let detail: String
+    @ViewBuilder var leading: () -> Leading
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            line(showsDetail: true)
+            line(showsDetail: false)
+        }
+        .font(.caption)
+    }
+
+    private func line(showsDetail: Bool) -> some View {
+        HStack(spacing: 6) {
+            leading()
+            Text(text)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            if showsDetail {
+                Text(detail)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+        }
+    }
+}
+
+extension RowSubtitle where Leading == EmptyView {
+    init(text: String, detail: String) {
+        self.init(text: text, detail: detail) { EmptyView() }
+    }
+}
+
 /// A borderless toolbar button that shows a soft rounded fill on hover and press.
 struct QuietButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {

@@ -12,9 +12,19 @@ final class ListPaneLayoutTests: XCTestCase {
     }
 
     func testWidthLeavesRoomForDetailPane() {
-        // 1000 - 420 detail - 1 divider leaves 579, below the list minimum, so the minimum wins.
-        XCTAssertEqual(ListPaneLayout.clampedWidth(760, totalWidth: 1000), ListPaneLayout.minWidth)
+        // 800 - 420 detail - 1 divider leaves 379, below the list minimum, so the minimum wins.
+        XCTAssertEqual(ListPaneLayout.clampedWidth(760, totalWidth: 800), ListPaneLayout.minWidth)
         XCTAssertEqual(ListPaneLayout.clampedWidth(760, totalWidth: 1100), 679)
+    }
+
+    func testListCanShrinkWellBelowItsDefault() {
+        XCTAssertEqual(ListPaneLayout.clampedWidth(440, totalWidth: 1400), 440)
+    }
+
+    func testMinimumWindowFitsBothPanesAtTheirMinimums() {
+        let total = ListPaneLayout.minWindowWidth
+        XCTAssertEqual(ListPaneLayout.clampedWidth(ListPaneLayout.minWidth, totalWidth: total), ListPaneLayout.minWidth)
+        XCTAssertEqual(total - ListPaneLayout.minWidth - ListPaneLayout.dividerWidth, ListPaneLayout.minDetailWidth)
     }
 
     func testDefaultWidthIsWithinLimits() {

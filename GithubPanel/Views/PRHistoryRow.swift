@@ -19,19 +19,9 @@ struct PRHistoryRow: View {
                         .lineLimit(1)
                         .help(pr.title)
 
-                    HStack(spacing: 6) {
+                    RowSubtitle(text: "\(pr.repoFullName)#\(String(pr.number))", detail: outcomeDateText) {
                         TagView(text: pr.outcome.title.uppercased(), color: outcomeColor)
-
-                        Text("\(pr.repoFullName)#\(String(pr.number))")
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-
-                        Text(outcomeDateText)
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
-                            .layoutPriority(-1)
                     }
-                    .font(.caption)
                 }
             }
 

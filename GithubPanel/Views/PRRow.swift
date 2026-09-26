@@ -35,21 +35,12 @@ struct PRRow: View {
                 .lineLimit(1)
                 .help(pr.title)
 
-            HStack(spacing: 6) {
+            RowSubtitle(text: "\(pr.repoFullName)#\(String(pr.number)) · \(pr.status.descriptionText)",
+                        detail: "Updated \(relativeFormatter.localizedString(for: pr.updatedAt, relativeTo: now))") {
                 if pr.isDraft {
                     TagView(text: "DRAFT")
                 }
-
-                Text("\(pr.repoFullName)#\(String(pr.number)) · \(pr.status.descriptionText)")
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-
-                Text("Updated \(relativeFormatter.localizedString(for: pr.updatedAt, relativeTo: now))")
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .layoutPriority(-1)
             }
-            .font(.caption)
         }
     }
 

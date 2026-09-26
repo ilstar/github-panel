@@ -36,7 +36,7 @@ struct ContentView: View {
                     .frame(minWidth: ListPaneLayout.minDetailWidth, maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .frame(minWidth: 1000, minHeight: 500)
+        .frame(minWidth: ListPaneLayout.minWindowWidth, minHeight: 500)
         .background(paneBackgrounds)
         .background(KeyCommandMonitor(handler: handleKeyCommand))
         .focusedSceneValue(\.pullRequestList, listActions)
