@@ -35,23 +35,20 @@ struct GithubPanelApp: App {
         }
         .commands {
             CommandMenu("Pull Requests") {
-                Button("Open Pull Requests") {
-                    Self.selectPullRequestTab(.open, using: monitor)
+                ForEach(PullRequestTab.allCases) { tab in
+                    Button(tab.title) {
+                        monitor.selectedTab = tab
+                    }
+                    .keyboardShortcut(tab.shortcutKey, modifiers: .command)
                 }
-                .keyboardShortcut("1", modifiers: .command)
-
-                Button("History") {
-                    Self.selectPullRequestTab(.history, using: monitor)
-                }
-                .keyboardShortcut("2", modifiers: .command)
 
                 Divider()
 
-                Button("Refresh Pull Requests") {
-                    Self.refreshPullRequests(using: monitor)
+                Button("Refresh") {
+                    Task { await monitor.refreshSelectedTab() }
                 }
                 .keyboardShortcut("r", modifiers: .command)
-                .disabled(!monitor.hasToken || monitor.isLoading)
+                .disabled(!monitor.hasToken || monitor.isSelectedTabLoading)
             }
         }
         WindowGroup("Pull Request", for: PullRequestReference.self) { $reference in
@@ -111,20 +108,6 @@ struct GithubPanelApp: App {
         #endif
     }
 
-    private static func refreshPullRequests(using monitor: PRMonitor) {
-        Task { @MainActor in
-            await monitor.refreshNow()
-        }
-    }
-
-    private static func selectPullRequestTab(_ tab: PullRequestTab, using monitor: PRMonitor) {
-        Task { @MainActor in
-            monitor.selectedTab = tab
-            if tab == .history {
-                monitor.loadHistoryIfNeeded()
-            }
-        }
-    }
 }
 
 private extension ProcessInfo {

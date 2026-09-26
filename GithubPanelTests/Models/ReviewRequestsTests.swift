@@ -17,4 +17,18 @@ final class ReviewRequestsTests: XCTestCase {
         XCTAssertEqual(ReviewRequestGroup.allCases, [.fromMe, .fromMyTeams])
         XCTAssertEqual(ReviewRequestGroup.allCases.map(\.title), ["Requested from me", "Requested from my teams"])
     }
+
+    func testDisplayStatePrefersRowsThenErrorThenLoading() {
+        let rows = ReviewRequests(fromMe: [reviewRequestRow(number: 1)], fromMyTeams: [])
+
+        XCTAssertEqual(state(rows, isLoading: true, error: "boom", hasLoaded: true), .list)
+        XCTAssertEqual(state(.empty, isLoading: false, error: "boom", hasLoaded: true), .failed("boom"))
+        XCTAssertEqual(state(.empty, isLoading: false, error: nil, hasLoaded: false), .loading)
+        XCTAssertEqual(state(.empty, isLoading: true, error: nil, hasLoaded: true), .loading)
+        XCTAssertEqual(state(.empty, isLoading: false, error: nil, hasLoaded: true), .empty)
+    }
+
+    private func state(_ requests: ReviewRequests, isLoading: Bool, error: String?, hasLoaded: Bool) -> ReviewRequestsDisplayState {
+        ReviewRequestsDisplayState(requests: requests, isLoading: isLoading, error: error, hasLoaded: hasLoaded)
+    }
 }

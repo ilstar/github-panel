@@ -154,32 +154,11 @@ struct ContentView: View {
     private var prSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .center) {
-                Text("Pull Requests")
-                    .font(.title3.weight(.semibold))
-
-                Picker("", selection: $monitor.selectedTab) {
-                    ForEach(PullRequestTab.allCases) { tab in
-                        Text(tab.title).tag(tab)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 280)
-                .labelsHidden()
+                PullRequestTabPicker(selection: $monitor.selectedTab)
 
                 Spacer()
                 refreshPill
                     .fixedSize()
-            }
-            .onChange(of: monitor.selectedTab) { tab in
-                switch tab {
-                case .open:
-                    break
-                case .reviews:
-                    // Review requests change often, so reload whenever the tab is shown.
-                    Task { await monitor.refreshReviewRequests() }
-                case .history:
-                    monitor.loadHistoryIfNeeded()
-                }
             }
 
             switch monitor.selectedTab {
@@ -265,56 +244,102 @@ struct ContentView: View {
 
     private var reviewRequestsSection: some View {
         Group {
-            if let error = monitor.lastReviewRequestsError {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            }
-
             if monitor.hasToken {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 10) {
-                        ForEach(ReviewRequestGroup.allCases) { group in
-                            reviewRequestGroup(group)
+                switch reviewRequestsDisplayState {
+                case .loading:
+                    VStack(spacing: 12) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Loading review requests…")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                case .failed(let message):
+                    EmptyStateView(systemImage: "exclamationmark.triangle",
+                                   title: "Couldn’t Load Review Requests",
+                                   message: message,
+                                   tint: .orange) {
+                        Button("Try Again") {
+                            Task { await monitor.refreshReviewRequests() }
                         }
+                        .controlSize(.large)
                     }
-                    .padding(.top, 6)
-                    .padding(.bottom, 8)
-                }
-                .scrollIndicators(.hidden)
-                .onAppear {
-                    if selectedReviewID == nil {
-                        selectedReviewID = monitor.reviewRequests.rows.first?.id
-                    }
-                }
-                .onChange(of: monitor.reviewRequests.rows.map { $0.id }) { newIDs in
-                    if selectedReviewID == nil || !newIDs.contains(selectedReviewID ?? "") {
-                        selectedReviewID = newIDs.first
-                    }
+                case .empty:
+                    EmptyStateView(systemImage: "checkmark",
+                                   title: "You’re All Caught Up",
+                                   message: "Pull requests waiting for a review from you or your teams will appear here.",
+                                   tint: .green)
+                case .list:
+                    reviewRequestsList
                 }
             } else {
                 Text("Add a GitHub token to begin.")
                     .foregroundStyle(.secondary)
             }
         }
+        .onAppear {
+            if selectedReviewID == nil {
+                selectedReviewID = monitor.reviewRequests.rows.first?.id
+            }
+        }
+        .onChange(of: monitor.reviewRequests.rows.map { $0.id }) { newIDs in
+            if selectedReviewID == nil || !newIDs.contains(selectedReviewID ?? "") {
+                selectedReviewID = newIDs.first
+            }
+        }
+    }
+
+    private var reviewRequestsDisplayState: ReviewRequestsDisplayState {
+        ReviewRequestsDisplayState(requests: monitor.reviewRequests,
+                                   isLoading: monitor.isReviewRequestsLoading,
+                                   error: monitor.lastReviewRequestsError,
+                                   hasLoaded: monitor.lastReviewRequestsRefreshAt != nil)
+    }
+
+    private var reviewRequestsList: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 10) {
+                ForEach(ReviewRequestGroup.allCases) { group in
+                    reviewRequestGroup(group)
+                }
+            }
+            .padding(.top, 6)
+            .padding(.bottom, 8)
+        }
+        .scrollIndicators(.hidden)
     }
 
     @ViewBuilder
     private func reviewRequestGroup(_ group: ReviewRequestGroup) -> some View {
         let rows = monitor.reviewRequests.rows(in: group)
         HStack(spacing: 6) {
-            Text(group.title)
-                .font(.subheadline.weight(.semibold))
-            Text(String(rows.count))
+            Text(group.title.uppercased())
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
+                .tracking(0.4)
+            Text(String(rows.count))
+                .font(.caption2.weight(.bold))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 1)
+                .background(Capsule().fill(Color.secondary.opacity(0.14)))
         }
-        .padding(.top, group == ReviewRequestGroup.allCases.first ? 0 : 8)
+        .padding(.leading, 4)
+        .padding(.top, group == ReviewRequestGroup.allCases.first ? 0 : 12)
 
         if rows.isEmpty {
-            Text(monitor.isReviewRequestsLoading && monitor.lastReviewRequestsRefreshAt == nil ? "Loading…" : group.emptyText)
-                .font(.caption)
+            Text(group.emptyText)
+                .font(.callout)
                 .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(Color.secondary.opacity(0.25), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                )
         } else {
             ForEach(rows) { pr in
                 PRReviewRequestRow(pr: pr,
@@ -421,16 +446,8 @@ struct ContentView: View {
         return relativeFormatter.localizedString(for: lastRefreshAt, relativeTo: now)
     }
 
-    private var selectedTabIsLoading: Bool {
-        switch monitor.selectedTab {
-        case .open: return monitor.isLoading
-        case .reviews: return monitor.isReviewRequestsLoading
-        case .history: return monitor.isHistoryLoading
-        }
-    }
-
     private var refreshPill: some View {
-        RefreshPill(isLoading: selectedTabIsLoading,
+        RefreshPill(isLoading: monitor.isSelectedTabLoading,
                     isEnabled: refreshIsEnabled,
                     lastUpdatedView: lastUpdatedView) {
             refreshSelectedTab()
@@ -439,7 +456,7 @@ struct ContentView: View {
 
     private var refreshIsEnabled: Bool {
         guard monitor.hasToken else { return false }
-        return !selectedTabIsLoading
+        return !monitor.isSelectedTabLoading
     }
 
     private var historyPagination: some View {
@@ -535,14 +552,7 @@ struct ContentView: View {
     }
 
     private func refreshSelectedTab() {
-        switch monitor.selectedTab {
-        case .open:
-            Task { await monitor.refreshNow() }
-        case .reviews:
-            Task { await monitor.refreshReviewRequests() }
-        case .history:
-            Task { await monitor.refreshCurrentHistoryPage() }
-        }
+        Task { await monitor.refreshSelectedTab() }
     }
 
     private func handleKeyEvent(_ event: NSEvent) -> Bool {
@@ -590,5 +600,22 @@ struct ContentView: View {
         Button("Open on GitHub") {
             NSWorkspace.shared.open(htmlURL)
         }
+    }
+}
+
+/// Sized to its segments so its leading edge lines up with the pull request list;
+/// a wider fixed frame centers the control and indents it past the rows.
+struct PullRequestTabPicker: View {
+    @Binding var selection: PullRequestTab
+
+    var body: some View {
+        Picker("", selection: $selection) {
+            ForEach(PullRequestTab.allCases) { tab in
+                Text(tab.title).tag(tab)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .fixedSize()
     }
 }
