@@ -579,20 +579,15 @@ extension View {
     }
 }
 
-/// One line of the unified view.
+/// One line of the unified view. Line numbers and the +/- marker are one text, so each line builds two texts
+/// instead of four; building rows is most of the cost of fast scrolling.
 struct DiffLineRow: View {
     let line: DiffDisplayLine
     /// Opens a new-comment box on this line. Nil for lines GitHub cannot take comments on.
     var onAddComment: (() -> Void)?
 
     var body: some View {
-        HStack(alignment: .top, spacing: 0) {
-            DiffGutter(number: line.oldLineNumber, kind: line.kind)
-            DiffGutter(number: line.newLineNumber, kind: line.kind)
-            DiffLineContent(line: line, onAddComment: onAddComment)
-        }
-        .font(.system(size: 12, design: .monospaced))
-        .background(DiffColors.background(for: line.kind))
+        DiffLineHalf(line: line, numbers: [line.oldLineNumber, line.newLineNumber], onAddComment: onAddComment)
     }
 }
 
@@ -605,64 +600,79 @@ struct SplitDiffRowView: View {
     var body: some View {
         switch row {
         case let .full(line):
-            HStack(spacing: 0) {
-                Color.clear.frame(width: 56)
-                DiffLineContent(line: line)
-            }
-            .font(.system(size: 12, design: .monospaced))
-            .background(DiffColors.background(for: line.kind))
+            DiffLineHalf(line: line, numbers: [nil], onAddComment: nil)
         case let .pair(left, right):
-            HStack(alignment: .top, spacing: 0) {
+            // The backgrounds fill the row behind both halves, so a half with a shorter line needs no
+            // stretching to match the taller one.
+            HStack(alignment: .top, spacing: 1) {
                 half(left, number: left?.oldLineNumber, onAddComment: onAddLeftComment)
-                Divider()
                 half(right, number: right?.newLineNumber, onAddComment: onAddRightComment)
             }
-            .fixedSize(horizontal: false, vertical: true)
-            .font(.system(size: 12, design: .monospaced))
+            .background {
+                HStack(spacing: 0) {
+                    halfBackground(left)
+                    Divider()
+                    halfBackground(right)
+                }
+            }
         }
     }
 
     @ViewBuilder
     private func half(_ line: DiffDisplayLine?, number: Int?, onAddComment: (() -> Void)?) -> some View {
-        Group {
-            if let line {
-                HStack(alignment: .top, spacing: 0) {
-                    DiffGutter(number: number, kind: line.kind)
-                    DiffLineContent(line: line, onAddComment: onAddComment)
-                }
-                .background(DiffColors.background(for: line.kind))
-            } else {
-                Color.secondary.opacity(0.06)
-            }
+        if let line {
+            DiffLineHalf(line: line, numbers: [number], onAddComment: onAddComment, fillsBackground: false)
+        } else {
+            Color.clear
+                .frame(maxWidth: .infinity, maxHeight: 0)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func halfBackground(_ line: DiffDisplayLine?) -> Color {
+        line.map { DiffColors.background(for: $0.kind) } ?? Color.secondary.opacity(0.06)
     }
 }
 
-private struct DiffGutter: View {
-    let number: Int?
-    let kind: DiffLine.Kind
+/// Line numbers, marker, and text for one diff line.
+private struct DiffLineHalf: View {
+    static let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+    /// Every character in the monospaced font is this wide.
+    static let characterWidth = ("0" as NSString).size(withAttributes: [.font: font]).width
 
-    var body: some View {
-        Text(number.map(String.init) ?? "")
-            .foregroundStyle(.secondary)
-            .frame(width: 48, alignment: .trailing)
-            .padding(.trailing, 8)
-            .padding(.vertical, 1)
-            .frame(maxHeight: .infinity, alignment: .top)
-            .background(DiffColors.gutterBackground(for: kind))
-    }
-}
-
-private struct DiffLineContent: View {
     let line: DiffDisplayLine
+    /// The line number columns; nil leaves a column blank.
+    let numbers: [Int?]
     var onAddComment: (() -> Void)?
+    /// Off in the split view, which fills each half's background across the whole row.
+    var fillsBackground = true
 
     @State private var isHovering = false
+    /// Selectable text is slow to build, so a line turns selectable only once the pointer reaches it. It stays
+    /// selectable after the pointer leaves, so a selection can still be copied.
+    @State private var isSelectable = false
+
+    private var gutterWidth: CGFloat {
+        CGFloat(numbers.count * DiffGutterText.columnWidth) * Self.characterWidth
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
-            // The marker column turns into an add-comment button under the pointer, like on GitHub.
+            Text(DiffGutterText.prefix(numbers: numbers, kind: line.kind))
+                .foregroundStyle(.secondary)
+                .fixedSize()
+            lineText
+                .foregroundStyle(line.kind == .hunk || line.kind == .note ? Color.secondary : Color.primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 1)
+        .font(Font(Self.font))
+        .background(alignment: .leading) {
+            DiffColors.gutterBackground(for: line.kind)
+                .frame(width: gutterWidth)
+        }
+        .background(fillsBackground ? DiffColors.background(for: line.kind) : .clear)
+        // The marker column turns into an add-comment button under the pointer, like on GitHub.
+        .overlay(alignment: .topLeading) {
             if isHovering, let onAddComment {
                 Button(action: onAddComment) {
                     Image(systemName: "plus")
@@ -672,28 +682,25 @@ private struct DiffLineContent: View {
                         .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(Color.accentColor))
                 }
                 .buttonStyle(.plain)
-                .frame(width: 18)
+                .frame(width: CGFloat(DiffGutterText.markerWidth) * Self.characterWidth)
+                .padding(.leading, gutterWidth)
                 .help("Add a comment on this line")
-            } else {
-                Text(marker)
-                    .frame(width: 18)
-                    .foregroundStyle(.secondary)
             }
-
-            Text(DiffColors.attributedText(line))
-                .foregroundStyle(line.kind == .hunk || line.kind == .note ? Color.secondary : Color.primary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .textSelection(.enabled)
         }
-        .padding(.vertical, 1)
-        .onHover { isHovering = $0 }
+        .onHover { hovering in
+            isHovering = hovering
+            if hovering, !isSelectable { isSelectable = true }
+        }
     }
 
-    private var marker: String {
-        switch line.kind {
-        case .addition: return "+"
-        case .deletion: return "-"
-        case .hunk, .context, .note: return ""
+    @ViewBuilder
+    private var lineText: some View {
+        if isSelectable {
+            Text(DiffColors.attributedText(line))
+                .textSelection(.enabled)
+        } else {
+            Text(DiffColors.attributedText(line))
         }
     }
 }
+
