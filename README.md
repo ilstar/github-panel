@@ -14,6 +14,12 @@ Mini macOS app to monitor your active GitHub pull request checks.
 - Selecting a PR in the list shows it on the right: its description on the
   *Conversation* tab and the code diff on the *Files changed* tab. ⌘-click or
   Return opens the PR on GitHub; right-click to open it in its own window.
+- Comments: the *Conversation* tab lists the PR's comments and has a box to add
+  one. On *Files changed*, review threads show under the lines they comment on
+  (resolved ones start folded; outdated ones are listed after the file's diff).
+  Hover over a diff line and click **+** to start a new thread, or click
+  *Reply…* in a thread. ⌘Return posts; Escape cancels. Comments post right away,
+  not as part of a pending review.
 
 ## GitHub token scopes
 - `repo` for private repositories.

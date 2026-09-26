@@ -57,3 +57,63 @@ final class DiffListRowsTests: XCTestCase {
         }
     }
 }
+
+final class DiffListRowsCommentTests: XCTestCase {
+    private let file = PullRequestFile(filename: "a.swift", previousFilename: nil, status: .modified,
+                                       additions: 1, deletions: 1, patch: "@@ -1,2 +1,2 @@\n ctx\n-a\n+b")
+
+    func testThreadsFollowTheirLineInUnifiedView() {
+        let onAddition = thread("t1", line: 2, side: .right)
+        let outdated = thread("t2", line: nil, side: .right)
+
+        let rows = rows(mode: .unified, threads: [onAddition, outdated])
+
+        XCTAssertEqual(rows.map(\.id), ["a.swift", "a.swift#u0", "a.swift#u1", "a.swift#u2", "a.swift#u3", "a.swift#c3",
+                                        "a.swift#unplaced", "a.swift#footer"])
+        XCTAssertEqual(rows[5], .lineComments(filename: "a.swift", index: 3, threads: [onAddition], composing: nil))
+        XCTAssertEqual(rows[6], .unplacedThreads(filename: "a.swift", threads: [outdated]))
+    }
+
+    func testOpenComposerAddsACommentRowInSplitView() {
+        let anchor = DiffCommentAnchor(path: "a.swift", line: 2, side: .left)
+
+        let rows = rows(mode: .split, threads: [], composing: anchor)
+
+        // Hunk, context pair, then the deletion/addition pair with the composer on its left half.
+        XCTAssertEqual(rows.map(\.id), ["a.swift", "a.swift#s0", "a.swift#s1", "a.swift#s2", "a.swift#c2", "a.swift#footer"])
+        XCTAssertEqual(rows[4], .lineComments(filename: "a.swift", index: 2, threads: [], composing: anchor))
+    }
+
+    func testContextLineThreadsAreListedOnceInSplitView() {
+        let onContext = thread("t", line: 1, side: .right)
+
+        let rows = rows(mode: .split, threads: [onContext])
+
+        XCTAssertEqual(rows.filter { if case .lineComments = $0 { return true } else { return false } },
+                       [.lineComments(filename: "a.swift", index: 1, threads: [onContext], composing: nil)])
+    }
+
+    func testFileWithoutDiffListsAllThreadsAsUnplaced() {
+        let binary = PullRequestFile(filename: "logo.png", previousFilename: nil, status: .added,
+                                     additions: 0, deletions: 0, patch: nil)
+        let onBinary = ReviewThread(id: "t", path: "logo.png", line: 1, startLine: nil, side: .right,
+                                    isResolved: false, isOutdated: false, comments: [])
+
+        let rows = DiffListRow.rows(files: [binary], collapsed: [], mode: .unified, hideWhitespace: false,
+                                    threads: { _ in ReviewThreadIndex(threads: [onBinary]) }) { _ in nil }
+
+        XCTAssertEqual(rows.map(\.id), ["logo.png", "logo.png#none", "logo.png#unplaced", "logo.png#footer"])
+    }
+
+    private func rows(mode: DiffViewMode, threads: [ReviewThread], composing: DiffCommentAnchor? = nil) -> [DiffListRow] {
+        DiffListRow.rows(files: [file], collapsed: [], mode: mode, hideWhitespace: false,
+                         threads: { _ in ReviewThreadIndex(threads: threads) }, composing: composing) { _ in
+            DiffPresentation(lines: DiffParser.parse(self.file.patch!), hideWhitespace: false)
+        }
+    }
+
+    private func thread(_ id: String, line: Int?, side: DiffSide) -> ReviewThread {
+        ReviewThread(id: id, path: "a.swift", line: line, startLine: nil, side: side,
+                     isResolved: false, isOutdated: line == nil, comments: [])
+    }
+}

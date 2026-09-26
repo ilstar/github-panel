@@ -37,6 +37,8 @@ struct PullRequestDetail: Equatable {
     let state: State
     let baseRef: String
     let headRef: String
+    /// The head commit. New review comments are posted against it.
+    let headSHA: String
     let htmlURL: URL
     let createdAt: Date
     let additions: Int

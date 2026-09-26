@@ -38,3 +38,41 @@ final class MockGitHubAPITests: XCTestCase {
         }
     }
 }
+
+@MainActor
+final class MockGitHubAPICommentTests: XCTestCase {
+    private let reference = PullRequestReference(repoFullName: "mock/github-panel", number: 101)
+
+    func testMockCommentsSitOnMockDiffLines() async throws {
+        let api = MockGitHubAPI()
+        let content = try await api.fetchPullRequestDetail(token: "token", reference: reference)
+        let comments = try await api.fetchPullRequestComments(token: "token", reference: reference)
+
+        XCTAssertFalse(comments.comments.isEmpty)
+        for thread in comments.threads where !thread.isOutdated {
+            let file = try XCTUnwrap(content.files.first { $0.filename == thread.path })
+            let lines = DiffPresentation(lines: DiffParser.parse(file.patch ?? ""), hideWhitespace: false).unified
+            XCTAssertEqual(ReviewThreadIndex(threads: [thread]).unplacedThreads(in: lines, path: thread.path), [], thread.id)
+        }
+    }
+
+    func testMockPostsGeneralInlineAndReplyComments() async throws {
+        let api = MockGitHubAPI()
+        let before = try await api.fetchPullRequestComments(token: "token", reference: reference)
+        let anchor = DiffCommentAnchor(path: "Sources/WidgetView.swift", line: 3, side: .right)
+        let replyTarget = try XCTUnwrap(before.threads.first)
+
+        try await api.postPullRequestComment(token: "token", reference: reference, comment: .general(body: "Ship it"))
+        try await api.postPullRequestComment(token: "token", reference: reference,
+                                             comment: .inline(body: "Nice", commitID: "sha", anchor: anchor))
+        try await api.postPullRequestComment(token: "token", reference: reference,
+                                             comment: .reply(body: "Done", commentID: try XCTUnwrap(replyTarget.comments.first).databaseID))
+        let after = try await api.fetchPullRequestComments(token: "token", reference: reference)
+
+        XCTAssertEqual(after.comments.last?.body, "Ship it")
+        XCTAssertEqual(after.threads.last?.anchor, anchor)
+        XCTAssertEqual(after.threads.last?.comments.map(\.body), ["Nice"])
+        XCTAssertEqual(after.threads.first?.comments.last?.body, "Done")
+        XCTAssertEqual(after.threads.first?.comments.count, replyTarget.comments.count + 1)
+    }
+}

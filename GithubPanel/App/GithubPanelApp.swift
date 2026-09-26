@@ -53,13 +53,7 @@ struct GithubPanelApp: App {
         }
         WindowGroup("Pull Request", for: PullRequestReference.self) { $reference in
             if let reference {
-                PullRequestDetailView(viewModel: PullRequestDetailViewModel(
-                    reference: reference,
-                    fetch: { [monitor] reference in try await monitor.fetchPullRequestDetail(reference) },
-                    setViewed: { [monitor] pullRequestID, path, viewed in
-                        try await monitor.setFileViewed(pullRequestID: pullRequestID, path: path, viewed: viewed)
-                    }
-                ))
+                PullRequestDetailView(viewModel: PullRequestDetailViewModel(reference: reference, monitor: monitor))
             }
         }
         .defaultSize(width: 960, height: 760)

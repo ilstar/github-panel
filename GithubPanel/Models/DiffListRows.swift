@@ -10,6 +10,10 @@ enum DiffListRow: Identifiable, Equatable {
     case message(filename: String, text: String)
     /// A binary file or a diff too large for GitHub to return.
     case noDiff(PullRequestFile)
+    /// The review threads under the line at `index`, and whether the new-comment box is open there.
+    case lineComments(filename: String, index: Int, threads: [ReviewThread], composing: DiffCommentAnchor?)
+    /// Threads with no line in the diff to sit under, such as outdated ones.
+    case unplacedThreads(filename: String, threads: [ReviewThread])
     /// Closes the file's card.
     case footer(filename: String)
 
@@ -21,34 +25,66 @@ enum DiffListRow: Identifiable, Equatable {
         case let .split(filename, index, _): return "\(filename)#s\(index)"
         case let .message(filename, _): return "\(filename)#message"
         case let .noDiff(file): return "\(file.filename)#none"
+        case let .lineComments(filename, index, _, _): return "\(filename)#c\(index)"
+        case let .unplacedThreads(filename, _): return "\(filename)#unplaced"
         case let .footer(filename): return "\(filename)#footer"
         }
     }
 
     /// Builds the rows for `files`. `presentation` returns nil for a file with no diff lines.
+    /// `composing` is the line with an open new-comment box.
     static func rows(files: [PullRequestFile],
                      collapsed: Set<String>,
                      mode: DiffViewMode,
                      hideWhitespace: Bool,
+                     threads: (String) -> ReviewThreadIndex = { _ in ReviewThreadIndex(threads: []) },
+                     composing: DiffCommentAnchor? = nil,
                      presentation: (String) -> DiffPresentation?) -> [DiffListRow] {
         var rows: [DiffListRow] = []
         for file in files {
             rows.append(.header(file))
             guard !collapsed.contains(file.filename) else { continue }
             let name = file.filename
+            let index = threads(name)
+            func addComments(at lineIndex: Int, threads: [ReviewThread], anchors: [DiffCommentAnchor?]) {
+                let open = composing.flatMap { anchors.contains($0) ? $0 : nil }
+                guard !threads.isEmpty || open != nil else { return }
+                rows.append(.lineComments(filename: name, index: lineIndex, threads: threads, composing: open))
+            }
             if let presentation = presentation(name) {
                 if hideWhitespace && !presentation.hasChanges {
                     rows.append(.message(filename: name, text: "Only whitespace changed."))
                 } else {
                     switch mode {
                     case .unified:
-                        rows += presentation.unified.enumerated().map { .unified(filename: name, index: $0, line: $1) }
+                        for (lineIndex, line) in presentation.unified.enumerated() {
+                            rows.append(.unified(filename: name, index: lineIndex, line: line))
+                            addComments(at: lineIndex,
+                                        threads: index.threads(for: line, path: name),
+                                        anchors: [DiffCommentAnchor.unified(path: name, line: line)])
+                        }
                     case .split:
-                        rows += presentation.split.enumerated().map { .split(filename: name, index: $0, row: $1) }
+                        for (rowIndex, row) in presentation.split.enumerated() {
+                            rows.append(.split(filename: name, index: rowIndex, row: row))
+                            guard case let .pair(left, right) = row else { continue }
+                            // A context line sits on both sides; list its threads once.
+                            let lines = left == right ? [left] : [left, right]
+                            addComments(at: rowIndex,
+                                        threads: lines.compactMap { $0 }.flatMap { index.threads(for: $0, path: name) },
+                                        anchors: [DiffCommentAnchor.split(path: name, line: left, side: .left),
+                                                  DiffCommentAnchor.split(path: name, line: right, side: .right)])
+                        }
                     }
+                }
+                let unplaced = index.unplacedThreads(in: presentation.unified, path: name)
+                if !unplaced.isEmpty {
+                    rows.append(.unplacedThreads(filename: name, threads: unplaced))
                 }
             } else {
                 rows.append(.noDiff(file))
+                if !index.threads.isEmpty {
+                    rows.append(.unplacedThreads(filename: name, threads: index.threads))
+                }
             }
             rows.append(.footer(filename: name))
         }

@@ -8,6 +8,9 @@ final class MockGitHubAPI: GitHubAPIClient {
     private let reviewRequests: ReviewRequests
     /// Viewed file paths, keyed by pull request node ID.
     private var viewedFiles: [String: Set<String>] = [:]
+    /// Comments, keyed by pull request reference ID. Filled with fixtures on first read.
+    private var comments: [String: PullRequestComments] = [:]
+    private var nextCommentID = 1_000
 
     init(now: Date = Date(), isEmpty: Bool = false) {
         let rows = isEmpty ? [] : Self.makePullRequests().map {
@@ -86,6 +89,7 @@ final class MockGitHubAPI: GitHubAPIClient {
                                        state: isDraft ? .draft : .open,
                                        baseRef: "main",
                                        headRef: "mock-user/pr-\(reference.number)",
+                                       headSHA: "mock-sha-\(reference.number)",
                                        htmlURL: URL(string: "https://github.com/\(reference.repoFullName)/pull/\(reference.number)")!,
                                        createdAt: Date(timeIntervalSinceNow: -3 * 86_400),
                                        additions: Self.detailFiles.reduce(0) { $0 + $1.additions },
@@ -107,6 +111,67 @@ final class MockGitHubAPI: GitHubAPIClient {
         } else {
             viewedFiles[pullRequestID]?.remove(path)
         }
+    }
+
+    func fetchPullRequestComments(token: String, reference: PullRequestReference) async throws -> PullRequestComments {
+        if let stored = comments[reference.id] { return stored }
+        let fixtures = Self.makeComments(now: Date())
+        comments[reference.id] = fixtures
+        return fixtures
+    }
+
+    func postPullRequestComment(token: String, reference: PullRequestReference, comment: NewPullRequestComment) async throws {
+        let current = try await fetchPullRequestComments(token: token, reference: reference)
+        nextCommentID += 1
+        func makeComment(_ body: String) -> PullRequestComment {
+            PullRequestComment(id: "mock-comment-\(nextCommentID)", databaseID: nextCommentID, authorLogin: user.login,
+                               body: body, createdAt: Date(), htmlURL: nil)
+        }
+        switch comment {
+        case let .general(body):
+            comments[reference.id] = PullRequestComments(comments: current.comments + [makeComment(body)],
+                                                         threads: current.threads)
+        case let .inline(body, _, anchor):
+            let thread = ReviewThread(id: "mock-thread-\(nextCommentID)", path: anchor.path, line: anchor.line,
+                                      startLine: nil, side: anchor.side, isResolved: false, isOutdated: false,
+                                      comments: [makeComment(body)])
+            comments[reference.id] = PullRequestComments(comments: current.comments, threads: current.threads + [thread])
+        case let .reply(body, commentID):
+            let threads = current.threads.map { thread in
+                guard thread.comments.first?.databaseID == commentID else { return thread }
+                return ReviewThread(id: thread.id, path: thread.path, line: thread.line, startLine: thread.startLine,
+                                    side: thread.side, isResolved: thread.isResolved, isOutdated: thread.isOutdated,
+                                    comments: thread.comments + [makeComment(body)])
+            }
+            comments[reference.id] = PullRequestComments(comments: current.comments, threads: threads)
+        }
+    }
+
+    private static func makeComments(now: Date) -> PullRequestComments {
+        func comment(_ id: Int, _ author: String, _ body: String, hoursAgo: Double) -> PullRequestComment {
+            PullRequestComment(id: "mock-comment-\(id)", databaseID: id, authorLogin: author, body: body,
+                               createdAt: now.addingTimeInterval(-hoursAgo * 3_600), htmlURL: nil)
+        }
+        return PullRequestComments(
+            comments: [
+                comment(1, "octocat", "Thanks for splitting this up — much easier to review.", hoursAgo: 30),
+                comment(2, "mock-user", "Happy to. I'll follow up with the **settings** change separately.", hoursAgo: 28)
+            ],
+            threads: [
+                ReviewThread(id: "mock-thread-1", path: "Sources/Widget.swift", line: 12, startLine: nil,
+                             side: .right, isResolved: false, isOutdated: false,
+                             comments: [
+                                 comment(3, "hubot", "Should `height` default to `width` for square widgets?", hoursAgo: 20),
+                                 comment(4, "mock-user", "Good call, I'll add an initializer for that.", hoursAgo: 19)
+                             ]),
+                ReviewThread(id: "mock-thread-2", path: "Sources/Widget.swift", line: 23, startLine: nil,
+                             side: .left, isResolved: true, isOutdated: false,
+                             comments: [comment(5, "octocat", "Nit: keep the old greeting in the changelog.", hoursAgo: 18)]),
+                ReviewThread(id: "mock-thread-3", path: "Sources/Legacy.swift", line: nil, startLine: nil,
+                             side: .right, isResolved: false, isOutdated: true,
+                             comments: [comment(6, "monalisa", "Is anything still importing this?", hoursAgo: 40)])
+            ]
+        )
     }
 
     private static let detailBody = """

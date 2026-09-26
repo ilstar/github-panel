@@ -158,6 +158,151 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         XCTAssertEqual(api.setFileViewedCalls.map(\.viewed), [true])
     }
 
+    func testLoadFetchesCommentsAndGroupsThreadsByFile() async {
+        let threadA = thread("t1", path: "a.swift", line: 2)
+        let threadB = thread("t2", path: "b.swift", line: 9)
+        let comments = PullRequestComments(comments: [comment(1)], threads: [threadA, threadB])
+        var fetched: [PullRequestReference] = []
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+                                                   fetch: { [self] _ in detailContent(title: "Comments") },
+                                                   fetchComments: { reference in
+                                                       fetched.append(reference)
+                                                       return comments
+                                                   })
+
+        await viewModel.load()
+
+        XCTAssertEqual(fetched, [reference])
+        XCTAssertEqual(viewModel.comments, comments)
+        XCTAssertEqual(viewModel.threadIndex(for: "a.swift").threads, [threadA])
+        XCTAssertEqual(viewModel.threadIndex(for: "b.swift").threads, [threadB])
+        XCTAssertEqual(viewModel.threadIndex(for: "c.swift").threads, [])
+    }
+
+    func testFailedCommentsLoadKeepsDetailAndShowsError() async {
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+                                                   fetch: { [self] _ in detailContent(title: "Detail") },
+                                                   fetchComments: { _ in throw GraphQLError(message: "Comments failed") })
+
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.content?.detail.title, "Detail")
+        XCTAssertNil(viewModel.comments)
+        XCTAssertEqual(viewModel.errorMessage, "Comments failed")
+    }
+
+    func testFailedDetailLoadSkipsComments() async {
+        var commentFetches = 0
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+                                                   fetch: { _ in throw GraphQLError(message: "Detail failed") },
+                                                   fetchComments: { _ in
+                                                       commentFetches += 1
+                                                       return .empty
+                                                   })
+
+        await viewModel.load()
+
+        XCTAssertEqual(commentFetches, 0)
+        XCTAssertEqual(viewModel.errorMessage, "Detail failed")
+    }
+
+    func testPostSendsCommentThenReloadsComments() async throws {
+        var stored = PullRequestComments.empty
+        var posted: [(NewPullRequestComment, PullRequestReference)] = []
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+                                                   fetch: { [self] _ in detailContent(title: "Post") },
+                                                   fetchComments: { _ in stored },
+                                                   postComment: { [self] comment, reference in
+                                                       posted.append((comment, reference))
+                                                       stored = PullRequestComments(comments: [self.comment(9)], threads: [])
+                                                   })
+        await viewModel.load()
+
+        try await viewModel.post(.general(body: "Looks good"))
+
+        XCTAssertEqual(posted.map(\.0), [.general(body: "Looks good")])
+        XCTAssertEqual(posted.map(\.1), [reference])
+        XCTAssertEqual(viewModel.comments?.comments.map(\.databaseID), [9])
+    }
+
+    func testInlineCommentUsesLoadedHeadCommit() async throws {
+        var posted: [NewPullRequestComment] = []
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+                                                   fetch: { [self] _ in detailContent(title: "Inline") },
+                                                   postComment: { comment, _ in posted.append(comment) })
+        let anchor = DiffCommentAnchor(path: "a.swift", line: 4, side: .left)
+
+        try await viewModel.postInlineComment("Before load", at: anchor)
+        await viewModel.load()
+        try await viewModel.postInlineComment("Why?", at: anchor)
+
+        XCTAssertEqual(posted, [.inline(body: "Why?", commitID: "abc123", anchor: anchor)])
+    }
+
+    func testReplyTargetsTheThreadsFirstComment() async throws {
+        var posted: [NewPullRequestComment] = []
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+                                                   fetch: { [self] _ in detailContent(title: "Reply") },
+                                                   postComment: { comment, _ in posted.append(comment) })
+        let target = ReviewThread(id: "t", path: "a.swift", line: 1, startLine: nil, side: .right,
+                                  isResolved: false, isOutdated: false, comments: [comment(41), comment(42)])
+
+        try await viewModel.reply("Fixed", to: target)
+        try await viewModel.reply("Nothing to reply to", to: thread("empty", path: "a.swift", line: 1, comments: []))
+
+        XCTAssertEqual(posted, [.reply(body: "Fixed", commentID: 41)])
+    }
+
+    func testFailedPostThrowsAndSkipsReload() async {
+        var commentFetches = 0
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+                                                   fetch: { [self] _ in detailContent(title: "Fail") },
+                                                   fetchComments: { _ in
+                                                       commentFetches += 1
+                                                       return .empty
+                                                   },
+                                                   postComment: { _, _ in
+                                                       throw GitHubAPIError(message: "Validation Failed", documentationURL: nil, statusCode: 422)
+                                                   })
+        await viewModel.load()
+
+        do {
+            try await viewModel.post(.general(body: "Hi"))
+            XCTFail("Expected an error")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, "GitHub API error (422): Validation Failed")
+        }
+        XCTAssertEqual(commentFetches, 1)
+    }
+
+    func testMonitorFetchesAndPostsCommentsWithSessionToken() async throws {
+        let api = FakeGitHubAPI()
+        api.comments = PullRequestComments(comments: [comment(1)], threads: [])
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+
+        let result = try await monitor.fetchPullRequestComments(reference)
+        try await monitor.postPullRequestComment(.general(body: "Hi"), on: reference)
+
+        XCTAssertEqual(result, api.comments)
+        XCTAssertEqual(api.commentsCalls.map(\.token), ["token"])
+        XCTAssertEqual(api.commentsCalls.map(\.reference), [reference])
+        XCTAssertEqual(api.postCommentCalls.map(\.token), ["token"])
+        XCTAssertEqual(api.postCommentCalls.map(\.comment), [.general(body: "Hi")])
+    }
+
+    func testMonitorPostWithoutTokenFails() async {
+        let api = FakeGitHubAPI()
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: nil))
+
+        do {
+            try await monitor.postPullRequestComment(.general(body: "Hi"), on: reference)
+            XCTFail("Expected an error")
+        } catch {
+            XCTAssertTrue(error is MissingTokenError)
+        }
+        XCTAssertTrue(api.postCommentCalls.isEmpty)
+    }
+
     func testMonitorFetchWithoutTokenFails() async {
         let api = FakeGitHubAPI()
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: nil))
@@ -169,6 +314,16 @@ final class PullRequestDetailViewModelTests: XCTestCase {
             XCTAssertTrue(error is MissingTokenError)
         }
         XCTAssertTrue(api.detailCalls.isEmpty)
+    }
+
+    private func comment(_ id: Int) -> PullRequestComment {
+        PullRequestComment(id: "c\(id)", databaseID: id, authorLogin: "octocat", body: "Comment \(id)",
+                           createdAt: Date(timeIntervalSince1970: 0), htmlURL: nil)
+    }
+
+    private func thread(_ id: String, path: String, line: Int, comments: [PullRequestComment]? = nil) -> ReviewThread {
+        ReviewThread(id: id, path: path, line: line, startLine: nil, side: .right,
+                     isResolved: false, isOutdated: false, comments: comments ?? [comment(1)])
     }
 
     private func file(_ filename: String, patch: String? = nil, isViewed: Bool = false) -> PullRequestFile {
@@ -186,6 +341,7 @@ final class PullRequestDetailViewModelTests: XCTestCase {
                                       state: .open,
                                       baseRef: "main",
                                       headRef: "feature",
+                                      headSHA: "abc123",
                                       htmlURL: URL(string: "https://github.com/acme/widgets/pull/7")!,
                                       createdAt: Date(timeIntervalSince1970: 0),
                                       additions: 0,

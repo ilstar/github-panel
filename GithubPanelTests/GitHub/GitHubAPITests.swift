@@ -268,6 +268,7 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertEqual(detail.state, .open)
         XCTAssertEqual(detail.baseRef, "main")
         XCTAssertEqual(detail.headRef, "octocat/tests")
+        XCTAssertEqual(detail.headSHA, "abc123")
         XCTAssertEqual(detail.htmlURL.absoluteString, "https://github.com/acme/widgets/pull/7")
         XCTAssertEqual(detail.createdAt, ISO8601DateFormatter().date(from: "2026-04-10T08:00:00Z"))
         XCTAssertEqual(detail.additions, 12)
@@ -387,6 +388,94 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertEqual(transport.requests.count, 1)
     }
 
+    func testFetchPullRequestCommentsDecodesCommentsAndThreads() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: commentsResponse)
+        let reference = PullRequestReference(repoFullName: "acme/widgets", number: 7)
+
+        let comments = try await GitHubAPI(transport: transport).fetchPullRequestComments(token: "token", reference: reference)
+
+        let date = ISO8601DateFormatter().date(from: "2026-04-10T08:00:00Z")!
+        XCTAssertEqual(comments.comments, [
+            PullRequestComment(id: "IC_1", databaseID: 11, authorLogin: "octocat", body: "Nice work",
+                               createdAt: date, htmlURL: URL(string: "https://github.com/acme/widgets/pull/7#issuecomment-11")),
+            PullRequestComment(id: "IC_2", databaseID: 12, authorLogin: "ghost", body: "Deleted user",
+                               createdAt: date, htmlURL: nil)
+        ])
+        XCTAssertEqual(comments.threads, [
+            ReviewThread(id: "RT_1", path: "Sources/New.swift", line: 3, startLine: 1, side: .left,
+                         isResolved: true, isOutdated: false,
+                         comments: [PullRequestComment(id: "RC_1", databaseID: 21, authorLogin: "hubot", body: "Why?",
+                                                       createdAt: date, htmlURL: nil)]),
+            ReviewThread(id: "RT_2", path: "Sources/New.swift", line: nil, startLine: nil, side: .right,
+                         isResolved: false, isOutdated: true, comments: [])
+        ])
+        let body = try transport.graphQLBody(at: 0)
+        XCTAssertTrue(body.query.contains("reviewThreads(first: 100)"))
+        XCTAssertEqual(body.variables["owner"] as? String, "acme")
+        XCTAssertEqual(body.variables["name"] as? String, "widgets")
+        XCTAssertEqual(body.variables["number"] as? Int, 7)
+    }
+
+    func testFetchPullRequestCommentsFailsWhenPullRequestIsMissing() async {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: #"{"data":{"repository":{"pullRequest":null}}}"#)
+
+        do {
+            _ = try await GitHubAPI(transport: transport)
+                .fetchPullRequestComments(token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7))
+            XCTFail("Expected an error")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, "Pull request acme/widgets#7 was not found.")
+        }
+    }
+
+    func testPostPullRequestCommentSendsEachKindToItsEndpoint() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: #"{"id":1}"#, statusCode: 201)
+        transport.enqueue(json: #"{"id":2}"#, statusCode: 201)
+        transport.enqueue(json: #"{"id":3}"#, statusCode: 201)
+        let api = GitHubAPI(transport: transport)
+        let reference = PullRequestReference(repoFullName: "acme/widgets", number: 7)
+        let anchor = DiffCommentAnchor(path: "Sources/New.swift", line: 4, side: .left)
+
+        try await api.postPullRequestComment(token: "token", reference: reference, comment: .general(body: "Hello"))
+        try await api.postPullRequestComment(token: "token", reference: reference,
+                                             comment: .inline(body: "Why?", commitID: "abc123", anchor: anchor))
+        try await api.postPullRequestComment(token: "token", reference: reference, comment: .reply(body: "Fixed", commentID: 21))
+
+        XCTAssertEqual(transport.requests.map(\.httpMethod), ["POST", "POST", "POST"])
+        XCTAssertEqual(transport.requests.map { $0.url?.path }, [
+            "/repos/acme/widgets/issues/7/comments",
+            "/repos/acme/widgets/pulls/7/comments",
+            "/repos/acme/widgets/pulls/7/comments/21/replies"
+        ])
+        XCTAssertEqual(transport.requests[0].value(forHTTPHeaderField: "Authorization"), "Bearer token")
+        XCTAssertEqual(transport.requests[0].jsonBody as? [String: String], ["body": "Hello"])
+        let inline = try XCTUnwrap(transport.requests[1].jsonBody)
+        XCTAssertEqual(inline["body"] as? String, "Why?")
+        XCTAssertEqual(inline["commit_id"] as? String, "abc123")
+        XCTAssertEqual(inline["path"] as? String, "Sources/New.swift")
+        XCTAssertEqual(inline["line"] as? Int, 4)
+        XCTAssertEqual(inline["side"] as? String, "LEFT")
+        XCTAssertEqual(transport.requests[2].jsonBody as? [String: String], ["body": "Fixed"])
+    }
+
+    func testPostPullRequestCommentSurfacesValidationErrors() async {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: #"{"message":"Validation Failed"}"#, statusCode: 422)
+
+        do {
+            try await GitHubAPI(transport: transport)
+                .postPullRequestComment(token: "token",
+                                        reference: PullRequestReference(repoFullName: "acme/widgets", number: 7),
+                                        comment: .general(body: "Hi"))
+            XCTFail("Expected an error")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, "GitHub API error (422): Validation Failed")
+        }
+    }
+
     func testGraphQLMutationPayloads() async throws {
         let enqueueTransport = MockHTTPTransport()
         enqueueTransport.enqueue(json: #"{"data":{"enqueuePullRequest":{"mergeQueueEntry":{"id":"entry"}}}}"#)
@@ -424,8 +513,8 @@ private let pullDetailResponse = """
   "body": "Adds **tests**.",
   "user": { "login": "octocat" },
   "state":"open","draft":false,"merged_at":null,
-  "base": { "ref": "main" },
-  "head": { "ref": "octocat/tests" },
+  "base": { "ref": "main", "sha": "def456" },
+  "head": { "ref": "octocat/tests", "sha": "abc123" },
   "html_url": "https://github.com/acme/widgets/pull/7",
   "created_at": "2026-04-10T08:00:00Z",
   "additions": 12,
@@ -452,6 +541,37 @@ private let pullFilesResponse = """
     "deletions": 0
   }
 ]
+"""
+
+private let commentsResponse = """
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "comments": {
+          "nodes": [
+            { "id": "IC_1", "databaseId": 11, "body": "Nice work", "createdAt": "2026-04-10T08:00:00Z",
+              "url": "https://github.com/acme/widgets/pull/7#issuecomment-11", "author": { "login": "octocat" } },
+            { "id": "IC_2", "databaseId": 12, "body": "Deleted user", "createdAt": "2026-04-10T08:00:00Z",
+              "url": null, "author": null }
+          ]
+        },
+        "reviewThreads": {
+          "nodes": [
+            { "id": "RT_1", "path": "Sources/New.swift", "line": 3, "startLine": 1, "diffSide": "LEFT",
+              "isResolved": true, "isOutdated": false,
+              "comments": { "nodes": [
+                { "id": "RC_1", "databaseId": 21, "body": "Why?", "createdAt": "2026-04-10T08:00:00Z",
+                  "author": { "login": "hubot" } }
+              ] } },
+            { "id": "RT_2", "path": "Sources/New.swift", "line": null, "startLine": null, "diffSide": "RIGHT",
+              "isResolved": false, "isOutdated": true, "comments": { "nodes": [] } }
+          ]
+        }
+      }
+    }
+  }
+}
 """
 
 private let viewedFilesResponse = """
