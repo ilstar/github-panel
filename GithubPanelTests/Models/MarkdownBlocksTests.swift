@@ -56,4 +56,38 @@ final class MarkdownBlocksTests: XCTestCase {
     func testCRLFLineEndings() {
         XCTAssertEqual(MarkdownBlocks.parse("# Title\r\n\r\nBody"), [.heading(level: 1, text: "Title"), .paragraph("Body")])
     }
+
+    func testParsesPipeTable() {
+        let markdown = """
+        Debug build:
+        | | main | this PR |
+        |---|:---:|---:|
+        | Unified | 1,101 ms | 152 ms |
+        | Split | `a \\| b` |
+        - after
+        """
+
+        XCTAssertEqual(MarkdownBlocks.parse(markdown), [
+            .paragraph("Debug build:"),
+            .table(header: ["", "main", "this PR"],
+                   alignments: [.leading, .center, .trailing],
+                   rows: [["Unified", "1,101 ms", "152 ms"], ["Split", "`a | b`", ""]]),
+            .listItem(marker: "•", indent: 0, text: "after")
+        ])
+    }
+
+    func testTableWithoutLeadingPipesEndsAtBlankLine() {
+        XCTAssertEqual(MarkdownBlocks.parse("a | b\n--- | ---\n1 | 2\n\nafter"), [
+            .table(header: ["a", "b"], alignments: [.leading, .leading], rows: [["1", "2"]]),
+            .paragraph("after")
+        ])
+    }
+
+    func testPipeWithoutDelimiterRowIsAParagraph() {
+        XCTAssertEqual(MarkdownBlocks.parse("a | b\nc | d"), [.paragraph("a | b\nc | d")])
+    }
+
+    func testDelimiterRowMustMatchHeaderColumnCount() {
+        XCTAssertEqual(MarkdownBlocks.parse("| a | b |\n| --- |"), [.paragraph("| a | b |\n| --- |")])
+    }
 }

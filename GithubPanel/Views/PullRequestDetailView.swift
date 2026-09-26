@@ -302,6 +302,8 @@ struct MarkdownView: View {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(Color.secondary.opacity(0.08))
             )
+        case let .table(header, alignments, rows):
+            MarkdownTableView(header: header, alignments: alignments, rows: rows)
         case .rule:
             Divider()
         }
@@ -310,6 +312,73 @@ struct MarkdownView: View {
     static func inline(_ text: String) -> AttributedString {
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
+    }
+}
+
+/// A GitHub-style pipe table: bold header, row dividers, and a rounded border.
+private struct MarkdownTableView: View {
+    let header: [String]
+    let alignments: [MarkdownTableAlignment]
+    let rows: [[String]]
+
+    var body: some View {
+        Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 0) {
+            GridRow {
+                ForEach(header.indices, id: \.self) { column in
+                    cell(header[column], column: column)
+                        .font(.body.weight(.semibold))
+                        .background(Color.secondary.opacity(0.08))
+                }
+            }
+            ForEach(rows.indices, id: \.self) { row in
+                Divider()
+                GridRow {
+                    ForEach(rows[row].indices, id: \.self) { column in
+                        cell(rows[row][column], column: column)
+                    }
+                }
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .strokeBorder(Color.secondary.opacity(0.3))
+        )
+    }
+
+    private func cell(_ text: String, column: Int) -> some View {
+        let alignment = column < alignments.count ? alignments[column] : .leading
+        return Text(MarkdownView.inline(text))
+            .multilineTextAlignment(alignment.textAlignment)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: alignment.frameAlignment)
+            .overlay(alignment: .leading) {
+                if column > 0 {
+                    Rectangle()
+                        .fill(Color.secondary.opacity(0.2))
+                        .frame(width: 1)
+                }
+            }
+    }
+}
+
+private extension MarkdownTableAlignment {
+    var textAlignment: TextAlignment {
+        switch self {
+        case .leading: return .leading
+        case .center: return .center
+        case .trailing: return .trailing
+        }
+    }
+
+    var frameAlignment: Alignment {
+        switch self {
+        case .leading: return .leading
+        case .center: return .center
+        case .trailing: return .trailing
+        }
     }
 }
 
