@@ -35,6 +35,7 @@ struct PullRequestFilesView: View {
     @State private var scrollRequest: ScrollRequest?
     /// The diff line with an open new-comment box. One at a time, like on GitHub.
     @State private var composingAnchor: DiffCommentAnchor?
+    @FocusState private var isFilterFocused: Bool
 
     private struct ScrollRequest: Equatable {
         let id = UUID()
@@ -58,12 +59,74 @@ struct PullRequestFilesView: View {
                 diffList
             }
         }
+        .background(KeyCommandMonitor(handler: handleKeyCommand))
+        .focusedSceneValue(\.pullRequestFiles, actions)
         .onAppear {
             // Viewed files start folded, like on GitHub.
             guard !didCollapseViewedFiles else { return }
             collapsed = viewModel.viewedFiles
             didCollapseViewedFiles = true
         }
+    }
+
+    // MARK: - Keyboard
+
+    private var actions: PullRequestFilesActions {
+        PullRequestFilesActions(showsFileTree: showsFileTree,
+                                hideWhitespace: hideWhitespace,
+                                mode: mode,
+                                focusFilter: focusFilter,
+                                toggleFileTree: { showsFileTree.toggle() },
+                                showNextFile: { showFile(offset: 1) },
+                                showPreviousFile: { showFile(offset: -1) },
+                                collapseAll: collapsed.count == files.count ? nil : { collapsed = Set(files.map(\.filename)) },
+                                expandAll: collapsed.isEmpty ? nil : { collapsed = [] },
+                                toggleWhitespace: { hideWhitespace.toggle() },
+                                toggleMode: { mode = mode == .unified ? .split : .unified })
+    }
+
+    private func handleKeyCommand(_ command: KeyCommand) -> Bool {
+        guard command == .toggleViewed, let filename = currentFile else { return false }
+        let viewed = !viewModel.viewedFiles.contains(filename)
+        selectedFile = filename
+        setViewed(viewed, filename: filename)
+        // Marking a file viewed moves on to the next one, so V can walk through the whole pull request.
+        if viewed { showFile(offset: 1) }
+        return true
+    }
+
+    /// The file the keyboard acts on: the one picked in the tree or with Next File, else the first one.
+    private var currentFile: String? {
+        let names = visibleFiles.map(\.filename)
+        if let selectedFile, names.contains(selectedFile) { return selectedFile }
+        return names.first
+    }
+
+    private func showFile(offset: Int) {
+        guard let target = ListNavigation.neighbor(of: selectedFile, in: visibleFiles.map(\.filename), offset: offset)
+        else { return }
+        selectedFile = target
+        scrollRequest = ScrollRequest(filename: target)
+    }
+
+    private func focusFilter() {
+        guard showsFileTree else {
+            showsFileTree = true
+            // The field is not in the window until the tree is shown.
+            DispatchQueue.main.async { isFilterFocused = true }
+            return
+        }
+        isFilterFocused = true
+    }
+
+    private func setViewed(_ viewed: Bool, filename: String) {
+        // Marking a file viewed folds it; unmarking unfolds it.
+        if viewed {
+            collapsed.insert(filename)
+        } else {
+            collapsed.remove(filename)
+        }
+        Task { await viewModel.setViewed(viewed, filename: filename) }
     }
 
     // MARK: - Toolbar
@@ -125,6 +188,15 @@ struct PullRequestFilesView: View {
                     .foregroundStyle(.secondary)
                 TextField("Filter files", text: $searchText)
                     .textFieldStyle(.plain)
+                    .focused($isFilterFocused)
+                    .onExitCommand {
+                        // Escape clears the filter, then leaves the field so V and J/K work again.
+                        if searchText.isEmpty {
+                            isFilterFocused = false
+                        } else {
+                            searchText = ""
+                        }
+                    }
                 if !searchText.isEmpty {
                     Button {
                         searchText = ""
@@ -257,6 +329,7 @@ struct PullRequestFilesView: View {
                 .padding(.horizontal, 24)
                 .padding(.bottom, 24 - Self.fileSpacing)
                 .padding(.top, 8 + Self.fileSpacing)
+                .background(PageScrollAnchor())
             }
             .onChange(of: scrollRequest) { request in
                 guard let request else { return }
@@ -406,15 +479,7 @@ struct PullRequestFilesView: View {
                                              collapsed.insert(file.filename)
                                          }
                                      },
-                                     onSetViewed: { viewed in
-                                         // Marking a file viewed folds it; unmarking unfolds it.
-                                         if viewed {
-                                             collapsed.insert(file.filename)
-                                         } else {
-                                             collapsed.remove(file.filename)
-                                         }
-                                         Task { await viewModel.setViewed(viewed, filename: file.filename) }
-                                     })
+                                     onSetViewed: { viewed in setViewed(viewed, filename: file.filename) })
             // A folded file is a whole card; an open one continues into its diff rows.
             .fileCardEdges(isCollapsed ? .all : .top)
             // Opaque so the lines scrolling under the pinned header, and past its rounded corners, stay hidden.

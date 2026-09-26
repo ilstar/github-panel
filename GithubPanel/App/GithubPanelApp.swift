@@ -34,22 +34,7 @@ struct GithubPanelApp: App {
                 .environmentObject(monitor)
         }
         .commands {
-            CommandMenu("Pull Requests") {
-                ForEach(PullRequestTab.allCases) { tab in
-                    Button(tab.title) {
-                        monitor.selectedTab = tab
-                    }
-                    .keyboardShortcut(tab.shortcutKey, modifiers: .command)
-                }
-
-                Divider()
-
-                Button("Refresh") {
-                    Task { await monitor.refreshSelectedTab() }
-                }
-                .keyboardShortcut("r", modifiers: .command)
-                .disabled(!monitor.hasToken || monitor.isSelectedTabLoading)
-            }
+            AppCommands(monitor: monitor)
         }
         WindowGroup("Pull Request", for: PullRequestReference.self) { $reference in
             if let reference {
@@ -57,6 +42,10 @@ struct GithubPanelApp: App {
             }
         }
         .defaultSize(width: 960, height: 760)
+        Window("Keyboard Shortcuts", id: KeyboardShortcutsWindow.id) {
+            KeyboardShortcutsView()
+        }
+        .windowResizability(.contentSize)
         Settings {
             SettingsView()
                 .environmentObject(monitor)

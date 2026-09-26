@@ -21,6 +21,23 @@ Mini macOS app to monitor your active GitHub pull request checks.
   *Reply…* in a thread. ⌘Return posts; Escape cancels. Comments post right away,
   not as part of a pending review.
 
+## Keyboard shortcuts
+Every shortcut is in the menu bar, and **Help → Keyboard Shortcuts** (⌘/ or ?) lists
+them all in one window. Single keys work when you are not typing in a text box;
+click a pull request in the list to leave one.
+
+- **List:** ↓/↑ or J/K move the selection on any tab, Space/⇧Space scroll the pull
+  request on the right, Return opens it on GitHub, ⌘1/⌘2/⌘3 switch tabs, ⌘R
+  refreshes the list and the selected pull request.
+- **Selected pull request:** ⌘O open on GitHub, ⌥⌘O open in a new window, ⇧⌘C copy
+  URL, ⌥⌘C copy branch name, ⇧⌘M the row's merge button (Merge, Mark ready,
+  auto-merge…), ⌥⌘E edit title, ⌥⌘N write a comment, ⇧⌘[ / ⇧⌘] switch between
+  Conversation and Files changed.
+- **Files changed:** ⌘F filter files, ⌃⌘S file tree, ⌥⌘↓/⌥⌘↑ next/previous file,
+  V mark the current file viewed and move on, ⌥⌘← / ⌥⌘→ collapse/expand all,
+  ⌃⌘W hide whitespace, ⌥⌘U unified/split.
+- **Anywhere:** ⌃⌥⌘G shows or hides the app. Change it in Settings.
+
 ## GitHub token scopes
 - `repo` for private repositories.
 - `public_repo` for public-only.
