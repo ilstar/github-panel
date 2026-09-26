@@ -15,6 +15,7 @@ struct ContentView: View {
     @State private var selectedReviewID: String?
     @State private var selectedHistoryID: String?
     @State private var mergeInFlight: Set<String> = []
+    @State private var pageScroller = PageScroller()
     @AppStorage(ListPaneLayout.widthDefaultsKey) private var listPaneWidth: Double = ListPaneLayout.defaultWidth
     private let minuteTicker = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
     private let relativeFormatter: RelativeDateTimeFormatter = {
@@ -36,6 +37,8 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 1000, minHeight: 500)
+        .background(KeyCommandMonitor(handler: handleKeyCommand))
+        .focusedSceneValue(\.pullRequestList, listActions)
         .onAppear {
             monitor.start()
         }
@@ -80,6 +83,7 @@ struct ContentView: View {
         if let reference = selectedReference {
             PullRequestDetailView(viewModel: PullRequestDetailViewModel(reference: reference, monitor: monitor))
             .id(reference)
+            .environment(\.pageScroller, pageScroller)
         } else {
             Text(monitor.hasToken ? "Select a pull request" : "Add a GitHub token to begin.")
                 .foregroundStyle(.secondary)
@@ -191,51 +195,50 @@ struct ContentView: View {
     }
 
     private var openPullRequestsList: some View {
-        ScrollView {
-            LazyVStack(spacing: 10) {
-                if monitor.prRows.isEmpty {
-                    emptyStateSpacer
-                } else {
-                    ForEach(monitor.prRows) { pr in
-                        PRRow(
-                            pr: pr,
-                            isSelected: selectedPRID == pr.id,
-                            relativeFormatter: relativeFormatter,
-                            now: now,
-                            isMerging: mergeInFlight.contains(pr.id),
-                            onAction: {
-                                actOnPullRequest(pr: pr)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 10) {
+                    if monitor.prRows.isEmpty {
+                        emptyStateSpacer
+                    } else {
+                        ForEach(monitor.prRows) { pr in
+                            PRRow(
+                                pr: pr,
+                                isSelected: selectedPRID == pr.id,
+                                relativeFormatter: relativeFormatter,
+                                now: now,
+                                isMerging: mergeInFlight.contains(pr.id),
+                                onAction: {
+                                    actOnPullRequest(pr: pr)
+                                }
+                            )
+                            .id(pr.id)
+                            .onTapGesture {
+                                selectedPRID = pr.id
+                                didClickRow(pr.htmlURL)
                             }
-                        )
-                        .id(pr.id)
-                        .onTapGesture {
-                            selectedPRID = pr.id
-                            openOnGitHubIfCommandHeld(pr.htmlURL)
-                        }
-                        .contextMenu {
-                            pullRequestContextMenu(pr.reference, htmlURL: pr.htmlURL)
+                            .contextMenu {
+                                pullRequestContextMenu(pr.reference, htmlURL: pr.htmlURL)
+                            }
                         }
                     }
                 }
+                .padding(.top, 6)
+                .padding(.bottom, 8)
             }
-            .padding(.top, 6)
-            .padding(.bottom, 8)
-        }
-        .scrollIndicators(.hidden)
-        .background(
-            KeyEventHandlingView { event in
-                handleKeyEvent(event)
+            .scrollIndicators(.hidden)
+            .onAppear {
+                if selectedPRID == nil {
+                    selectedPRID = monitor.prRows.first?.id
+                }
             }
-            .frame(width: 0, height: 0)
-        )
-        .onAppear {
-            if selectedPRID == nil {
-                selectedPRID = monitor.prRows.first?.id
+            .onChange(of: monitor.prRows.map { $0.id }) { newIDs in
+                if selectedPRID == nil || !newIDs.contains(selectedPRID ?? "") {
+                    selectedPRID = newIDs.first
+                }
             }
-        }
-        .onChange(of: monitor.prRows.map { $0.id }) { newIDs in
-            if selectedPRID == nil || !newIDs.contains(selectedPRID ?? "") {
-                selectedPRID = newIDs.first
+            .onChange(of: selectedPRID) { id in
+                scrollToSelection(id, with: proxy)
             }
         }
     }
@@ -296,16 +299,21 @@ struct ContentView: View {
     }
 
     private var reviewRequestsList: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 10) {
-                ForEach(ReviewRequestGroup.allCases) { group in
-                    reviewRequestGroup(group)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    ForEach(ReviewRequestGroup.allCases) { group in
+                        reviewRequestGroup(group)
+                    }
                 }
+                .padding(.top, 6)
+                .padding(.bottom, 8)
             }
-            .padding(.top, 6)
-            .padding(.bottom, 8)
+            .scrollIndicators(.hidden)
+            .onChange(of: selectedReviewID) { id in
+                scrollToSelection(id, with: proxy)
+            }
         }
-        .scrollIndicators(.hidden)
     }
 
     @ViewBuilder
@@ -347,7 +355,7 @@ struct ContentView: View {
                     .id(pr.id)
                     .onTapGesture {
                         selectedReviewID = pr.id
-                        openOnGitHubIfCommandHeld(pr.htmlURL)
+                        didClickRow(pr.htmlURL)
                     }
                     .contextMenu {
                         pullRequestContextMenu(pr.reference, htmlURL: pr.htmlURL)
@@ -380,7 +388,7 @@ struct ContentView: View {
                                             .id(pr.id)
                                             .onTapGesture {
                                                 selectedHistoryID = pr.id
-                                                openOnGitHubIfCommandHeld(pr.htmlURL)
+                                                didClickRow(pr.htmlURL)
                                             }
                                             .contextMenu {
                                                 pullRequestContextMenu(pr.reference, htmlURL: pr.htmlURL)
@@ -402,6 +410,9 @@ struct ContentView: View {
                             if selectedHistoryID == nil || !newIDs.contains(selectedHistoryID ?? "") {
                                 selectedHistoryID = newIDs.first
                             }
+                        }
+                        .onChange(of: selectedHistoryID) { id in
+                            scrollToSelection(id, with: proxy)
                         }
                         .onChange(of: monitor.historyPage) { _ in
                             guard let first = monitor.historyRows.first else { return }
@@ -553,38 +564,92 @@ struct ContentView: View {
         Task { await monitor.refreshSelectedTab() }
     }
 
-    private func handleKeyEvent(_ event: NSEvent) -> Bool {
-        switch event.keyCode {
-        case 125: // down arrow
+    private func handleKeyCommand(_ command: KeyCommand) -> Bool {
+        switch command {
+        case .nextItem:
             moveSelection(delta: 1)
-            return true
-        case 126: // up arrow
+        case .previousItem:
             moveSelection(delta: -1)
-            return true
-        case 36, 76: // return, enter
-            openSelectedPR()
-            return true
-        default:
+        case .open:
+            guard let url = selectedPullRequest?.htmlURL else { return false }
+            NSWorkspace.shared.open(url)
+        case .pageDown:
+            pageScroller.page(down: true)
+        case .pageUp:
+            pageScroller.page(down: false)
+        case .showShortcuts:
+            openWindow(id: KeyboardShortcutsWindow.id)
+        case .toggleViewed:
+            // The Files changed tab handles V.
             return false
+        }
+        return true
+    }
+
+    /// The ids of the visible tab's rows, in the order they are drawn.
+    private var visibleRowIDs: [String] {
+        switch monitor.selectedTab {
+        case .open:
+            return monitor.prRows.map(\.id)
+        case .reviews:
+            return ReviewRequestGroup.allCases.flatMap { monitor.reviewRequests.rows(in: $0) }.map(\.id)
+        case .history:
+            return monitor.historyRows.map(\.id)
         }
     }
 
     private func moveSelection(delta: Int) {
-        guard !monitor.prRows.isEmpty else { return }
-        let ids = monitor.prRows.map { $0.id }
-        let currentIndex = selectedPRID.flatMap { ids.firstIndex(of: $0) } ?? 0
-        let nextIndex = min(max(currentIndex + delta, 0), ids.count - 1)
-        selectedPRID = ids[nextIndex]
+        switch monitor.selectedTab {
+        case .open:
+            selectedPRID = ListNavigation.neighbor(of: selectedPRID, in: visibleRowIDs, offset: delta)
+        case .reviews:
+            selectedReviewID = ListNavigation.neighbor(of: selectedReviewID, in: visibleRowIDs, offset: delta)
+        case .history:
+            selectedHistoryID = ListNavigation.neighbor(of: selectedHistoryID, in: visibleRowIDs, offset: delta)
+        }
     }
 
-    private func openSelectedPR() {
-        guard let id = selectedPRID,
-              let pr = monitor.prRows.first(where: { $0.id == id }) else { return }
-        NSWorkspace.shared.open(pr.htmlURL)
+    private func scrollToSelection(_ id: String?, with proxy: ScrollViewProxy) {
+        guard let id else { return }
+        withAnimation(.easeInOut(duration: 0.15)) {
+            proxy.scrollTo(id)
+        }
     }
 
-    /// Row clicks show the PR on the right; ⌘-click also opens it on GitHub.
-    private func openOnGitHubIfCommandHeld(_ htmlURL: URL) {
+    /// The selected row on the visible tab.
+    private var selectedPullRequest: (reference: PullRequestReference, htmlURL: URL)? {
+        switch monitor.selectedTab {
+        case .open:
+            return monitor.prRows.first { $0.id == selectedPRID }.map { ($0.reference, $0.htmlURL) }
+        case .reviews:
+            return monitor.reviewRequests.rows.first { $0.id == selectedReviewID }.map { ($0.reference, $0.htmlURL) }
+        case .history:
+            return monitor.historyRows.first { $0.id == selectedHistoryID }.map { ($0.reference, $0.htmlURL) }
+        }
+    }
+
+    private var listActions: PullRequestListActions {
+        PullRequestListActions(refresh: refreshIsEnabled ? refreshSelectedTab : nil,
+                               selection: selectedPullRequest.map { selected in
+                                   SelectedPullRequestActions(htmlURL: selected.htmlURL,
+                                                              openInNewWindow: { openWindow(value: selected.reference) },
+                                                              primaryAction: primaryAction)
+                               })
+    }
+
+    /// The selected row's merge button, for the menu. Only rows on My PRs have one.
+    private var primaryAction: PrimaryAction? {
+        guard monitor.selectedTab == .open,
+              let pr = monitor.prRows.first(where: { $0.id == selectedPRID }) else { return nil }
+        let state = MergeButtonState.resolve(for: pr, isWorking: mergeInFlight.contains(pr.id))
+        return PrimaryAction(title: state.title, isEnabled: state.isClickable) {
+            actOnPullRequest(pr: pr)
+        }
+    }
+
+    /// Row clicks show the PR on the right and hand the keyboard back to the list; ⌘-click also opens it on GitHub.
+    private func didClickRow(_ htmlURL: URL) {
+        NSApp.keyWindow?.endTyping()
         if NSEvent.modifierFlags.contains(.command) {
             NSWorkspace.shared.open(htmlURL)
         }

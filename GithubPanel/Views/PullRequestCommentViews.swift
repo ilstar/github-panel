@@ -38,6 +38,8 @@ struct CommentComposer: View {
     let submitTitle: String
     /// Shows a Cancel button and handles Escape. Nil for the always-visible composer on the Conversation tab.
     var onCancel: (() -> Void)?
+    /// Takes focus each time this goes up.
+    var focusRequest = 0
     /// Posts the trimmed text. Throws to keep the draft and show the error.
     let onSubmit: (String) async throws -> Void
 
@@ -95,6 +97,9 @@ struct CommentComposer: View {
         .onAppear {
             // An inline composer opens from a click on a line, so start typing right away.
             if onCancel != nil { isFocused = true }
+        }
+        .onChange(of: focusRequest) { _ in
+            isFocused = true
         }
     }
 

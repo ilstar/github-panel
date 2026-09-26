@@ -11,6 +11,9 @@ enum PullRequestDetailTab: String, CaseIterable, Identifiable {
 struct PullRequestDetailView: View {
     @StateObject private var viewModel: PullRequestDetailViewModel
     @State private var selectedTab: PullRequestDetailTab = .conversation
+    @State private var isEditingTitle = false
+    /// Goes up by one each time the comment box should take focus.
+    @State private var commentFocusRequest = 0
 
     init(viewModel: @autoclosure @escaping () -> PullRequestDetailViewModel) {
         _viewModel = StateObject(wrappedValue: viewModel())
@@ -21,6 +24,7 @@ struct PullRequestDetailView: View {
             if let content = viewModel.content {
                 PullRequestDetailHeader(detail: content.detail,
                                         isLoading: viewModel.isLoading,
+                                        isEditingTitle: $isEditingTitle,
                                         onRefresh: reload,
                                         onSaveTitle: { title in try await viewModel.edit(title: title) })
                     .padding(.horizontal, 24)
@@ -49,6 +53,7 @@ struct PullRequestDetailView: View {
                 case .conversation:
                     PullRequestConversationView(detail: content.detail,
                                                 comments: viewModel.comments?.comments,
+                                                commentFocusRequest: commentFocusRequest,
                                                 onComment: { body in try await viewModel.post(.general(body: body)) },
                                                 onSaveBody: { body in try await viewModel.edit(body: body) })
                 case .files:
@@ -70,6 +75,7 @@ struct PullRequestDetailView: View {
         .frame(minWidth: 420, minHeight: 400)
         .background(Color(nsColor: .textBackgroundColor))
         .navigationTitle(navigationTitle)
+        .focusedSceneValue(\.pullRequestDetail, actions)
         .task {
             await viewModel.load()
         }
@@ -96,16 +102,36 @@ struct PullRequestDetailView: View {
     private func reload() {
         Task { await viewModel.load() }
     }
+
+    private func addComment() {
+        guard selectedTab != .conversation else {
+            commentFocusRequest += 1
+            return
+        }
+        // Ask once the Conversation tab is on screen, so its comment box sees the request change.
+        selectedTab = .conversation
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { commentFocusRequest += 1 }
+    }
+
+    private var actions: PullRequestDetailActions? {
+        guard let detail = viewModel.content?.detail else { return nil }
+        return PullRequestDetailActions(htmlURL: detail.htmlURL,
+                                        branch: detail.headRef,
+                                        reload: reload,
+                                        showPreviousTab: { selectedTab = selectedTab.previous },
+                                        showNextTab: { selectedTab = selectedTab.next },
+                                        addComment: addComment,
+                                        editTitle: detail.canEdit ? { isEditingTitle = true } : nil)
+    }
 }
 
 struct PullRequestDetailHeader: View {
     let detail: PullRequestDetail
     let isLoading: Bool
+    @Binding var isEditingTitle: Bool
     let onRefresh: () -> Void
     /// Saves a new title. Throws to keep the draft and show the error.
     let onSaveTitle: (String) async throws -> Void
-
-    @State private var isEditingTitle = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -443,82 +469,94 @@ struct PullRequestConversationView: View {
     let detail: PullRequestDetail
     /// General comments, oldest first. Nil while they load.
     let comments: [PullRequestComment]?
+    /// Goes up by one each time the comment box should take focus.
+    var commentFocusRequest = 0
     let onComment: (String) async throws -> Void
     /// Saves a new description. Throws to keep the draft and show the error.
     let onSaveBody: (String) async throws -> Void
 
     @State private var isEditingBody = false
 
+    private static let composerID = "comment-composer"
+
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack(spacing: 8) {
-                        Text("\(detail.authorLogin) opened this pull request \(detail.createdAt.formatted(.relative(presentation: .named)))")
-                            .font(.callout.weight(.semibold))
-                        Spacer(minLength: 8)
-                        if detail.canEdit && !isEditingBody {
-                            Button {
-                                isEditingBody = true
-                            } label: {
-                                Image(systemName: "pencil")
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(spacing: 8) {
+                            Text("\(detail.authorLogin) opened this pull request \(detail.createdAt.formatted(.relative(presentation: .named)))")
+                                .font(.callout.weight(.semibold))
+                            Spacer(minLength: 8)
+                            if detail.canEdit && !isEditingBody {
+                                Button {
+                                    isEditingBody = true
+                                } label: {
+                                    Image(systemName: "pencil")
+                                }
+                                .buttonStyle(.borderless)
+                                .help("Edit description")
                             }
-                            .buttonStyle(.borderless)
-                            .help("Edit description")
                         }
-                    }
 
-                    Group {
-                        if isEditingBody {
-                            PullRequestBodyEditor(body: detail.body,
-                                                  onCancel: { isEditingBody = false },
-                                                  onSave: { body in
-                                                      try await onSaveBody(body)
-                                                      isEditingBody = false
-                                                  })
-                        } else if detail.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            Text("No description provided.")
-                                .italic()
-                                .foregroundStyle(.secondary)
-                        } else {
-                            MarkdownView(markdown: detail.body)
+                        Group {
+                            if isEditingBody {
+                                PullRequestBodyEditor(body: detail.body,
+                                                      onCancel: { isEditingBody = false },
+                                                      onSave: { body in
+                                                          try await onSaveBody(body)
+                                                          isEditingBody = false
+                                                      })
+                            } else if detail.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                Text("No description provided.")
+                                    .italic()
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                MarkdownView(markdown: detail.body)
+                            }
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(16)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                        )
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(16)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
-                    )
-                }
 
-                if let comments {
-                    ForEach(comments) { comment in
-                        PullRequestCommentView(comment: comment)
-                            .padding(16)
-                            .background(
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
-                            )
+                    if let comments {
+                        ForEach(comments) { comment in
+                            PullRequestCommentView(comment: comment)
+                                .padding(16)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                                )
+                        }
+                    } else {
+                        ProgressView()
+                            .controlSize(.small)
+                            .frame(maxWidth: .infinity)
                     }
-                } else {
-                    ProgressView()
-                        .controlSize(.small)
-                        .frame(maxWidth: .infinity)
-                }
 
-                Divider()
+                    Divider()
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Add a comment")
-                        .font(.callout.weight(.semibold))
-                    CommentComposer(placeholder: "Leave a comment (Markdown supported)",
-                                    submitTitle: "Comment",
-                                    onSubmit: onComment)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Add a comment")
+                            .font(.callout.weight(.semibold))
+                        CommentComposer(placeholder: "Leave a comment (Markdown supported)",
+                                        submitTitle: "Comment",
+                                        focusRequest: commentFocusRequest,
+                                        onSubmit: onComment)
+                    }
+                    .id(Self.composerID)
                 }
+                .padding(24)
+                .frame(maxWidth: 900, alignment: .leading)
+                .background(PageScrollAnchor())
             }
-            .padding(24)
-            .frame(maxWidth: 900, alignment: .leading)
+            .onChange(of: commentFocusRequest) { _ in
+                withAnimation { proxy.scrollTo(Self.composerID, anchor: .bottom) }
+            }
         }
     }
 }

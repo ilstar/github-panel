@@ -15,10 +15,13 @@ enum PullRequestTab: String, CaseIterable, Identifiable {
         }
     }
 
-    /// ⌘1, ⌘2, … follow the order of the tabs.
-    var shortcutKey: KeyEquivalent {
-        let index = Self.allCases.firstIndex(of: self)!
-        return KeyEquivalent(Character(String(index + 1)))
+    /// ⌘1, ⌘2, ⌘3 follow the order of the tabs.
+    var shortcut: AppShortcut {
+        switch self {
+        case .open: return .myPullRequests
+        case .reviews: return .toReview
+        case .history: return .history
+        }
     }
 }
 
