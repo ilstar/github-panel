@@ -33,7 +33,7 @@ struct PullRequestDetailView: View {
                 }
 
                 Picker("", selection: $selectedTab) {
-                    Text("Conversation").tag(PullRequestDetailTab.conversation)
+                    Text(conversationTitle).tag(PullRequestDetailTab.conversation)
                     Text("Files changed \(content.files.count)").tag(PullRequestDetailTab.files)
                 }
                 .pickerStyle(.segmented)
@@ -46,7 +46,9 @@ struct PullRequestDetailView: View {
 
                 switch selectedTab {
                 case .conversation:
-                    PullRequestConversationView(detail: content.detail)
+                    PullRequestConversationView(detail: content.detail,
+                                                comments: viewModel.comments?.comments,
+                                                onComment: { body in try await viewModel.post(.general(body: body)) })
                 case .files:
                     PullRequestFilesView(viewModel: viewModel,
                                          files: content.files,
@@ -69,6 +71,11 @@ struct PullRequestDetailView: View {
         .task {
             await viewModel.load()
         }
+    }
+
+    private var conversationTitle: String {
+        guard let count = viewModel.comments?.comments.count, count > 0 else { return "Conversation" }
+        return "Conversation \(count)"
     }
 
     private var navigationTitle: String {
@@ -183,34 +190,63 @@ struct PullRequestStateBadge: View {
 
 struct PullRequestConversationView: View {
     let detail: PullRequestDetail
+    /// General comments, oldest first. Nil while they load.
+    let comments: [PullRequestComment]?
+    let onComment: (String) async throws -> Void
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("\(detail.authorLogin) opened this pull request \(detail.createdAt.formatted(.relative(presentation: .named)))")
-                    .font(.callout.weight(.semibold))
+            VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("\(detail.authorLogin) opened this pull request \(detail.createdAt.formatted(.relative(presentation: .named)))")
+                        .font(.callout.weight(.semibold))
 
-                Group {
-                    if detail.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        Text("No description provided.")
-                            .italic()
-                            .foregroundStyle(.secondary)
-                    } else {
-                        MarkdownView(markdown: detail.body)
+                    Group {
+                        if detail.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Text("No description provided.")
+                                .italic()
+                                .foregroundStyle(.secondary)
+                        } else {
+                            MarkdownView(markdown: detail.body)
+                        }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                    )
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(16)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
-                )
+
+                if let comments {
+                    ForEach(comments) { comment in
+                        PullRequestCommentView(comment: comment)
+                            .padding(16)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                            )
+                    }
+                } else {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(maxWidth: .infinity)
+                }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Add a comment")
+                        .font(.callout.weight(.semibold))
+                    CommentComposer(placeholder: "Leave a comment (Markdown supported)",
+                                    submitTitle: "Comment",
+                                    onSubmit: onComment)
+                }
             }
             .padding(24)
             .frame(maxWidth: 900, alignment: .leading)
         }
     }
-
 }
 
 struct MarkdownView: View {

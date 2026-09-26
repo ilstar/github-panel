@@ -50,7 +50,8 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 - Auto-refresh the detail pane when the list refresh sees a new head SHA.
 - Checks list with each check's status and a link to its logs.
 - Commits tab.
-- Reviews and comments timeline; inline review comments on the diff.
+- Reviews timeline (review summaries and approvals) on the Conversation tab.
+- Resolve/unresolve review threads; multi-line and file-level comments; pending reviews.
 - Syntax highlighting; split (side-by-side) diff; collapsing large files.
 - Files over GitHub's `patch` size limit (fetch the raw diff instead).
 - Pagination for PRs with more than 100 changed files.
@@ -63,3 +64,9 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   or accessibility access, so UI checks are offscreen renders plus a manual look.
 - 2026-09-25: Switched to a list/detail split view. Checked the layout with an
   offscreen render of `ContentView` and `PullRequestFilesView` (mock data).
+- 2026-09-26: Comments (branch `fred/pr-commenting`). General comments are
+  issue comments; inline comments are review threads. Loaded with one GraphQL
+  query (first 100 comments and threads). Posted through REST so each comment
+  is published right away: `POST /issues/{n}/comments`,
+  `POST /pulls/{n}/comments` (with `commit_id`, `path`, `line`, `side`), and
+  `POST /pulls/{n}/comments/{id}/replies`.

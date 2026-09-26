@@ -33,6 +33,8 @@ struct PullRequestFilesView: View {
     @State private var searchText = ""
     @State private var selectedFile: String?
     @State private var scrollRequest: ScrollRequest?
+    /// The diff line with an open new-comment box. One at a time, like on GitHub.
+    @State private var composingAnchor: DiffCommentAnchor?
 
     private struct ScrollRequest: Equatable {
         let id = UUID()
@@ -258,6 +260,7 @@ struct PullRequestFilesView: View {
             PullRequestFileHeader(file: file,
                                   isCollapsed: isCollapsed,
                                   isViewed: isViewed,
+                                  commentCount: viewModel.threadIndex(for: file.filename).threads.count,
                                   onToggle: {
                                       if isCollapsed {
                                           collapsed.remove(file.filename)
@@ -289,8 +292,10 @@ struct PullRequestFilesView: View {
 
     @ViewBuilder
     private func fileBody(_ file: PullRequestFile) -> some View {
-        if let lines = viewModel.diffLines[file.filename], !lines.isEmpty {
-            let presentation = viewModel.presentation(for: file.filename, hideWhitespace: hideWhitespace)
+        let path = file.filename
+        let threads = viewModel.threadIndex(for: path)
+        if let lines = viewModel.diffLines[path], !lines.isEmpty {
+            let presentation = viewModel.presentation(for: path, hideWhitespace: hideWhitespace)
             if hideWhitespace && !presentation.hasChanges {
                 fileMessage("Only whitespace changed.")
             } else {
@@ -298,17 +303,20 @@ struct PullRequestFilesView: View {
                 case .unified:
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(Array(presentation.unified.enumerated()), id: \.offset) { _, line in
-                            DiffLineRow(line: line)
+                            let anchor = DiffCommentAnchor.unified(path: path, line: line)
+                            DiffLineRow(line: line, onAddComment: addCommentAction(anchor))
+                            lineComments(threads.threads(for: line, path: path), anchors: [anchor])
                         }
                     }
                 case .split:
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(Array(presentation.split.enumerated()), id: \.offset) { _, row in
-                            SplitDiffRowView(row: row)
+                            splitRow(row, path: path, threads: threads)
                         }
                     }
                 }
             }
+            unplacedThreads(threads.unplacedThreads(in: presentation.unified, path: path))
         } else {
             HStack(spacing: 4) {
                 Text(file.patch == nil ? "Binary file or diff too large to show here." : "No changes to show.")
@@ -317,6 +325,92 @@ struct PullRequestFilesView: View {
             .font(.callout)
             .foregroundStyle(.secondary)
             .padding(16)
+            unplacedThreads(threads.threads)
+        }
+    }
+
+    @ViewBuilder
+    private func splitRow(_ row: SplitDiffRow, path: String, threads: ReviewThreadIndex) -> some View {
+        switch row {
+        case .full:
+            SplitDiffRowView(row: row)
+        case let .pair(left, right):
+            let leftAnchor = DiffCommentAnchor.split(path: path, line: left, side: .left)
+            let rightAnchor = DiffCommentAnchor.split(path: path, line: right, side: .right)
+            // A context line sits on both sides; list its threads once.
+            let lines = left == right ? [left] : [left, right]
+            SplitDiffRowView(row: row,
+                             onAddLeftComment: addCommentAction(leftAnchor),
+                             onAddRightComment: addCommentAction(rightAnchor))
+            lineComments(lines.compactMap { $0 }.flatMap { threads.threads(for: $0, path: path) },
+                         anchors: [leftAnchor, rightAnchor])
+        }
+    }
+
+    private func addCommentAction(_ anchor: DiffCommentAnchor?) -> (() -> Void)? {
+        anchor.map { anchor in { composingAnchor = anchor } }
+    }
+
+    /// The threads under one diff line, plus the new-comment box when it is open on that line.
+    @ViewBuilder
+    private func lineComments(_ threads: [ReviewThread], anchors: [DiffCommentAnchor?]) -> some View {
+        let composing = composingAnchor.flatMap { anchors.contains($0) ? $0 : nil }
+        if !threads.isEmpty || composing != nil {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(threads) { thread in
+                    threadView(thread)
+                }
+                if let composing {
+                    CommentComposer(placeholder: Self.composerPlaceholder(composing),
+                                    submitTitle: "Comment",
+                                    onCancel: { composingAnchor = nil },
+                                    onSubmit: { body in
+                                        try await viewModel.postInlineComment(body, at: composing)
+                                        composingAnchor = nil
+                                    })
+                    .padding(12)
+                    .background(Color(nsColor: .textBackgroundColor))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                    )
+                }
+            }
+            .frame(maxWidth: 760, alignment: .leading)
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.secondary.opacity(0.05))
+        }
+    }
+
+    /// Threads with no line in the diff to sit under, such as outdated ones.
+    @ViewBuilder
+    private func unplacedThreads(_ threads: [ReviewThread]) -> some View {
+        if !threads.isEmpty {
+            Divider()
+            VStack(alignment: .leading, spacing: 8) {
+                Text(threads.count == 1 ? "1 conversation not on the current diff" : "\(threads.count) conversations not on the current diff")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                ForEach(threads) { thread in
+                    threadView(thread)
+                }
+            }
+            .frame(maxWidth: 760, alignment: .leading)
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.secondary.opacity(0.05))
+        }
+    }
+
+    private func threadView(_ thread: ReviewThread) -> some View {
+        ReviewThreadView(thread: thread, onReply: { body in try await viewModel.reply(body, to: thread) })
+    }
+
+    static func composerPlaceholder(_ anchor: DiffCommentAnchor) -> String {
+        switch anchor.side {
+        case .left: return "Comment on old line \(anchor.line)…"
+        case .right: return "Comment on line \(anchor.line)…"
         }
     }
 
@@ -332,6 +426,7 @@ struct PullRequestFileHeader: View {
     let file: PullRequestFile
     let isCollapsed: Bool
     let isViewed: Bool
+    var commentCount = 0
     let onToggle: () -> Void
     let onSetViewed: (Bool) -> Void
 
@@ -380,6 +475,12 @@ struct PullRequestFileHeader: View {
 
             Spacer(minLength: 8)
 
+            if commentCount > 0 {
+                Label("\(commentCount)", systemImage: "text.bubble")
+                    .foregroundStyle(.secondary)
+                    .help(commentCount == 1 ? "1 conversation" : "\(commentCount) conversations")
+            }
+
             Text("+\(file.additions)")
                 .foregroundStyle(DiffColors.additionText)
             Text("−\(file.deletions)")
@@ -424,12 +525,14 @@ struct PullRequestFileHeader: View {
 /// One line of the unified view.
 struct DiffLineRow: View {
     let line: DiffDisplayLine
+    /// Opens a new-comment box on this line. Nil for lines GitHub cannot take comments on.
+    var onAddComment: (() -> Void)?
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
             DiffGutter(number: line.oldLineNumber, kind: line.kind)
             DiffGutter(number: line.newLineNumber, kind: line.kind)
-            DiffLineContent(line: line)
+            DiffLineContent(line: line, onAddComment: onAddComment)
         }
         .font(.system(size: 12, design: .monospaced))
         .background(DiffColors.background(for: line.kind))
@@ -439,6 +542,8 @@ struct DiffLineRow: View {
 /// One row of the split view: the old line on the left and the new line on the right.
 struct SplitDiffRowView: View {
     let row: SplitDiffRow
+    var onAddLeftComment: (() -> Void)?
+    var onAddRightComment: (() -> Void)?
 
     var body: some View {
         switch row {
@@ -451,9 +556,9 @@ struct SplitDiffRowView: View {
             .background(DiffColors.background(for: line.kind))
         case let .pair(left, right):
             HStack(alignment: .top, spacing: 0) {
-                half(left, number: left?.oldLineNumber)
+                half(left, number: left?.oldLineNumber, onAddComment: onAddLeftComment)
                 Divider()
-                half(right, number: right?.newLineNumber)
+                half(right, number: right?.newLineNumber, onAddComment: onAddRightComment)
             }
             .fixedSize(horizontal: false, vertical: true)
             .font(.system(size: 12, design: .monospaced))
@@ -461,12 +566,12 @@ struct SplitDiffRowView: View {
     }
 
     @ViewBuilder
-    private func half(_ line: DiffDisplayLine?, number: Int?) -> some View {
+    private func half(_ line: DiffDisplayLine?, number: Int?, onAddComment: (() -> Void)?) -> some View {
         Group {
             if let line {
                 HStack(alignment: .top, spacing: 0) {
                     DiffGutter(number: number, kind: line.kind)
-                    DiffLineContent(line: line)
+                    DiffLineContent(line: line, onAddComment: onAddComment)
                 }
                 .background(DiffColors.background(for: line.kind))
             } else {
@@ -494,12 +599,29 @@ private struct DiffGutter: View {
 
 private struct DiffLineContent: View {
     let line: DiffDisplayLine
+    var onAddComment: (() -> Void)?
+
+    @State private var isHovering = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
-            Text(marker)
+            // The marker column turns into an add-comment button under the pointer, like on GitHub.
+            if isHovering, let onAddComment {
+                Button(action: onAddComment) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 16, height: 16)
+                        .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(Color.accentColor))
+                }
+                .buttonStyle(.plain)
                 .frame(width: 18)
-                .foregroundStyle(.secondary)
+                .help("Add a comment on this line")
+            } else {
+                Text(marker)
+                    .frame(width: 18)
+                    .foregroundStyle(.secondary)
+            }
 
             Text(DiffColors.attributedText(line))
                 .foregroundStyle(line.kind == .hunk || line.kind == .note ? Color.secondary : Color.primary)
@@ -507,6 +629,7 @@ private struct DiffLineContent: View {
                 .textSelection(.enabled)
         }
         .padding(.vertical, 1)
+        .onHover { isHovering = $0 }
     }
 
     private var marker: String {

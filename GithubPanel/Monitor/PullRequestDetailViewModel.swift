@@ -6,6 +6,8 @@ final class PullRequestDetailViewModel: ObservableObject {
     typealias Fetch = (PullRequestReference) async throws -> PullRequestDetailContent
     /// Marks or unmarks one file as viewed: the pull request's node ID, the file path, and the new state.
     typealias SetViewed = (String, String, Bool) async throws -> Void
+    typealias FetchComments = (PullRequestReference) async throws -> PullRequestComments
+    typealias PostComment = (NewPullRequestComment, PullRequestReference) async throws -> Void
 
     let reference: PullRequestReference
     /// The last loaded content. Kept when a reload fails so the window does not go blank.
@@ -16,9 +18,15 @@ final class PullRequestDetailViewModel: ObservableObject {
     @Published private(set) var diffLines: [String: [DiffLine]] = [:]
     /// Filenames the viewer marked as viewed.
     @Published private(set) var viewedFiles: Set<String> = []
+    /// General comments and review threads. Nil until they first load.
+    @Published private(set) var comments: PullRequestComments?
+    /// Review threads for each file, keyed by filename.
+    @Published private(set) var threadIndexes: [String: ReviewThreadIndex] = [:]
 
     private let fetch: Fetch
     private let syncViewed: SetViewed
+    private let fetchComments: FetchComments
+    private let sendComment: PostComment
     /// Presentations built so far, keyed by filename and whether whitespace changes are hidden.
     private var presentations: [PresentationKey: DiffPresentation] = [:]
 
@@ -29,10 +37,27 @@ final class PullRequestDetailViewModel: ObservableObject {
 
     init(reference: PullRequestReference,
          fetch: @escaping Fetch,
-         setViewed: @escaping SetViewed = { _, _, _ in }) {
+         setViewed: @escaping SetViewed = { _, _, _ in },
+         fetchComments: @escaping FetchComments = { _ in .empty },
+         postComment: @escaping PostComment = { _, _ in }) {
         self.reference = reference
         self.fetch = fetch
         self.syncViewed = setViewed
+        self.fetchComments = fetchComments
+        self.sendComment = postComment
+    }
+
+    /// Talks to GitHub through the monitor, which holds the token.
+    convenience init(reference: PullRequestReference, monitor: PRMonitor) {
+        self.init(reference: reference,
+                  fetch: { [monitor] reference in try await monitor.fetchPullRequestDetail(reference) },
+                  setViewed: { [monitor] pullRequestID, path, viewed in
+                      try await monitor.setFileViewed(pullRequestID: pullRequestID, path: path, viewed: viewed)
+                  },
+                  fetchComments: { [monitor] reference in try await monitor.fetchPullRequestComments(reference) },
+                  postComment: { [monitor] comment, reference in
+                      try await monitor.postPullRequestComment(comment, on: reference)
+                  })
     }
 
     func load() async {
@@ -49,7 +74,47 @@ final class PullRequestDetailViewModel: ObservableObject {
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
+            return
         }
+        // The diff shows while the comments load.
+        do {
+            try await reloadComments()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Posts a comment, then reloads the comments so it shows with GitHub's IDs.
+    /// Throws when GitHub refuses the comment, so the composer can keep the draft.
+    func post(_ comment: NewPullRequestComment) async throws {
+        try await sendComment(comment, reference)
+        do {
+            try await reloadComments()
+        } catch {
+            // The comment was posted; only the refresh failed.
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Posts a new review thread on a diff line, against the head commit that was loaded.
+    func postInlineComment(_ body: String, at anchor: DiffCommentAnchor) async throws {
+        guard let commitID = content?.detail.headSHA else { return }
+        try await post(.inline(body: body, commitID: commitID, anchor: anchor))
+    }
+
+    func reply(_ body: String, to thread: ReviewThread) async throws {
+        guard let first = thread.comments.first else { return }
+        try await post(.reply(body: body, commentID: first.databaseID))
+    }
+
+    func threadIndex(for filename: String) -> ReviewThreadIndex {
+        threadIndexes[filename] ?? ReviewThreadIndex(threads: [])
+    }
+
+    private func reloadComments() async throws {
+        let loaded = try await fetchComments(reference)
+        threadIndexes = Dictionary(grouping: loaded.threads, by: \.path).mapValues(ReviewThreadIndex.init)
+        comments = loaded
     }
 
     /// The file's diff with word highlights, built on first use and then reused.

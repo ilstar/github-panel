@@ -226,6 +226,84 @@ final class GitHubAPI: GitHubAPIClient {
         _ = try await graphQL(Response.self, query: query, variables: ["id": pullRequestID, "path": path], token: token)
     }
 
+    func fetchPullRequestComments(token: String, reference: PullRequestReference) async throws -> PullRequestComments {
+        let (owner, name) = try repoParts(reference.repoFullName)
+        // Only the first 100 comments and threads are loaded, like the changed files.
+        let query = """
+        query($owner: String!, $name: String!, $number: Int!) {
+          repository(owner: $owner, name: $name) {
+            pullRequest(number: $number) {
+              comments(first: 100) { nodes { ...CommentFields } }
+              reviewThreads(first: 100) {
+                nodes {
+                  id path line startLine diffSide isResolved isOutdated
+                  comments(first: 100) { nodes { ...CommentFields } }
+                }
+              }
+            }
+          }
+        }
+
+        fragment CommentFields on Comment {
+          id
+          body
+          createdAt
+          author { login }
+          ... on IssueComment { databaseId url }
+          ... on PullRequestReviewComment { databaseId url }
+        }
+        """
+        let response = try await graphQL(CommentsResponse.self,
+                                         query: query,
+                                         variables: ["owner": owner, "name": name, "number": reference.number],
+                                         token: token)
+        guard let pullRequest = response.repository?.pullRequest else {
+            throw GraphQLError(message: "Pull request \(reference.id) was not found.")
+        }
+        return PullRequestComments(
+            comments: pullRequest.comments.nodes.map(\.comment),
+            threads: pullRequest.reviewThreads.nodes.map { thread in
+                ReviewThread(id: thread.id,
+                             path: thread.path,
+                             line: thread.line,
+                             startLine: thread.startLine,
+                             side: DiffSide(rawValue: thread.diffSide) ?? .right,
+                             isResolved: thread.isResolved,
+                             isOutdated: thread.isOutdated,
+                             comments: thread.comments.nodes.map(\.comment))
+            }
+        )
+    }
+
+    /// Posts through REST so each comment is published right away instead of joining a pending review.
+    func postPullRequestComment(token: String, reference: PullRequestReference, comment: NewPullRequestComment) async throws {
+        let (owner, name) = try repoParts(reference.repoFullName)
+        let repoPath = "/repos/\(owner)/\(name)"
+        let path: String
+        let body: [String: Any]
+        switch comment {
+        case let .general(text):
+            path = "\(repoPath)/issues/\(reference.number)/comments"
+            body = ["body": text]
+        case let .inline(text, commitID, anchor):
+            path = "\(repoPath)/pulls/\(reference.number)/comments"
+            body = ["body": text,
+                    "commit_id": commitID,
+                    "path": anchor.path,
+                    "line": anchor.line,
+                    "side": anchor.side.rawValue]
+        case let .reply(text, commentID):
+            path = "\(repoPath)/pulls/\(reference.number)/comments/\(commentID)/replies"
+            body = ["body": text]
+        }
+        var request = makeRequest(path: path, token: token)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        struct Created: Decodable { let id: Int }
+        _ = try await decode(Created.self, request: request)
+    }
+
     /// Paths the viewer marked as viewed. GitHub reports files changed since then as `DISMISSED`, not `VIEWED`.
     private func fetchViewedFiles(token: String, owner: String, name: String, number: Int) async throws -> Set<String> {
         let query = """
@@ -243,6 +321,12 @@ final class GitHubAPI: GitHubAPIClient {
                                          token: token)
         let nodes = response.repository?.pullRequest?.files?.nodes ?? []
         return Set(nodes.filter { $0.viewerViewedState == "VIEWED" }.map(\.path))
+    }
+
+    private func repoParts(_ repoFullName: String) throws -> (owner: String, name: String) {
+        let parts = repoFullName.split(separator: "/", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { throw URLError(.badURL) }
+        return (parts[0], parts[1])
     }
 
     private func makeRequest(path: String, token: String) -> URLRequest {
@@ -385,6 +469,7 @@ private struct PullResponse: Decodable {
 
     struct Ref: Decodable {
         let ref: String
+        let sha: String
     }
 
     let nodeID: String
@@ -431,6 +516,7 @@ private struct PullResponse: Decodable {
                                  state: detailState,
                                  baseRef: base.ref,
                                  headRef: head.ref,
+                                 headSHA: head.sha,
                                  htmlURL: htmlURL,
                                  createdAt: createdAt,
                                  additions: additions,
@@ -470,6 +556,47 @@ private struct ViewedFilesResponse: Decodable {
     struct File: Decodable {
         let path: String
         let viewerViewedState: String
+    }
+
+    let repository: Repository?
+}
+
+private struct CommentsResponse: Decodable {
+    struct Repository: Decodable { let pullRequest: PullRequest? }
+    struct PullRequest: Decodable {
+        let comments: Connection<Comment>
+        let reviewThreads: Connection<Thread>
+    }
+    struct Connection<Node: Decodable>: Decodable { let nodes: [Node] }
+    struct Thread: Decodable {
+        let id: String
+        let path: String
+        let line: Int?
+        let startLine: Int?
+        let diffSide: String
+        let isResolved: Bool
+        let isOutdated: Bool
+        let comments: Connection<Comment>
+    }
+    struct Comment: Decodable {
+        struct Author: Decodable { let login: String }
+
+        let id: String
+        let databaseId: Int
+        let body: String
+        let createdAt: Date
+        let url: URL?
+        /// Missing when the author's account was deleted.
+        let author: Author?
+
+        var comment: PullRequestComment {
+            PullRequestComment(id: id,
+                               databaseID: databaseId,
+                               authorLogin: author?.login ?? "ghost",
+                               body: body,
+                               createdAt: createdAt,
+                               htmlURL: url)
+        }
     }
 
     let repository: Repository?
