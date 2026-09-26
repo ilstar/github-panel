@@ -14,6 +14,7 @@ struct ContentView: View {
     @State private var selectedPRID: String?
     @State private var selectedHistoryID: String?
     @State private var mergeInFlight: Set<String> = []
+    @AppStorage(ListPaneLayout.widthDefaultsKey) private var listPaneWidth: Double = ListPaneLayout.defaultWidth
     private let minuteTicker = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
     private let relativeFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
@@ -22,11 +23,16 @@ struct ContentView: View {
     }()
 
     var body: some View {
-        HSplitView {
-            listPane
-                .frame(minWidth: 580, idealWidth: 600, maxWidth: 760)
-            detailPane
-                .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
+        // A plain HStack instead of HSplitView: HSplitView snaps back to its ideal
+        // width whenever the detail pane is replaced for a new selection.
+        GeometryReader { proxy in
+            HStack(spacing: 0) {
+                listPane
+                    .frame(width: ListPaneLayout.clampedWidth(listPaneWidth, totalWidth: proxy.size.width))
+                ListPaneDivider(width: $listPaneWidth, totalWidth: proxy.size.width)
+                detailPane
+                    .frame(minWidth: ListPaneLayout.minDetailWidth, maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
         .frame(minWidth: 1000, minHeight: 500)
         .onAppear {
