@@ -229,7 +229,8 @@ struct PullRequestFilesView: View {
     private var diffList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 16) {
+                // One lazy row per diff line, so only the lines on screen are built.
+                LazyVStack(alignment: .leading, spacing: 0) {
                     if files.isEmpty {
                         Text("No files changed.")
                             .foregroundStyle(.secondary)
@@ -238,12 +239,13 @@ struct PullRequestFilesView: View {
                             .foregroundStyle(.secondary)
                     }
 
-                    ForEach(visibleFiles) { file in
-                        fileSection(file)
-                            .id(file.filename)
+                    ForEach(diffRows) { row in
+                        diffRow(row)
                     }
                 }
-                .padding(24)
+                .padding(.horizontal, 24)
+                .padding(.bottom, 24)
+                .padding(.top, 8)
             }
             .onChange(of: scrollRequest) { request in
                 guard let request else { return }
@@ -253,71 +255,35 @@ struct PullRequestFilesView: View {
         .frame(maxWidth: .infinity)
     }
 
-    private func fileSection(_ file: PullRequestFile) -> some View {
-        let isCollapsed = collapsed.contains(file.filename)
-        let isViewed = viewModel.viewedFiles.contains(file.filename)
-        return VStack(alignment: .leading, spacing: 0) {
-            PullRequestFileHeader(file: file,
-                                  isCollapsed: isCollapsed,
-                                  isViewed: isViewed,
-                                  commentCount: viewModel.threadIndex(for: file.filename).threads.count,
-                                  onToggle: {
-                                      if isCollapsed {
-                                          collapsed.remove(file.filename)
-                                      } else {
-                                          collapsed.insert(file.filename)
-                                      }
-                                  },
-                                  onSetViewed: { viewed in
-                                      // Marking a file viewed folds it; unmarking unfolds it.
-                                      if viewed {
-                                          collapsed.insert(file.filename)
-                                      } else {
-                                          collapsed.remove(file.filename)
-                                      }
-                                      Task { await viewModel.setViewed(viewed, filename: file.filename) }
-                                  })
-
-            if !isCollapsed {
-                Divider()
-                fileBody(file)
-            }
+    private var diffRows: [DiffListRow] {
+        DiffListRow.rows(files: visibleFiles,
+                         collapsed: collapsed,
+                         mode: mode,
+                         hideWhitespace: hideWhitespace,
+                         threads: viewModel.threadIndex(for:),
+                         composing: composingAnchor) { filename in
+            guard let lines = viewModel.diffLines[filename], !lines.isEmpty else { return nil }
+            return viewModel.presentation(for: filename, hideWhitespace: hideWhitespace)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
-        )
     }
 
     @ViewBuilder
-    private func fileBody(_ file: PullRequestFile) -> some View {
-        let path = file.filename
-        let threads = viewModel.threadIndex(for: path)
-        if let lines = viewModel.diffLines[path], !lines.isEmpty {
-            let presentation = viewModel.presentation(for: path, hideWhitespace: hideWhitespace)
-            if hideWhitespace && !presentation.hasChanges {
-                fileMessage("Only whitespace changed.")
-            } else {
-                switch mode {
-                case .unified:
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(presentation.unified.enumerated()), id: \.offset) { _, line in
-                            let anchor = DiffCommentAnchor.unified(path: path, line: line)
-                            DiffLineRow(line: line, onAddComment: addCommentAction(anchor))
-                            lineComments(threads.threads(for: line, path: path), anchors: [anchor])
-                        }
-                    }
-                case .split:
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(presentation.split.enumerated()), id: \.offset) { _, row in
-                            splitRow(row, path: path, threads: threads)
-                        }
-                    }
-                }
-            }
-            unplacedThreads(threads.unplacedThreads(in: presentation.unified, path: path))
-        } else {
+    private func diffRow(_ row: DiffListRow) -> some View {
+        switch row {
+        case let .header(file):
+            fileHeader(file)
+                .padding(.top, 16)
+        case let .unified(path, _, line):
+            DiffLineRow(line: line, onAddComment: addCommentAction(DiffCommentAnchor.unified(path: path, line: line)))
+                .fileCardEdges(.middle)
+        case let .split(path, _, row):
+            splitRow(row, path: path)
+                .fileCardEdges(.middle)
+        case let .message(_, text):
+            fileMessage(text)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fileCardEdges(.middle)
+        case let .noDiff(file):
             HStack(spacing: 4) {
                 Text(file.patch == nil ? "Binary file or diff too large to show here." : "No changes to show.")
                 Link("View on GitHub", destination: filesURL)
@@ -325,25 +291,30 @@ struct PullRequestFilesView: View {
             .font(.callout)
             .foregroundStyle(.secondary)
             .padding(16)
-            unplacedThreads(threads.threads)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fileCardEdges(.middle)
+        case let .lineComments(_, _, threads, composing):
+            lineComments(threads, composing: composing)
+                .fileCardEdges(.middle)
+        case let .unplacedThreads(_, threads):
+            unplacedThreads(threads)
+                .fileCardEdges(.middle)
+        case .footer:
+            Color.clear
+                .frame(height: FileCardEdges.cornerRadius)
+                .fileCardEdges(.bottom)
         }
     }
 
     @ViewBuilder
-    private func splitRow(_ row: SplitDiffRow, path: String, threads: ReviewThreadIndex) -> some View {
+    private func splitRow(_ row: SplitDiffRow, path: String) -> some View {
         switch row {
         case .full:
             SplitDiffRowView(row: row)
         case let .pair(left, right):
-            let leftAnchor = DiffCommentAnchor.split(path: path, line: left, side: .left)
-            let rightAnchor = DiffCommentAnchor.split(path: path, line: right, side: .right)
-            // A context line sits on both sides; list its threads once.
-            let lines = left == right ? [left] : [left, right]
             SplitDiffRowView(row: row,
-                             onAddLeftComment: addCommentAction(leftAnchor),
-                             onAddRightComment: addCommentAction(rightAnchor))
-            lineComments(lines.compactMap { $0 }.flatMap { threads.threads(for: $0, path: path) },
-                         anchors: [leftAnchor, rightAnchor])
+                             onAddLeftComment: addCommentAction(DiffCommentAnchor.split(path: path, line: left, side: .left)),
+                             onAddRightComment: addCommentAction(DiffCommentAnchor.split(path: path, line: right, side: .right)))
         }
     }
 
@@ -352,55 +323,48 @@ struct PullRequestFilesView: View {
     }
 
     /// The threads under one diff line, plus the new-comment box when it is open on that line.
-    @ViewBuilder
-    private func lineComments(_ threads: [ReviewThread], anchors: [DiffCommentAnchor?]) -> some View {
-        let composing = composingAnchor.flatMap { anchors.contains($0) ? $0 : nil }
-        if !threads.isEmpty || composing != nil {
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(threads) { thread in
-                    threadView(thread)
-                }
-                if let composing {
-                    CommentComposer(placeholder: Self.composerPlaceholder(composing),
-                                    submitTitle: "Comment",
-                                    onCancel: { composingAnchor = nil },
-                                    onSubmit: { body in
-                                        try await viewModel.postInlineComment(body, at: composing)
-                                        composingAnchor = nil
-                                    })
-                    .padding(12)
-                    .background(Color(nsColor: .textBackgroundColor))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
-                    )
-                }
+    private func lineComments(_ threads: [ReviewThread], composing: DiffCommentAnchor?) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(threads) { thread in
+                threadView(thread)
             }
-            .frame(maxWidth: 760, alignment: .leading)
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.secondary.opacity(0.05))
+            if let composing {
+                CommentComposer(placeholder: Self.composerPlaceholder(composing),
+                                submitTitle: "Comment",
+                                onCancel: { composingAnchor = nil },
+                                onSubmit: { body in
+                                    try await viewModel.postInlineComment(body, at: composing)
+                                    composingAnchor = nil
+                                })
+                .padding(12)
+                .background(Color(nsColor: .textBackgroundColor))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                )
+            }
         }
+        .frame(maxWidth: 760, alignment: .leading)
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.secondary.opacity(0.05))
     }
 
     /// Threads with no line in the diff to sit under, such as outdated ones.
-    @ViewBuilder
     private func unplacedThreads(_ threads: [ReviewThread]) -> some View {
-        if !threads.isEmpty {
-            Divider()
-            VStack(alignment: .leading, spacing: 8) {
-                Text(threads.count == 1 ? "1 conversation not on the current diff" : "\(threads.count) conversations not on the current diff")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                ForEach(threads) { thread in
-                    threadView(thread)
-                }
+        VStack(alignment: .leading, spacing: 8) {
+            Text(threads.count == 1 ? "1 conversation not on the current diff" : "\(threads.count) conversations not on the current diff")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            ForEach(threads) { thread in
+                threadView(thread)
             }
-            .frame(maxWidth: 760, alignment: .leading)
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.secondary.opacity(0.05))
         }
+        .frame(maxWidth: 760, alignment: .leading)
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.secondary.opacity(0.05))
+        .overlay(alignment: .top) { Divider() }
     }
 
     private func threadView(_ thread: ReviewThread) -> some View {
@@ -412,6 +376,33 @@ struct PullRequestFilesView: View {
         case .left: return "Comment on old line \(anchor.line)…"
         case .right: return "Comment on line \(anchor.line)…"
         }
+    }
+
+    private func fileHeader(_ file: PullRequestFile) -> some View {
+        let isCollapsed = collapsed.contains(file.filename)
+        let isViewed = viewModel.viewedFiles.contains(file.filename)
+        return PullRequestFileHeader(file: file,
+                                     isCollapsed: isCollapsed,
+                                     isViewed: isViewed,
+                                     commentCount: viewModel.threadIndex(for: file.filename).threads.count,
+                                     onToggle: {
+                                         if isCollapsed {
+                                             collapsed.remove(file.filename)
+                                         } else {
+                                             collapsed.insert(file.filename)
+                                         }
+                                     },
+                                     onSetViewed: { viewed in
+                                         // Marking a file viewed folds it; unmarking unfolds it.
+                                         if viewed {
+                                             collapsed.insert(file.filename)
+                                         } else {
+                                             collapsed.remove(file.filename)
+                                         }
+                                         Task { await viewModel.setViewed(viewed, filename: file.filename) }
+                                     })
+            // A folded file is a whole card; an open one continues into its diff rows.
+            .fileCardEdges(isCollapsed ? .all : .top)
     }
 
     private func fileMessage(_ message: String) -> some View {
@@ -519,6 +510,72 @@ struct PullRequestFileHeader: View {
     static func copyPath(_ path: String, to pasteboard: NSPasteboard = .general) {
         pasteboard.clearContents()
         pasteboard.setString(path, forType: .string)
+    }
+}
+
+/// Draws one row's share of a file's rounded card: the header is the top, diff lines are the sides, and the
+/// footer is the bottom. The rows are separate so the diff list can build them lazily.
+struct FileCardEdges: Shape {
+    enum Part {
+        case all
+        case top
+        case middle
+        case bottom
+    }
+
+    static let cornerRadius: CGFloat = 8
+
+    let part: Part
+
+    func path(in rect: CGRect) -> Path {
+        let rect = rect.insetBy(dx: 0.5, dy: 0)
+        let radius = Self.cornerRadius
+        var path = Path()
+        switch part {
+        case .all:
+            path.addRoundedRect(in: rect.insetBy(dx: 0, dy: 0.5), cornerSize: CGSize(width: radius, height: radius), style: .continuous)
+        case .top:
+            // Closed along the bottom, which draws the line between the header and the diff.
+            let rect = rect.insetBy(dx: 0, dy: 0.5)
+            path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + radius))
+            path.addArc(tangent1End: CGPoint(x: rect.minX, y: rect.minY), tangent2End: CGPoint(x: rect.minX + radius, y: rect.minY), radius: radius)
+            path.addLine(to: CGPoint(x: rect.maxX - radius, y: rect.minY))
+            path.addArc(tangent1End: CGPoint(x: rect.maxX, y: rect.minY), tangent2End: CGPoint(x: rect.maxX, y: rect.minY + radius), radius: radius)
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+            path.closeSubpath()
+        case .middle:
+            path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+            path.move(to: CGPoint(x: rect.maxX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        case .bottom:
+            let rect = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: rect.height - 0.5)
+            path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY - radius))
+            path.addArc(tangent1End: CGPoint(x: rect.minX, y: rect.maxY), tangent2End: CGPoint(x: rect.minX + radius, y: rect.maxY), radius: radius)
+            path.addLine(to: CGPoint(x: rect.maxX - radius, y: rect.maxY))
+            path.addArc(tangent1End: CGPoint(x: rect.maxX, y: rect.maxY), tangent2End: CGPoint(x: rect.maxX, y: rect.maxY - radius), radius: radius)
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        }
+        return path
+    }
+}
+
+extension View {
+    /// Clips the row to its part of the file card and draws that part of the border.
+    @ViewBuilder
+    func fileCardEdges(_ part: FileCardEdges.Part) -> some View {
+        let border = FileCardEdges(part: part).stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+        switch part {
+        case .all:
+            clipShape(RoundedRectangle(cornerRadius: FileCardEdges.cornerRadius, style: .continuous)).overlay(border)
+        case .top:
+            clipShape(FileCardEdges(part: .top)).overlay(border)
+        case .middle, .bottom:
+            // Only the header has corners to clip; the diff rows are square, so skip the mask.
+            overlay(border)
+        }
     }
 }
 
