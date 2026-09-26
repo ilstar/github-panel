@@ -72,4 +72,54 @@ final class PRMonitorReviewRequestsTests: XCTestCase {
         XCTAssertEqual(monitor.reviewRequests, .empty)
         XCTAssertFalse(monitor.isReviewRequestsLoading)
     }
+
+    func testSelectingReviewsTabLoadsReviewRequestsEachTime() async {
+        let api = FakeGitHubAPI()
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+        let loaded = expectation(description: "Review requests loaded")
+        loaded.expectedFulfillmentCount = 2
+        let cancellable = monitor.$lastReviewRequestsRefreshAt.dropFirst().sink { _ in loaded.fulfill() }
+
+        monitor.selectedTab = .reviews
+        await waitUntil { !monitor.isReviewRequestsLoading && api.fetchReviewRequestsTokens.count == 1 }
+        monitor.selectedTab = .open
+        monitor.selectedTab = .reviews
+
+        await fulfillment(of: [loaded], timeout: 2)
+        _ = cancellable
+        XCTAssertEqual(api.fetchReviewRequestsTokens.count, 2)
+    }
+
+    func testRefreshSelectedTabRefreshesOnlyTheVisibleTab() async {
+        let api = FakeGitHubAPI()
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+        monitor.selectedTab = .reviews
+        await waitUntil { !monitor.isReviewRequestsLoading && api.fetchReviewRequestsTokens.count == 1 }
+
+        await monitor.refreshSelectedTab()
+        XCTAssertEqual(api.fetchReviewRequestsTokens.count, 2)
+        XCTAssertTrue(api.fetchOpenPRTokens.isEmpty)
+        XCTAssertTrue(api.fetchClosedPRCalls.isEmpty)
+
+        monitor.selectedTab = .open
+        await monitor.refreshSelectedTab()
+        XCTAssertEqual(api.fetchOpenPRTokens.count, 1)
+        XCTAssertEqual(api.fetchReviewRequestsTokens.count, 2)
+    }
+
+    func testSelectedTabLoadingFollowsTheVisibleTab() {
+        let monitor = makeMonitor()
+        monitor.isReviewRequestsLoading = true
+
+        XCTAssertFalse(monitor.isSelectedTabLoading)
+        monitor.selectedTab = .reviews
+        XCTAssertTrue(monitor.isSelectedTabLoading)
+    }
+
+    private func waitUntil(_ condition: () -> Bool) async {
+        for _ in 0..<200 where !condition() {
+            await Task.yield()
+        }
+        XCTAssertTrue(condition())
+    }
 }

@@ -26,6 +26,7 @@ final class PullRequestSelectionTests: XCTestCase {
     func testTabsAreOrderedWithHistoryLast() {
         XCTAssertEqual(PullRequestTab.allCases, [.open, .reviews, .history])
         XCTAssertEqual(PullRequestTab.allCases.map(\.title), ["My PRs", "To Review", "History"])
+        XCTAssertEqual(PullRequestTab.allCases.map(\.shortcutKey.character), ["1", "2", "3"])
     }
 
     func testNoSelectionOrMissingRowShowsNothing() {

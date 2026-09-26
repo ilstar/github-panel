@@ -5,7 +5,12 @@ final class PRMonitor: ObservableObject {
     @Published var prRows: [PullRequestRow] = []
     @Published var historyRows: [PullRequestHistoryRow] = []
     @Published var reviewRequests: ReviewRequests = .empty
-    @Published var selectedTab: PullRequestTab = .open
+    @Published var selectedTab: PullRequestTab = .open {
+        didSet {
+            guard selectedTab != oldValue else { return }
+            loadSelectedTab()
+        }
+    }
     @Published var isLoading: Bool = false
     @Published var isHistoryLoading: Bool = false
     @Published var isReviewRequestsLoading: Bool = false
@@ -174,6 +179,34 @@ final class PRMonitor: ObservableObject {
         guard loadSessionToken() != nil else { return }
         let task = startRefreshIfNeeded()
         await task.value
+    }
+
+    var isSelectedTabLoading: Bool {
+        switch selectedTab {
+        case .open: return isLoading
+        case .reviews: return isReviewRequestsLoading
+        case .history: return isHistoryLoading
+        }
+    }
+
+    func refreshSelectedTab() async {
+        switch selectedTab {
+        case .open: await refreshNow()
+        case .reviews: await refreshReviewRequests()
+        case .history: await refreshCurrentHistoryPage()
+        }
+    }
+
+    private func loadSelectedTab() {
+        switch selectedTab {
+        case .open:
+            break
+        case .reviews:
+            // Review requests change often, so reload whenever the tab is shown.
+            Task { await refreshReviewRequests() }
+        case .history:
+            loadHistoryIfNeeded()
+        }
     }
 
     func loadHistoryIfNeeded() {

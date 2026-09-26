@@ -1,4 +1,4 @@
-import Foundation
+import SwiftUI
 
 enum PullRequestTab: String, CaseIterable, Identifiable {
     case open
@@ -13,6 +13,12 @@ enum PullRequestTab: String, CaseIterable, Identifiable {
         case .reviews: return "To Review"
         case .history: return "History"
         }
+    }
+
+    /// ⌘1, ⌘2, … follow the order of the tabs.
+    var shortcutKey: KeyEquivalent {
+        let index = Self.allCases.firstIndex(of: self)!
+        return KeyEquivalent(Character(String(index + 1)))
     }
 }
 

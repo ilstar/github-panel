@@ -49,8 +49,8 @@ enum ReviewRequestGroup: CaseIterable, Identifiable {
 
     var emptyText: String {
         switch self {
-        case .fromMe: return "No reviews requested from you."
-        case .fromMyTeams: return "No reviews requested from your teams."
+        case .fromMe: return "Nothing requested from you directly."
+        case .fromMyTeams: return "Nothing requested from your teams."
         }
     }
 }
@@ -67,5 +67,25 @@ struct ReviewRequestRow: Identifiable, Equatable {
 
     var reference: PullRequestReference {
         PullRequestReference(repoFullName: repoFullName, number: number)
+    }
+}
+
+/// What the To Review tab shows in place of, or alongside, its rows.
+enum ReviewRequestsDisplayState: Equatable {
+    case loading
+    case failed(String)
+    case empty
+    case list
+
+    init(requests: ReviewRequests, isLoading: Bool, error: String?, hasLoaded: Bool) {
+        if !requests.rows.isEmpty {
+            self = .list
+        } else if let error {
+            self = .failed(error)
+        } else if isLoading || !hasLoaded {
+            self = .loading
+        } else {
+            self = .empty
+        }
     }
 }
