@@ -229,8 +229,9 @@ struct PullRequestFilesView: View {
     private var diffList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                // One lazy row per diff line, so only the lines on screen are built.
-                LazyVStack(alignment: .leading, spacing: 0) {
+                // One lazy row per diff line, so only the lines on screen are built. Each file is a section whose
+                // header stays pinned to the top until the next file's header pushes it off.
+                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: .sectionHeaders) {
                     if files.isEmpty {
                         Text("No files changed.")
                             .foregroundStyle(.secondary)
@@ -239,13 +240,23 @@ struct PullRequestFilesView: View {
                             .foregroundStyle(.secondary)
                     }
 
-                    ForEach(diffRows) { row in
-                        diffRow(row)
+                    ForEach(diffSections) { section in
+                        Section {
+                            ForEach(section.rows) { row in
+                                diffRow(row)
+                            }
+                            // The gap before the next file. It sits inside the section so the pinned header
+                            // has no gap above it.
+                            Color.clear
+                                .frame(height: Self.fileSpacing)
+                        } header: {
+                            fileHeader(section.file)
+                        }
                     }
                 }
                 .padding(.horizontal, 24)
-                .padding(.bottom, 24)
-                .padding(.top, 8)
+                .padding(.bottom, 24 - Self.fileSpacing)
+                .padding(.top, 8 + Self.fileSpacing)
             }
             .onChange(of: scrollRequest) { request in
                 guard let request else { return }
@@ -255,8 +266,11 @@ struct PullRequestFilesView: View {
         .frame(maxWidth: .infinity)
     }
 
-    private var diffRows: [DiffListRow] {
-        DiffListRow.rows(files: visibleFiles,
+    /// The space between one file's card and the next.
+    private static let fileSpacing: CGFloat = 16
+
+    private var diffSections: [DiffListSection] {
+        DiffListSection.sections(DiffListRow.rows(files: visibleFiles,
                          collapsed: collapsed,
                          mode: mode,
                          hideWhitespace: hideWhitespace,
@@ -264,15 +278,15 @@ struct PullRequestFilesView: View {
                          composing: composingAnchor) { filename in
             guard let lines = viewModel.diffLines[filename], !lines.isEmpty else { return nil }
             return viewModel.presentation(for: filename, hideWhitespace: hideWhitespace)
-        }
+        })
     }
 
     @ViewBuilder
     private func diffRow(_ row: DiffListRow) -> some View {
         switch row {
-        case let .header(file):
-            fileHeader(file)
-                .padding(.top, 16)
+        case .header:
+            // Drawn as the section header instead; see `diffList`.
+            EmptyView()
         case let .unified(path, _, line):
             DiffLineRow(line: line, onAddComment: addCommentAction(DiffCommentAnchor.unified(path: path, line: line)))
                 .fileCardEdges(.middle)
@@ -403,6 +417,10 @@ struct PullRequestFilesView: View {
                                      })
             // A folded file is a whole card; an open one continues into its diff rows.
             .fileCardEdges(isCollapsed ? .all : .top)
+            // Opaque so the lines scrolling under the pinned header, and past its rounded corners, stay hidden.
+            .background(Color(nsColor: .textBackgroundColor))
+            // The file tree scrolls here.
+            .id(file.filename)
     }
 
     private func fileMessage(_ message: String) -> some View {
