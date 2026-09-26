@@ -8,6 +8,8 @@ final class PullRequestDetailViewModel: ObservableObject {
     typealias SetViewed = (String, String, Bool) async throws -> Void
     typealias FetchComments = (PullRequestReference) async throws -> PullRequestComments
     typealias PostComment = (NewPullRequestComment, PullRequestReference) async throws -> Void
+    /// Saves a new title, description, or both. Nil leaves that field as it is on GitHub.
+    typealias Edit = (PullRequestReference, String?, String?) async throws -> Void
 
     let reference: PullRequestReference
     /// The last loaded content. Kept when a reload fails so the window does not go blank.
@@ -27,6 +29,7 @@ final class PullRequestDetailViewModel: ObservableObject {
     private let syncViewed: SetViewed
     private let fetchComments: FetchComments
     private let sendComment: PostComment
+    private let sendEdit: Edit
     /// Presentations built so far, keyed by filename and whether whitespace changes are hidden.
     private var presentations: [PresentationKey: DiffPresentation] = [:]
 
@@ -39,12 +42,14 @@ final class PullRequestDetailViewModel: ObservableObject {
          fetch: @escaping Fetch,
          setViewed: @escaping SetViewed = { _, _, _ in },
          fetchComments: @escaping FetchComments = { _ in .empty },
-         postComment: @escaping PostComment = { _, _ in }) {
+         postComment: @escaping PostComment = { _, _ in },
+         edit: @escaping Edit = { _, _, _ in }) {
         self.reference = reference
         self.fetch = fetch
         self.syncViewed = setViewed
         self.fetchComments = fetchComments
         self.sendComment = postComment
+        self.sendEdit = edit
     }
 
     /// Talks to GitHub through the monitor, which holds the token.
@@ -57,6 +62,9 @@ final class PullRequestDetailViewModel: ObservableObject {
                   fetchComments: { [monitor] reference in try await monitor.fetchPullRequestComments(reference) },
                   postComment: { [monitor] comment, reference in
                       try await monitor.postPullRequestComment(comment, on: reference)
+                  },
+                  edit: { [monitor] reference, title, body in
+                      try await monitor.editPullRequest(reference, title: title, body: body)
                   })
     }
 
@@ -94,6 +102,19 @@ final class PullRequestDetailViewModel: ObservableObject {
             // The comment was posted; only the refresh failed.
             errorMessage = error.localizedDescription
         }
+    }
+
+    /// Saves a new title, description, or both and shows them right away. A blank title is ignored, since GitHub requires one.
+    /// Throws when GitHub refuses the edit, so the editor can keep the draft.
+    func edit(title: String? = nil, body: String? = nil) async throws {
+        let title = title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard content?.detail.canEdit == true, title != nil || body != nil, title?.isEmpty != true else { return }
+        try await sendEdit(reference, title, body)
+        guard let current = content else { return }
+        var detail = current.detail
+        detail.title = title ?? detail.title
+        detail.body = body ?? detail.body
+        content = PullRequestDetailContent(detail: detail, files: current.files)
     }
 
     /// Posts a new review thread on a diff line, against the head commit that was loaded.

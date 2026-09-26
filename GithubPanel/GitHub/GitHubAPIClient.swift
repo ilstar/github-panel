@@ -14,6 +14,7 @@ protocol GitHubAPIClient {
     func setFileViewed(token: String, pullRequestID: String, path: String, viewed: Bool) async throws
     func fetchPullRequestComments(token: String, reference: PullRequestReference) async throws -> PullRequestComments
     func postPullRequestComment(token: String, reference: PullRequestReference, comment: NewPullRequestComment) async throws
+    func editPullRequest(token: String, reference: PullRequestReference, title: String?, body: String?) async throws
 }
 
 protocol HTTPTransport {

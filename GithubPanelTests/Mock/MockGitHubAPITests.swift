@@ -37,6 +37,29 @@ final class MockGitHubAPITests: XCTestCase {
             XCTAssertEqual(lines.filter { $0.kind == .deletion }.count, file.deletions, file.filename)
         }
     }
+
+    func testMockEditsOwnPullRequestsOnly() async throws {
+        let api = MockGitHubAPI()
+        let own = PullRequestReference(repoFullName: "mock/github-panel", number: 109)
+        let requests = try await api.fetchReviewRequests(token: "token")
+        let reviewRow = try XCTUnwrap(requests.rows.first)
+        let review = PullRequestReference(repoFullName: reviewRow.repoFullName, number: reviewRow.number)
+
+        let ownDetail = try await api.fetchPullRequestDetail(token: "token", reference: own).detail
+        let reviewDetail = try await api.fetchPullRequestDetail(token: "token", reference: review).detail
+        XCTAssertTrue(ownDetail.canEdit)
+        XCTAssertFalse(reviewDetail.canEdit)
+        XCTAssertEqual(reviewDetail.authorLogin, reviewRow.authorLogin)
+
+        try await api.editPullRequest(token: "token", reference: own, title: "Renamed", body: nil)
+        try await api.editPullRequest(token: "token", reference: own, title: nil, body: "New body")
+
+        let edited = try await api.fetchPullRequestDetail(token: "token", reference: own).detail
+        XCTAssertEqual(edited.title, "Renamed")
+        XCTAssertEqual(edited.body, "New body")
+        let rows = try await api.fetchOpenPRs(token: "token").rows
+        XCTAssertEqual(rows.first { $0.id == own.id }?.title, "Renamed")
+    }
 }
 
 @MainActor
