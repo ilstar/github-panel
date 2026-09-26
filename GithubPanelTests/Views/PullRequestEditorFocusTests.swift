@@ -3,7 +3,7 @@ import SwiftUI
 import XCTest
 @testable import GithubPanel
 
-/// Opening an editor, as the pencil does, should put the cursor in its text field.
+/// Opening an editor, as the pencil does, should put the cursor in its text field, and ⌘Return should save.
 @MainActor
 final class PullRequestEditorFocusTests: XCTestCase {
     func testTitleEditorTakesFocusWhenItOpens() throws {
@@ -26,8 +26,47 @@ final class PullRequestEditorFocusTests: XCTestCase {
         XCTAssertEqual(textView.string, "Body")
     }
 
-    /// Shows a button first, like the header, then swaps in the editor and returns what has keyboard focus.
+    func testCommandReturnSavesTheTitle() {
+        var saved: [String] = []
+        withOpenEditor({
+            PullRequestTitleEditor(title: "Title", onCancel: {}, onSave: { saved.append($0) })
+        }) { window in
+            pressCommandReturn(in: window)
+        }
+
+        XCTAssertEqual(saved, ["Title"])
+    }
+
+    func testCommandReturnSavesTheDescription() {
+        var saved: [String] = []
+        withOpenEditor({
+            PullRequestBodyEditor(body: "Body", onCancel: {}, onSave: { saved.append($0) })
+        }) { window in
+            pressCommandReturn(in: window)
+        }
+
+        XCTAssertEqual(saved, ["Body"])
+    }
+
+    private func pressCommandReturn(in window: NSWindow) {
+        let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
+                                     timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                                     characters: "\r", charactersIgnoringModifiers: "\r",
+                                     isARepeat: false, keyCode: 36)!
+        _ = window.performKeyEquivalent(with: event)
+        spinRunLoop()
+    }
+
     private func firstResponderAfterOpening<Editor: View>(@ViewBuilder _ editor: @escaping () -> Editor) throws -> NSResponder? {
+        var responder: NSResponder?
+        withOpenEditor(editor) { window in
+            responder = window.firstResponder
+        }
+        return responder
+    }
+
+    /// Shows a button first, like the header, then swaps in the editor and hands over the window while it is open.
+    private func withOpenEditor<Editor: View>(@ViewBuilder _ editor: @escaping () -> Editor, _ body: (NSWindow) -> Void) {
         let toggle = EditorToggle()
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 500),
                               styleMask: [.titled], backing: .buffered, defer: false)
@@ -43,7 +82,7 @@ final class PullRequestEditorFocusTests: XCTestCase {
         toggle.isEditing = true
         spinRunLoop()
 
-        return window.firstResponder
+        body(window)
     }
 
     private func spinRunLoop() {

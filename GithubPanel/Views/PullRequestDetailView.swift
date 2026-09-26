@@ -187,7 +187,7 @@ struct PullRequestDetailHeader: View {
     }
 }
 
-/// Edits the title in place, like GitHub. Return saves and Escape cancels.
+/// Edits the title in place, like GitHub. Return or ⌘Return saves and Escape cancels.
 /// Keeps the draft and shows the error when GitHub refuses it.
 struct PullRequestTitleEditor: View {
     let onCancel: () -> Void
@@ -219,9 +219,7 @@ struct PullRequestTitleEditor: View {
                 if isSaving {
                     ProgressView().controlSize(.small)
                 }
-                Button("Save", action: save)
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!Self.canSave(title) || isSaving)
+                saveButton
                 Button("Cancel", action: onCancel)
                     .disabled(isSaving)
             }
@@ -235,6 +233,20 @@ struct PullRequestTitleEditor: View {
         .onAppear {
             // The text view is not in the window yet during onAppear, so focus on the next turn.
             DispatchQueue.main.async { isFocused = true }
+        }
+    }
+
+    @ViewBuilder
+    private var saveButton: some View {
+        let button = Button("Save", action: save)
+            .buttonStyle(.borderedProminent)
+            .disabled(!Self.canSave(title) || isSaving)
+            .help("Save (⌘Return)")
+        // Only answer ⌘Return while typing, so an open description editor keeps its own shortcut.
+        if isFocused {
+            button.keyboardShortcut(.return, modifiers: .command)
+        } else {
+            button
         }
     }
 
