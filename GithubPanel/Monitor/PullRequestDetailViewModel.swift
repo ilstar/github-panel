@@ -10,6 +10,8 @@ final class PullRequestDetailViewModel: ObservableObject {
     @Published private(set) var content: PullRequestDetailContent?
     @Published private(set) var isLoading = false
     @Published private(set) var errorMessage: String?
+    /// Parsed diff lines for each file, keyed by filename. Parsed once per load.
+    @Published private(set) var diffLines: [String: [DiffLine]] = [:]
 
     private let fetch: Fetch
 
@@ -23,7 +25,10 @@ final class PullRequestDetailViewModel: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         do {
-            content = try await fetch(reference)
+            let loaded = try await fetch(reference)
+            diffLines = Dictionary(loaded.files.map { ($0.filename, DiffParser.parse($0.patch ?? "")) },
+                                   uniquingKeysWith: { first, _ in first })
+            content = loaded
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription

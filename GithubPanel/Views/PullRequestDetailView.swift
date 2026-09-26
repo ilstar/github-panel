@@ -48,9 +48,9 @@ struct PullRequestDetailView: View {
                 case .conversation:
                     PullRequestConversationView(detail: content.detail)
                 case .files:
-                    Text("Files changed")
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    PullRequestFilesView(files: content.files,
+                                         diffLines: viewModel.diffLines,
+                                         filesURL: content.detail.htmlURL.appendingPathComponent("files"))
                 }
             } else if let error = viewModel.errorMessage {
                 VStack(spacing: 12) {
@@ -221,4 +221,7 @@ struct PullRequestConversationView: View {
 enum DiffColors {
     static let additionText = Color(red: 0.10, green: 0.50, blue: 0.22)
     static let deletionText = Color(red: 0.81, green: 0.13, blue: 0.18)
+    static let additionBackground = Color.green.opacity(0.14)
+    static let deletionBackground = Color.red.opacity(0.12)
+    static let hunkBackground = Color.blue.opacity(0.08)
 }

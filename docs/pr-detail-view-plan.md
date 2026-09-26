@@ -35,7 +35,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
        Conversation tab showing the description (inline Markdown only).
 5. [x] Open the detail window from the Open and History lists (click / Return /
        context menu); ⌘-click and ⌘-Return still open GitHub.
-6. [ ] Files changed tab: file list and a colored, line-numbered diff per file.
+6. [x] Files changed tab: file list and a colored, line-numbered diff per file.
 7. [ ] Block-level Markdown for the description (headings, lists, code blocks, quotes).
 8. [ ] README update; open a draft PR.
 

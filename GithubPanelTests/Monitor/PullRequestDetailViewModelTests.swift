@@ -21,6 +21,22 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.isLoading)
     }
 
+    func testLoadParsesEachFilePatch() async {
+        let files = [
+            PullRequestFile(filename: "a.swift", previousFilename: nil, status: .modified,
+                            additions: 1, deletions: 1, patch: "@@ -1 +1 @@\n-a\n+b"),
+            PullRequestFile(filename: "logo.png", previousFilename: nil, status: .added,
+                            additions: 0, deletions: 0, patch: nil)
+        ]
+        let content = detailContent(title: "Files", files: files)
+        let viewModel = PullRequestDetailViewModel(reference: reference) { _ in content }
+
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.diffLines["a.swift"]?.map(\.kind), [.hunk, .deletion, .addition])
+        XCTAssertEqual(viewModel.diffLines["logo.png"], [])
+    }
+
     func testFailedReloadKeepsPreviousContentAndShowsError() async {
         let content = detailContent(title: "First")
         var shouldFail = false
@@ -68,7 +84,7 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         XCTAssertTrue(api.detailCalls.isEmpty)
     }
 
-    private func detailContent(title: String) -> PullRequestDetailContent {
+    private func detailContent(title: String, files: [PullRequestFile] = []) -> PullRequestDetailContent {
         PullRequestDetailContent(
             detail: PullRequestDetail(reference: reference,
                                       title: title,
@@ -83,7 +99,7 @@ final class PullRequestDetailViewModelTests: XCTestCase {
                                       deletions: 0,
                                       changedFiles: 0,
                                       commits: 1),
-            files: []
+            files: files
         )
     }
 }
