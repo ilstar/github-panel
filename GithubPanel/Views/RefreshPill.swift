@@ -30,6 +30,7 @@ struct RefreshPill: View {
     @State private var stopAtCycle: Double?
     @State private var isSettling = false
     @State private var settleTask: Task<Void, Never>?
+    @State private var isHovering = false
 
     init(isLoading: Bool,
          isEnabled: Bool,
@@ -43,32 +44,33 @@ struct RefreshPill: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 6) {
-                if RefreshAnimation.shouldUpdateTimeline(isLoading: isLoading, isSettling: isSettling) {
-                    TimelineView(.animation) { context in
-                        refreshIcon(rotation: rotationAngle(at: context.date))
-                    }
-                } else {
-                    refreshIcon(rotation: 0)
-                }
-                Text("Refresh")
-                    .font(.subheadline.weight(.semibold))
-                    .padding(.trailing, 2)
+            HStack(spacing: 8) {
                 lastUpdatedView
+                Group {
+                    if RefreshAnimation.shouldUpdateTimeline(isLoading: isLoading, isSettling: isSettling) {
+                        TimelineView(.animation) { context in
+                            refreshIcon(rotation: rotationAngle(at: context.date))
+                        }
+                    } else {
+                        refreshIcon(rotation: 0)
+                    }
+                }
+                .foregroundStyle(isHovering && isEnabled ? Color.primary : Color.secondary)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
+            .padding(.leading, 8)
+            .padding(.trailing, 6)
+            .padding(.vertical, 5)
             .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.white.opacity(0.8))
+                Capsule()
+                    .fill(isHovering && isEnabled ? Theme.rowHover : Color.clear)
             )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(Color.black.opacity(0.08), lineWidth: 1)
-            )
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
+        .help("Refresh")
+        .accessibilityLabel("Refresh")
+        .onHover { isHovering = $0 }
         .onAppear {
             spinStart = Date()
         }
@@ -119,7 +121,7 @@ struct RefreshPill: View {
 
     private func refreshIcon(rotation: Double) -> some View {
         Image(systemName: "arrow.clockwise")
-            .font(.body.weight(.semibold))
+            .font(.system(size: 13, weight: .semibold))
             .rotationEffect(.degrees(rotation))
     }
 

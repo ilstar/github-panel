@@ -44,7 +44,7 @@ enum PullRequestHistoryOutcome: Equatable {
     var iconName: String {
         switch self {
         case .merged: return "arrow.triangle.merge"
-        case .closed: return "xmark.circle.fill"
+        case .closed: return "xmark"
         }
     }
 }

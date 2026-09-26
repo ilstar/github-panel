@@ -6,10 +6,13 @@ import AppKit
 enum ListPaneLayout {
     static let widthDefaultsKey = "GithubPanel.listPaneWidth"
     static let defaultWidth: CGFloat = 600
-    static let minWidth: CGFloat = 580
+    /// Narrow enough to leave the pull request more room on small screens, wide enough for the tab picker and refresh button.
+    static let minWidth: CGFloat = 440
     static let maxWidth: CGFloat = 760
     static let minDetailWidth: CGFloat = 420
     static let dividerWidth: CGFloat = 1
+    /// The narrowest window that fits both panes at their minimum widths.
+    static let minWindowWidth: CGFloat = minWidth + dividerWidth + minDetailWidth
 
     /// Keeps the list within its limits and leaves room for the detail pane.
     static func clampedWidth(_ width: CGFloat, totalWidth: CGFloat) -> CGFloat {
