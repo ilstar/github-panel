@@ -91,3 +91,31 @@ enum DiffListRow: Identifiable, Equatable {
         return rows
     }
 }
+
+/// One file in the Files changed list: its header and the rows under it. The list pins each section's header to
+/// the top while its rows scroll past, so the file's path stays on screen until the next file's header takes over.
+struct DiffListSection: Identifiable, Equatable {
+    let file: PullRequestFile
+    /// The rows after the header; empty for a folded file.
+    let rows: [DiffListRow]
+
+    var id: String { file.filename }
+
+    /// Splits `rows` at each header.
+    static func sections(_ rows: [DiffListRow]) -> [DiffListSection] {
+        var sections: [DiffListSection] = []
+        var file: PullRequestFile?
+        var fileRows: [DiffListRow] = []
+        for row in rows {
+            if case let .header(next) = row {
+                if let file { sections.append(DiffListSection(file: file, rows: fileRows)) }
+                file = next
+                fileRows = []
+            } else {
+                fileRows.append(row)
+            }
+        }
+        if let file { sections.append(DiffListSection(file: file, rows: fileRows)) }
+        return sections
+    }
+}

@@ -51,6 +51,27 @@ final class DiffListRowsTests: XCTestCase {
         XCTAssertEqual(Set(rows.map(\.id)).count, rows.count)
     }
 
+    func testSectionsGroupEachFilesRowsUnderItsHeader() {
+        let sections = DiffListSection.sections(rows(mode: .unified))
+
+        XCTAssertEqual(sections.map(\.id), ["a.swift", "logo.png"])
+        XCTAssertEqual(sections.map(\.file), [patched, binary])
+        XCTAssertEqual(sections[0].rows.map(\.id), ["a.swift#u0", "a.swift#u1", "a.swift#u2", "a.swift#footer"])
+        XCTAssertEqual(sections[1].rows.map(\.id), ["logo.png#none", "logo.png#footer"])
+    }
+
+    func testCollapsedFileSectionHasNoRows() {
+        let sections = DiffListSection.sections(rows(mode: .unified, collapsed: ["a.swift"]))
+
+        XCTAssertEqual(sections.map(\.id), ["a.swift", "logo.png"])
+        XCTAssertEqual(sections[0].rows, [])
+        XCTAssertEqual(sections[1].rows.map(\.id), ["logo.png#none", "logo.png#footer"])
+    }
+
+    func testNoFilesMakeNoSections() {
+        XCTAssertEqual(DiffListSection.sections([]), [])
+    }
+
     private func rows(mode: DiffViewMode, collapsed: Set<String> = []) -> [DiffListRow] {
         DiffListRow.rows(files: [patched, binary], collapsed: collapsed, mode: mode, hideWhitespace: false) { filename in
             filename == "a.swift" ? DiffPresentation(lines: DiffParser.parse(self.patched.patch!), hideWhitespace: false) : nil
