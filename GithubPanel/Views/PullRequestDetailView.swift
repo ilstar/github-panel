@@ -232,7 +232,10 @@ struct PullRequestTitleEditor: View {
                     .textSelection(.enabled)
             }
         }
-        .onAppear { isFocused = true }
+        .onAppear {
+            // The text view is not in the window yet during onAppear, so focus on the next turn.
+            DispatchQueue.main.async { isFocused = true }
+        }
     }
 
     /// GitHub requires a title, so a blank one cannot be saved.
@@ -343,7 +346,10 @@ struct PullRequestBodyEditor: View {
                 saveButton
             }
         }
-        .onAppear { isFocused = true }
+        .onAppear {
+            // The text view is not in the window yet during onAppear, so focus on the next turn.
+            DispatchQueue.main.async { isFocused = true }
+        }
         .onChange(of: tab) { tab in
             if tab == .write { isFocused = true }
         }
