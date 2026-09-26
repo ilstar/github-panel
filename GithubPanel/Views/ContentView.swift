@@ -7,6 +7,7 @@ enum EmptyPullRequestsBackground {
 
 struct ContentView: View {
     @EnvironmentObject private var monitor: PRMonitor
+    @Environment(\.openWindow) private var openWindow
     @State private var tokenInput: String = ""
     @State private var isSaving = false
     @State private var now = Date()
@@ -21,6 +22,28 @@ struct ContentView: View {
     }()
 
     var body: some View {
+        HSplitView {
+            listPane
+                .frame(minWidth: 580, idealWidth: 600, maxWidth: 760)
+            detailPane
+                .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(minWidth: 1000, minHeight: 500)
+        .onAppear {
+            monitor.start()
+        }
+        .onReceive(minuteTicker) { tick in
+            now = tick
+        }
+        .onChange(of: monitor.lastRefreshAt) { _ in
+            now = Date()
+        }
+        .onChange(of: monitor.lastHistoryRefreshAt) { _ in
+            now = Date()
+        }
+    }
+
+    private var listPane: some View {
         ZStack {
             background
 
@@ -40,19 +63,29 @@ struct ContentView: View {
             .padding(.top, 20)
             .padding(.bottom, 16)
         }
-        .frame(minWidth: 420, minHeight: 300)
-        .onAppear {
-            monitor.start()
+    }
+
+    @ViewBuilder
+    private var detailPane: some View {
+        if let reference = selectedReference {
+            PullRequestDetailView(viewModel: PullRequestDetailViewModel(reference: reference) { [monitor] reference in
+                try await monitor.fetchPullRequestDetail(reference)
+            })
+            .id(reference)
+        } else {
+            Text(monitor.hasToken ? "Select a pull request" : "Add a GitHub token to begin.")
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(nsColor: .textBackgroundColor))
         }
-        .onReceive(minuteTicker) { tick in
-            now = tick
-        }
-        .onChange(of: monitor.lastRefreshAt) { _ in
-            now = Date()
-        }
-        .onChange(of: monitor.lastHistoryRefreshAt) { _ in
-            now = Date()
-        }
+    }
+
+    private var selectedReference: PullRequestReference? {
+        PullRequestSelection.reference(tab: monitor.selectedTab,
+                                       openRows: monitor.prRows,
+                                       historyRows: monitor.historyRows,
+                                       selectedOpenID: selectedPRID,
+                                       selectedHistoryID: selectedHistoryID)
     }
 
     private var mockDataBanner: some View {
@@ -123,6 +156,7 @@ struct ContentView: View {
 
                 Spacer()
                 refreshPill
+                    .fixedSize()
             }
             .onChange(of: monitor.selectedTab) { tab in
                 if tab == .history {
@@ -178,7 +212,10 @@ struct ContentView: View {
                         .id(pr.id)
                         .onTapGesture {
                             selectedPRID = pr.id
-                            NSWorkspace.shared.open(pr.htmlURL)
+                            openOnGitHubIfCommandHeld(pr.htmlURL)
+                        }
+                        .contextMenu {
+                            pullRequestContextMenu(pr.reference, htmlURL: pr.htmlURL)
                         }
                     }
                 }
@@ -229,7 +266,10 @@ struct ContentView: View {
                                             .id(pr.id)
                                             .onTapGesture {
                                                 selectedHistoryID = pr.id
-                                                NSWorkspace.shared.open(pr.htmlURL)
+                                                openOnGitHubIfCommandHeld(pr.htmlURL)
+                                            }
+                                            .contextMenu {
+                                                pullRequestContextMenu(pr.reference, htmlURL: pr.htmlURL)
                                             }
                                     }
                                 }
@@ -425,5 +465,22 @@ struct ContentView: View {
         guard let id = selectedPRID,
               let pr = monitor.prRows.first(where: { $0.id == id }) else { return }
         NSWorkspace.shared.open(pr.htmlURL)
+    }
+
+    /// Row clicks show the PR on the right; ⌘-click also opens it on GitHub.
+    private func openOnGitHubIfCommandHeld(_ htmlURL: URL) {
+        if NSEvent.modifierFlags.contains(.command) {
+            NSWorkspace.shared.open(htmlURL)
+        }
+    }
+
+    @ViewBuilder
+    private func pullRequestContextMenu(_ reference: PullRequestReference, htmlURL: URL) -> some View {
+        Button("Open in New Window") {
+            openWindow(value: reference)
+        }
+        Button("Open on GitHub") {
+            NSWorkspace.shared.open(htmlURL)
+        }
     }
 }

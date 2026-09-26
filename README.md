@@ -11,6 +11,9 @@ Mini macOS app to monitor your active GitHub pull request checks.
 - Polls check status every 60 seconds.
 - Sends a macOS notification when checks move from pending to success or failure.
 - Clicking the notification opens the PR in the browser.
+- Selecting a PR in the list shows it on the right: its description on the
+  *Conversation* tab and the code diff on the *Files changed* tab. ⌘-click or
+  Return opens the PR on GitHub; right-click to open it in its own window.
 
 ## GitHub token scopes
 - `repo` for private repositories.

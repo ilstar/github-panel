@@ -63,6 +63,95 @@ final class MockGitHubAPI: GitHubAPIClient {
         return true
     }
 
+    func fetchPullRequestDetail(token: String, reference: PullRequestReference) async throws -> PullRequestDetailContent {
+        let title = pullRequests[reference.id]?.title
+            ?? history.first { $0.id == reference.id }?.title
+            ?? "Mock pull request"
+        let isDraft = pullRequests[reference.id]?.isDraft ?? false
+        let detail = PullRequestDetail(reference: reference,
+                                       title: title,
+                                       body: Self.detailBody,
+                                       authorLogin: user.login,
+                                       state: isDraft ? .draft : .open,
+                                       baseRef: "main",
+                                       headRef: "mock-user/pr-\(reference.number)",
+                                       htmlURL: URL(string: "https://github.com/\(reference.repoFullName)/pull/\(reference.number)")!,
+                                       createdAt: Date(timeIntervalSinceNow: -3 * 86_400),
+                                       additions: Self.detailFiles.reduce(0) { $0 + $1.additions },
+                                       deletions: Self.detailFiles.reduce(0) { $0 + $1.deletions },
+                                       changedFiles: Self.detailFiles.count,
+                                       commits: 3)
+        return PullRequestDetailContent(detail: detail, files: Self.detailFiles)
+    }
+
+    private static let detailBody = """
+    ## Summary
+
+    - Adds a **detail window** for pull requests.
+    - Renders the description and the `diff` of each changed file.
+
+    <!-- Template hint: this comment is hidden. -->
+
+    ## Tests
+
+    1. Added parser tests.
+    2. See [the plan](https://github.com/mock/github-panel) for more.
+
+    ```swift
+    let lines = DiffParser.parse(patch)
+    ```
+
+    > Mock data for `mise run mock`.
+    """
+
+    private static let detailFiles: [PullRequestFile] = [
+        PullRequestFile(filename: "Sources/Widget.swift",
+                        previousFilename: nil,
+                        status: .modified,
+                        additions: 3,
+                        deletions: 1,
+                        patch: """
+                        @@ -10,6 +10,8 @@ struct Widget {
+                             let name: String
+                        -    let size: Int
+                        +    let width: Int
+                        +    let height: Int
+                             let color: Color
+                        +    let isEnabled: Bool
+                         
+                             var description: String {
+                        """),
+        PullRequestFile(filename: "Sources/WidgetView.swift",
+                        previousFilename: nil,
+                        status: .added,
+                        additions: 5,
+                        deletions: 0,
+                        patch: """
+                        @@ -0,0 +1,5 @@
+                        +import SwiftUI
+                        +
+                        +struct WidgetView: View {
+                        +    var body: some View { Text("Widget") }
+                        +}
+                        """),
+        PullRequestFile(filename: "Sources/Legacy.swift",
+                        previousFilename: nil,
+                        status: .removed,
+                        additions: 0,
+                        deletions: 2,
+                        patch: """
+                        @@ -1,2 +0,0 @@
+                        -// Old code
+                        -struct Legacy {}
+                        """),
+        PullRequestFile(filename: "Resources/logo.png",
+                        previousFilename: nil,
+                        status: .added,
+                        additions: 0,
+                        deletions: 0,
+                        patch: nil)
+    ]
+
     private func updatePullRequest(with nodeID: String, transform: (PullRequestRow) -> PullRequestRow) {
         guard let match = pullRequests.first(where: { $0.value.nodeID == nodeID }) else { return }
         pullRequests[match.key] = transform(match.value)

@@ -168,6 +168,18 @@ final class GitHubAPI: GitHubAPIClient {
         return true
     }
 
+    func fetchPullRequestDetail(token: String, reference: PullRequestReference) async throws -> PullRequestDetailContent {
+        let parts = reference.repoFullName.split(separator: "/", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { throw URLError(.badURL) }
+        let pullPath = "/repos/\(parts[0])/\(parts[1])/pulls/\(reference.number)"
+
+        let pull = try await decode(PullResponse.self, request: makeRequest(path: pullPath, token: token))
+        // GitHub caps this at 100 files per page; later pages are not loaded yet.
+        let files = try await decode([PullFileResponse].self, request: makeRequest(path: "\(pullPath)/files?per_page=100", token: token))
+        return PullRequestDetailContent(detail: pull.detail(reference: reference),
+                                        files: files.map(\.file))
+    }
+
     private func makeRequest(path: String, token: String) -> URLRequest {
         var request = URLRequest(url: URL(string: "https://api.github.com\(path)")!)
         request.httpMethod = "GET"
@@ -298,6 +310,88 @@ private struct SearchPullRequest: Decodable {
 
     enum CodingKeys: String, CodingKey {
         case mergedAt = "merged_at"
+    }
+}
+
+private struct PullResponse: Decodable {
+    struct User: Decodable {
+        let login: String
+    }
+
+    struct Ref: Decodable {
+        let ref: String
+    }
+
+    let title: String
+    let body: String?
+    let user: User
+    let state: String
+    let draft: Bool?
+    let mergedAt: Date?
+    let base: Ref
+    let head: Ref
+    let htmlURL: URL
+    let createdAt: Date
+    let additions: Int
+    let deletions: Int
+    let changedFiles: Int
+    let commits: Int
+
+    enum CodingKeys: String, CodingKey {
+        case title, body, user, state, draft, base, head, additions, deletions, commits
+        case mergedAt = "merged_at"
+        case htmlURL = "html_url"
+        case createdAt = "created_at"
+        case changedFiles = "changed_files"
+    }
+
+    func detail(reference: PullRequestReference) -> PullRequestDetail {
+        let detailState: PullRequestDetail.State
+        if mergedAt != nil {
+            detailState = .merged
+        } else if state == "closed" {
+            detailState = .closed
+        } else if draft == true {
+            detailState = .draft
+        } else {
+            detailState = .open
+        }
+        return PullRequestDetail(reference: reference,
+                                 title: title,
+                                 body: body ?? "",
+                                 authorLogin: user.login,
+                                 state: detailState,
+                                 baseRef: base.ref,
+                                 headRef: head.ref,
+                                 htmlURL: htmlURL,
+                                 createdAt: createdAt,
+                                 additions: additions,
+                                 deletions: deletions,
+                                 changedFiles: changedFiles,
+                                 commits: commits)
+    }
+}
+
+private struct PullFileResponse: Decodable {
+    let filename: String
+    let previousFilename: String?
+    let status: String
+    let additions: Int
+    let deletions: Int
+    let patch: String?
+
+    enum CodingKeys: String, CodingKey {
+        case filename, status, additions, deletions, patch
+        case previousFilename = "previous_filename"
+    }
+
+    var file: PullRequestFile {
+        PullRequestFile(filename: filename,
+                        previousFilename: previousFilename,
+                        status: PullRequestFile.Status(rawValue: status) ?? .changed,
+                        additions: additions,
+                        deletions: deletions,
+                        patch: patch)
     }
 }
 

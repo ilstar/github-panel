@@ -9,6 +9,7 @@ protocol GitHubAPIClient {
     func enableAutoMerge(token: String, pullRequestID: String) async throws
     func disableAutoMerge(token: String, pullRequestID: String) async throws
     func mergePullRequest(token: String, repoFullName: String, number: Int) async throws -> Bool
+    func fetchPullRequestDetail(token: String, reference: PullRequestReference) async throws -> PullRequestDetailContent
 }
 
 protocol HTTPTransport {

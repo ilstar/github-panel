@@ -13,3 +13,19 @@ enum PullRequestTab: String, CaseIterable, Identifiable {
         }
     }
 }
+
+enum PullRequestSelection {
+    /// The pull request to show in the detail pane for the visible tab.
+    static func reference(tab: PullRequestTab,
+                          openRows: [PullRequestRow],
+                          historyRows: [PullRequestHistoryRow],
+                          selectedOpenID: String?,
+                          selectedHistoryID: String?) -> PullRequestReference? {
+        switch tab {
+        case .open:
+            return openRows.first { $0.id == selectedOpenID }?.reference
+        case .history:
+            return historyRows.first { $0.id == selectedHistoryID }?.reference
+        }
+    }
+}
