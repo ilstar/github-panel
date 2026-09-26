@@ -28,7 +28,7 @@ Branch: `fred/pr-detail-view`
 
 Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
-1. [ ] Models + diff parser, with tests.
+1. [x] Models + diff parser, with tests.
 2. [ ] API: fetch PR detail and files (`GitHubAPIClient`, `GitHubAPI`, mock, test fake), with tests.
 3. [ ] `PullRequestDetailViewModel` + `PRMonitor.fetchPullRequestDetail`, with tests.
 4. [ ] Detail window: header (title, number, author, branches, state, +/−) and
