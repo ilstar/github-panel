@@ -42,10 +42,14 @@ struct GithubPanelApp: App {
             }
         }
         .defaultSize(width: 960, height: 760)
+        // A pull request window needs a pull request, so File → New must not offer an empty one.
+        .commandsRemoved()
         Window("Keyboard Shortcuts", id: KeyboardShortcutsWindow.id) {
             KeyboardShortcutsView()
         }
         .windowResizability(.contentSize)
+        // Help → Keyboard Shortcuts opens it; without this the Window menu lists it a second time.
+        .commandsRemoved()
         Settings {
             SettingsView()
                 .environmentObject(monitor)

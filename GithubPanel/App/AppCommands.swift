@@ -14,7 +14,8 @@ struct AppCommands: Commands {
     @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
-        CommandMenu("Pull Requests") {
+        // The list's tabs and Refresh go at the top of the View menu, like Mail's mailboxes and Safari's Reload.
+        CommandGroup(before: .toolbar) {
             ForEach(PullRequestTab.allCases) { tab in
                 Button(tab.title) {
                     monitor.selectedTab = tab
@@ -30,6 +31,8 @@ struct AppCommands: Commands {
             }
             .keyboardShortcut(.refresh)
             .disabled(list?.refresh == nil && detail == nil)
+
+            Divider()
         }
 
         CommandMenu("Pull Request") {
@@ -103,7 +106,8 @@ struct AppCommands: Commands {
             .disabled(detail == nil)
         }
 
-        CommandMenu("Files") {
+        // Not "Files", which reads as a second File menu.
+        CommandMenu("Diff") {
             Button("Filter Files") {
                 files?.focusFilter()
             }
