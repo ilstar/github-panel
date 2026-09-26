@@ -4,14 +4,18 @@ import Combine
 final class PRMonitor: ObservableObject {
     @Published var prRows: [PullRequestRow] = []
     @Published var historyRows: [PullRequestHistoryRow] = []
+    @Published var reviewRequests: ReviewRequests = .empty
     @Published var selectedTab: PullRequestTab = .open
     @Published var isLoading: Bool = false
     @Published var isHistoryLoading: Bool = false
+    @Published var isReviewRequestsLoading: Bool = false
     @Published var hasToken: Bool = false
     @Published var lastError: String?
     @Published var lastHistoryError: String?
+    @Published var lastReviewRequestsError: String?
     @Published var lastRefreshAt: Date?
     @Published var lastHistoryRefreshAt: Date?
+    @Published var lastReviewRequestsRefreshAt: Date?
     @Published var historyPage: Int = 1
     @Published var historyTotalCount: Int = 0
     let isUsingMockData: Bool
@@ -116,6 +120,7 @@ final class PRMonitor: ObservableObject {
         hasToken = false
         setPRRows([])
         setHistoryRows([])
+        setReviewRequests(.empty)
         historyPage = 1
         historyTotalCount = 0
         lastStates = [:]
@@ -133,6 +138,7 @@ final class PRMonitor: ObservableObject {
         consecutiveThrottledFailures = 0
         isLoading = false
         isHistoryLoading = false
+        isReviewRequestsLoading = false
     }
 
     func scheduleTimer() {
@@ -243,6 +249,25 @@ final class PRMonitor: ObservableObject {
         isHistoryLoading = false
     }
 
+    func refreshReviewRequests() async {
+        guard let token = loadSessionToken() else { return }
+        guard !isReviewRequestsLoading else { return }
+        let session = credentialSession
+        isReviewRequestsLoading = true
+        lastReviewRequestsError = nil
+        do {
+            let requests = try await api.fetchReviewRequests(token: token)
+            guard session == credentialSession else { return }
+            setReviewRequests(requests)
+            lastReviewRequestsRefreshAt = dateProvider.now
+        } catch {
+            guard session == credentialSession else { return }
+            setReviewRequests(.empty)
+            lastReviewRequestsError = error.localizedDescription
+        }
+        isReviewRequestsLoading = false
+    }
+
     private func startRefreshIfNeeded() -> Task<Void, Never> {
         if let activeRefreshTask {
             return activeRefreshTask
@@ -334,6 +359,11 @@ final class PRMonitor: ObservableObject {
     private func setHistoryRows(_ rows: [PullRequestHistoryRow]) {
         guard historyRows != rows else { return }
         historyRows = rows
+    }
+
+    private func setReviewRequests(_ requests: ReviewRequests) {
+        guard reviewRequests != requests else { return }
+        reviewRequests = requests
     }
 
     private func updateNotificationsForRows(_ rows: [PullRequestRow]) {

@@ -89,6 +89,33 @@ final class GitHubAPI: GitHubAPIClient {
                                       totalCount: response.totalCount)
     }
 
+    func fetchReviewRequests(token: String) async throws -> ReviewRequests {
+        let query = """
+        query {
+          direct: search(query: "is:pr is:open archived:false user-review-requested:@me sort:updated-desc", type: ISSUE, first: 50) {
+            nodes { ...ReviewRequestFields }
+          }
+          all: search(query: "is:pr is:open archived:false review-requested:@me sort:updated-desc", type: ISSUE, first: 50) {
+            nodes { ...ReviewRequestFields }
+          }
+        }
+
+        fragment ReviewRequestFields on PullRequest {
+          id
+          title
+          number
+          url
+          updatedAt
+          isDraft
+          repository { nameWithOwner }
+          author { login }
+        }
+        """
+        let response = try await graphQL(ReviewRequestsResponse.self,
+                                         query: query, variables: [:], token: token)
+        return ReviewRequests(direct: response.direct.rows, all: response.all.rows)
+    }
+
     func enqueuePullRequest(token: String, pullRequestID: String) async throws {
         let query = """
         mutation($id: ID!) {
@@ -429,6 +456,42 @@ private struct PullRequestNode: Decodable {
     let isInMergeQueue: Bool
     let mergeStateStatus: String
     let statusCheckRollup: StatusCheckRollup?
+}
+
+private struct ReviewRequestsResponse: Decodable {
+    let direct: Search
+    let all: Search
+
+    struct Search: Decodable {
+        let nodes: [Node]
+
+        var rows: [ReviewRequestRow] {
+            nodes.map { pr in
+                ReviewRequestRow(id: "\(pr.repository.nameWithOwner)#\(pr.number)",
+                                 title: pr.title,
+                                 number: pr.number,
+                                 repoFullName: pr.repository.nameWithOwner,
+                                 htmlURL: pr.url,
+                                 authorLogin: pr.author?.login,
+                                 isDraft: pr.isDraft,
+                                 updatedAt: pr.updatedAt)
+            }
+        }
+    }
+
+    struct Node: Decodable {
+        let title: String
+        let number: Int
+        let url: URL
+        let updatedAt: Date
+        let isDraft: Bool
+        let repository: PullRequestNode.Repository
+        let author: Author?
+    }
+
+    struct Author: Decodable {
+        let login: String
+    }
 }
 
 private struct StatusCheckRollup: Decodable {

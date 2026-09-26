@@ -10,14 +10,22 @@ final class PullRequestSelectionTests: XCTestCase {
                                                 updatedAt: Date(timeIntervalSince1970: 0),
                                                 closedAt: nil,
                                                 mergedAt: nil)
+    private let review = reviewRequestRow(number: 50)
 
     func testUsesTheVisibleTabSelection() {
         let open = [row(number: 1, status: .success), row(number: 2, status: .pending)]
 
         XCTAssertEqual(reference(tab: .open, open: open, openID: "acme/widgets#2"),
                        PullRequestReference(repoFullName: "acme/widgets", number: 2))
+        XCTAssertEqual(reference(tab: .reviews, open: open, openID: "acme/widgets#2"),
+                       PullRequestReference(repoFullName: "acme/widgets", number: 50))
         XCTAssertEqual(reference(tab: .history, open: open, openID: "acme/widgets#2"),
                        PullRequestReference(repoFullName: "acme/widgets", number: 90))
+    }
+
+    func testTabsAreOrderedWithHistoryLast() {
+        XCTAssertEqual(PullRequestTab.allCases, [.open, .reviews, .history])
+        XCTAssertEqual(PullRequestTab.allCases.map(\.title), ["My PRs", "To Review", "History"])
     }
 
     func testNoSelectionOrMissingRowShowsNothing() {
@@ -27,16 +35,20 @@ final class PullRequestSelectionTests: XCTestCase {
         XCTAssertNil(reference(tab: .open, open: open, openID: "acme/widgets#3"))
         XCTAssertNil(PullRequestSelection.reference(tab: .history,
                                                     openRows: open,
+                                                    reviewRows: [review],
                                                     historyRows: [history],
                                                     selectedOpenID: nil,
+                                                    selectedReviewID: nil,
                                                     selectedHistoryID: nil))
     }
 
     private func reference(tab: PullRequestTab, open: [PullRequestRow], openID: String?) -> PullRequestReference? {
         PullRequestSelection.reference(tab: tab,
                                        openRows: open,
+                                       reviewRows: [review],
                                        historyRows: [history],
                                        selectedOpenID: openID,
+                                       selectedReviewID: review.id,
                                        selectedHistoryID: history.id)
     }
 }

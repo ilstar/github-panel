@@ -12,6 +12,7 @@ struct ContentView: View {
     @State private var isSaving = false
     @State private var now = Date()
     @State private var selectedPRID: String?
+    @State private var selectedReviewID: String?
     @State private var selectedHistoryID: String?
     @State private var mergeInFlight: Set<String> = []
     @AppStorage(ListPaneLayout.widthDefaultsKey) private var listPaneWidth: Double = ListPaneLayout.defaultWidth
@@ -45,6 +46,9 @@ struct ContentView: View {
             now = Date()
         }
         .onChange(of: monitor.lastHistoryRefreshAt) { _ in
+            now = Date()
+        }
+        .onChange(of: monitor.lastReviewRequestsRefreshAt) { _ in
             now = Date()
         }
     }
@@ -89,8 +93,10 @@ struct ContentView: View {
     private var selectedReference: PullRequestReference? {
         PullRequestSelection.reference(tab: monitor.selectedTab,
                                        openRows: monitor.prRows,
+                                       reviewRows: monitor.reviewRequests.rows,
                                        historyRows: monitor.historyRows,
                                        selectedOpenID: selectedPRID,
+                                       selectedReviewID: selectedReviewID,
                                        selectedHistoryID: selectedHistoryID)
     }
 
@@ -157,7 +163,7 @@ struct ContentView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 190)
+                .frame(width: 280)
                 .labelsHidden()
 
                 Spacer()
@@ -165,14 +171,23 @@ struct ContentView: View {
                     .fixedSize()
             }
             .onChange(of: monitor.selectedTab) { tab in
-                if tab == .history {
+                switch tab {
+                case .open:
+                    break
+                case .reviews:
+                    // Review requests change often, so reload whenever the tab is shown.
+                    Task { await monitor.refreshReviewRequests() }
+                case .history:
                     monitor.loadHistoryIfNeeded()
                 }
             }
 
-            if monitor.selectedTab == .open {
+            switch monitor.selectedTab {
+            case .open:
                 openPullRequestsSection
-            } else {
+            case .reviews:
+                reviewRequestsSection
+            case .history:
                 historySection
             }
         }
@@ -244,6 +259,76 @@ struct ContentView: View {
         .onChange(of: monitor.prRows.map { $0.id }) { newIDs in
             if selectedPRID == nil || !newIDs.contains(selectedPRID ?? "") {
                 selectedPRID = newIDs.first
+            }
+        }
+    }
+
+    private var reviewRequestsSection: some View {
+        Group {
+            if let error = monitor.lastReviewRequestsError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
+            if monitor.hasToken {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        ForEach(ReviewRequestGroup.allCases) { group in
+                            reviewRequestGroup(group)
+                        }
+                    }
+                    .padding(.top, 6)
+                    .padding(.bottom, 8)
+                }
+                .scrollIndicators(.hidden)
+                .onAppear {
+                    if selectedReviewID == nil {
+                        selectedReviewID = monitor.reviewRequests.rows.first?.id
+                    }
+                }
+                .onChange(of: monitor.reviewRequests.rows.map { $0.id }) { newIDs in
+                    if selectedReviewID == nil || !newIDs.contains(selectedReviewID ?? "") {
+                        selectedReviewID = newIDs.first
+                    }
+                }
+            } else {
+                Text("Add a GitHub token to begin.")
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func reviewRequestGroup(_ group: ReviewRequestGroup) -> some View {
+        let rows = monitor.reviewRequests.rows(in: group)
+        HStack(spacing: 6) {
+            Text(group.title)
+                .font(.subheadline.weight(.semibold))
+            Text(String(rows.count))
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.top, group == ReviewRequestGroup.allCases.first ? 0 : 8)
+
+        if rows.isEmpty {
+            Text(monitor.isReviewRequestsLoading && monitor.lastReviewRequestsRefreshAt == nil ? "Loading…" : group.emptyText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else {
+            ForEach(rows) { pr in
+                PRReviewRequestRow(pr: pr,
+                                   isSelected: selectedReviewID == pr.id,
+                                   relativeFormatter: relativeFormatter,
+                                   now: now)
+                    .id(pr.id)
+                    .onTapGesture {
+                        selectedReviewID = pr.id
+                        openOnGitHubIfCommandHeld(pr.htmlURL)
+                    }
+                    .contextMenu {
+                        pullRequestContextMenu(pr.reference, htmlURL: pr.htmlURL)
+                    }
             }
         }
     }
@@ -321,17 +406,31 @@ struct ContentView: View {
     }
 
     private var lastUpdatedText: String {
-        if monitor.selectedTab == .history {
-            guard let lastHistoryRefreshAt = monitor.lastHistoryRefreshAt else {
-                return "Never"
-            }
-            return relativeFormatter.localizedString(for: lastHistoryRefreshAt, relativeTo: now)
+        let lastRefreshAt: Date?
+        switch monitor.selectedTab {
+        case .open:
+            return monitor.lastRefreshText(relativeTo: now)
+        case .reviews:
+            lastRefreshAt = monitor.lastReviewRequestsRefreshAt
+        case .history:
+            lastRefreshAt = monitor.lastHistoryRefreshAt
         }
-        return monitor.lastRefreshText(relativeTo: now)
+        guard let lastRefreshAt else {
+            return "Never"
+        }
+        return relativeFormatter.localizedString(for: lastRefreshAt, relativeTo: now)
+    }
+
+    private var selectedTabIsLoading: Bool {
+        switch monitor.selectedTab {
+        case .open: return monitor.isLoading
+        case .reviews: return monitor.isReviewRequestsLoading
+        case .history: return monitor.isHistoryLoading
+        }
     }
 
     private var refreshPill: some View {
-        RefreshPill(isLoading: monitor.selectedTab == .history ? monitor.isHistoryLoading : monitor.isLoading,
+        RefreshPill(isLoading: selectedTabIsLoading,
                     isEnabled: refreshIsEnabled,
                     lastUpdatedView: lastUpdatedView) {
             refreshSelectedTab()
@@ -340,7 +439,7 @@ struct ContentView: View {
 
     private var refreshIsEnabled: Bool {
         guard monitor.hasToken else { return false }
-        return monitor.selectedTab == .history ? !monitor.isHistoryLoading : !monitor.isLoading
+        return !selectedTabIsLoading
     }
 
     private var historyPagination: some View {
@@ -436,10 +535,13 @@ struct ContentView: View {
     }
 
     private func refreshSelectedTab() {
-        if monitor.selectedTab == .history {
-            Task { await monitor.refreshCurrentHistoryPage() }
-        } else {
+        switch monitor.selectedTab {
+        case .open:
             Task { await monitor.refreshNow() }
+        case .reviews:
+            Task { await monitor.refreshReviewRequests() }
+        case .history:
+            Task { await monitor.refreshCurrentHistoryPage() }
         }
     }
 
