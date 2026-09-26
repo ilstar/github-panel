@@ -196,8 +196,7 @@ struct PullRequestConversationView: View {
                             .italic()
                             .foregroundStyle(.secondary)
                     } else {
-                        Text(Self.markdown(detail.body))
-                            .textSelection(.enabled)
+                        MarkdownView(markdown: detail.body)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -212,7 +211,67 @@ struct PullRequestConversationView: View {
         }
     }
 
-    static func markdown(_ text: String) -> AttributedString {
+}
+
+struct MarkdownView: View {
+    let markdown: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(Array(MarkdownBlocks.parse(markdown).enumerated()), id: \.offset) { _, block in
+                blockView(block)
+            }
+        }
+        .textSelection(.enabled)
+    }
+
+    @ViewBuilder
+    private func blockView(_ block: MarkdownBlock) -> some View {
+        switch block {
+        case let .heading(level, text):
+            VStack(alignment: .leading, spacing: 4) {
+                Text(Self.inline(text))
+                    .font(level == 1 ? .title2.weight(.semibold) : level == 2 ? .title3.weight(.semibold) : .headline)
+                if level <= 2 {
+                    Divider()
+                }
+            }
+            .padding(.top, 4)
+        case let .paragraph(text):
+            Text(Self.inline(text))
+        case let .listItem(marker, indent, text):
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(marker)
+                    .foregroundStyle(.secondary)
+                Text(Self.inline(text))
+            }
+            .padding(.leading, CGFloat(indent) * 18)
+        case let .quote(text):
+            Text(Self.inline(text))
+                .foregroundStyle(.secondary)
+                .padding(.leading, 12)
+                .overlay(alignment: .leading) {
+                    Rectangle()
+                        .fill(Color.secondary.opacity(0.4))
+                        .frame(width: 3)
+                }
+        case let .code(_, text):
+            ScrollView(.horizontal) {
+                Text(text)
+                    .font(.system(size: 12, design: .monospaced))
+                    .padding(12)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.secondary.opacity(0.08))
+            )
+        case .rule:
+            Divider()
+        }
+    }
+
+    static func inline(_ text: String) -> AttributedString {
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
     }

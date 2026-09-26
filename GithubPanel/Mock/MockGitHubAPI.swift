@@ -90,9 +90,18 @@ final class MockGitHubAPI: GitHubAPIClient {
     - Adds a **detail window** for pull requests.
     - Renders the description and the `diff` of each changed file.
 
+    <!-- Template hint: this comment is hidden. -->
+
     ## Tests
 
-    - Added parser tests. See [the plan](https://github.com/mock/github-panel) for more.
+    1. Added parser tests.
+    2. See [the plan](https://github.com/mock/github-panel) for more.
+
+    ```swift
+    let lines = DiffParser.parse(patch)
+    ```
+
+    > Mock data for `mise run mock`.
     """
 
     private static let detailFiles: [PullRequestFile] = [

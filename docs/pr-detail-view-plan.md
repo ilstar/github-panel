@@ -40,7 +40,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
        "Open in New Window" and "Open on GitHub".
 6. [x] Files changed tab: file list and a colored, line-numbered diff per file.
 6b. [x] Split layout: list on the left, detail on the right.
-7. [ ] Block-level Markdown for the description (headings, lists, code blocks, quotes).
+7. [x] Block-level Markdown for the description (headings, lists, code blocks, quotes).
 8. [ ] README update; open a draft PR.
 
 ## Later (not in this branch unless time allows)
