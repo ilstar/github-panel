@@ -32,6 +32,34 @@ enum TitleBarDoubleClickAction: Equatable {
     }
 }
 
+/// Gives the window an empty unified toolbar, which makes the hidden title bar strip taller and moves the
+/// window buttons in from the corner so they sit inside the floating sidebar. The strip holds the refresh
+/// button and the pull request's toolbar.
+struct WindowToolbarStrip: NSViewRepresentable {
+    func makeNSView(context: Context) -> WindowToolbarStripView {
+        WindowToolbarStripView()
+    }
+
+    func updateNSView(_ nsView: WindowToolbarStripView, context: Context) {}
+}
+
+final class WindowToolbarStripView: NSView {
+    static let toolbarIdentifier = "GithubPanel.titleBarStrip"
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard let window else { return }
+        Self.install(in: window)
+    }
+
+    static func install(in window: NSWindow) {
+        guard window.toolbar?.identifier != toolbarIdentifier else { return }
+        window.toolbar = NSToolbar(identifier: toolbarIdentifier)
+        window.toolbarStyle = .unified
+        window.titleVisibility = .hidden
+    }
+}
+
 /// Lets the hidden title bar strip behave like a real one: drag to move and double-click to zoom.
 /// Covers the whole window but only takes clicks in the title bar strip, letting everything else through.
 struct TitleBarDoubleClickArea: NSViewRepresentable {

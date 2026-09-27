@@ -12,6 +12,8 @@ struct PullRequestDetailView: View {
     @StateObject private var viewModel: PullRequestDetailViewModel
     @State private var selectedTab: PullRequestDetailTab = .conversation
     @State private var isEditingTitle = false
+    /// Set in the main window, where the toolbar sits in the title bar strip.
+    @Environment(\.titleBarHeight) private var titleBarHeight
     /// Goes up by one each time the comment box should take focus.
     @State private var commentFocusRequest = 0
 
@@ -22,34 +24,33 @@ struct PullRequestDetailView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if let content = viewModel.content {
+                PullRequestDetailToolbar(selectedTab: $selectedTab,
+                                         segments: tabSegments(fileCount: content.files.count),
+                                         htmlURL: content.detail.htmlURL,
+                                         isLoading: viewModel.isLoading,
+                                         onRefresh: reload,
+                                         onEditTitle: content.detail.canEdit ? { isEditingTitle = true } : nil)
+                    .padding(.leading, 28)
+                    .padding(.trailing, 20)
+                    .frame(height: max(titleBarHeight ?? 0, 54))
+
                 PullRequestDetailHeader(detail: content.detail,
-                                        isLoading: viewModel.isLoading,
                                         isEditingTitle: $isEditingTitle,
-                                        onRefresh: reload,
                                         onSaveTitle: { title in try await viewModel.edit(title: title) })
-                    .padding(.horizontal, 28)
-                    .padding(.top, 18)
-                    .padding(.bottom, 14)
+                    .padding(.horizontal, 32)
+                    .padding(.top, 14)
+                    .padding(.bottom, 16)
 
                 if let error = viewModel.errorMessage {
                     errorText(error)
-                        .padding(.horizontal, 28)
+                        .padding(.horizontal, 32)
                         .padding(.bottom, 8)
                 }
-
-                Picker("", selection: $selectedTab) {
-                    Text(conversationTitle).tag(PullRequestDetailTab.conversation)
-                    Text("Files changed \(content.files.count)").tag(PullRequestDetailTab.files)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .fixedSize()
-                .padding(.horizontal, 28)
-                .padding(.bottom, 12)
 
                 Rectangle()
                     .fill(Theme.hairline)
                     .frame(height: 1)
+                    .padding(.horizontal, 32)
 
                 switch selectedTab {
                 case .conversation:
@@ -75,12 +76,16 @@ struct PullRequestDetailView: View {
             }
         }
         .frame(minWidth: 420, minHeight: 400)
-        .background(Color(nsColor: .textBackgroundColor))
         .navigationTitle(navigationTitle)
         .focusedSceneValue(\.pullRequestDetail, actions)
         .task {
             await viewModel.load()
         }
+    }
+
+    private func tabSegments(fileCount: Int) -> [GlassSegmentedControl<PullRequestDetailTab>.Segment] {
+        [.init(value: .conversation, title: conversationTitle),
+         .init(value: .files, title: "Files changed \(fileCount)")]
     }
 
     private var conversationTitle: String {
@@ -127,11 +132,77 @@ struct PullRequestDetailView: View {
     }
 }
 
+/// The row over the pull request: the Conversation / Files changed switcher on the left and the
+/// Reload, Edit and Open on GitHub buttons in glass capsules on the right.
+struct PullRequestDetailToolbar: View {
+    @Binding var selectedTab: PullRequestDetailTab
+    let segments: [GlassSegmentedControl<PullRequestDetailTab>.Segment]
+    let htmlURL: URL
+    let isLoading: Bool
+    let onRefresh: () -> Void
+    /// Nil when the viewer cannot edit the pull request.
+    let onEditTitle: (() -> Void)?
+
+    var body: some View {
+        HStack(spacing: 10) {
+            GlassSegmentedControl(selection: $selectedTab, segments: segments)
+                .fixedSize()
+
+            Spacer(minLength: 12)
+
+            HStack(spacing: 0) {
+                Button(action: onRefresh) {
+                    toolbarIcon("arrow.clockwise")
+                }
+                .disabled(isLoading)
+                .help("Reload")
+
+                if let onEditTitle {
+                    Rectangle()
+                        .fill(Theme.hairline)
+                        .frame(width: 1, height: 16)
+                    Button(action: onEditTitle) {
+                        toolbarIcon("pencil")
+                    }
+                    .help("Edit title")
+                }
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 3)
+            .frame(height: 34)
+            .glassSurface(.control, in: Capsule())
+
+            Button {
+                NSWorkspace.shared.open(htmlURL)
+            } label: {
+                HStack(spacing: 6) {
+                    Text("Open on GitHub")
+                    Image(systemName: "arrow.up.right")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .font(.system(size: 13, weight: .medium))
+                .padding(.leading, 16)
+                .padding(.trailing, 14)
+                .frame(height: 34)
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .glassSurface(.control, in: Capsule())
+        }
+    }
+
+    private func toolbarIcon(_ systemName: String) -> some View {
+        Image(systemName: systemName)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .frame(width: 32, height: 28)
+            .contentShape(Capsule())
+    }
+}
+
 struct PullRequestDetailHeader: View {
     let detail: PullRequestDetail
-    let isLoading: Bool
     @Binding var isEditingTitle: Bool
-    let onRefresh: () -> Void
     /// Saves a new title. Throws to keep the draft and show the error.
     let onSaveTitle: (String) async throws -> Void
     @State private var copiedBranchNotice = false
@@ -146,37 +217,12 @@ struct PullRequestDetailHeader: View {
                                            isEditingTitle = false
                                        })
             } else {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
                     titleText
                     Text("#\(String(detail.reference.number))")
-                        .font(.system(size: 22, weight: .regular))
+                        .font(.system(size: 26, weight: .regular))
                         .foregroundStyle(.tertiary)
-
-                    if detail.canEdit {
-                        Button {
-                            isEditingTitle = true
-                        } label: {
-                            Image(systemName: "pencil")
-                        }
-                        .buttonStyle(QuietButtonStyle())
-                        .help("Edit title")
-                    }
-
-                    Spacer(minLength: 12)
-
-                    Button(action: onRefresh) {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .buttonStyle(QuietButtonStyle())
-                    .disabled(isLoading)
-                    .help("Reload")
-
-                    Button {
-                        NSWorkspace.shared.open(detail.htmlURL)
-                    } label: {
-                        Label("Open on GitHub", systemImage: "arrow.up.right")
-                    }
-                    .buttonStyle(QuietButtonStyle())
+                    Spacer(minLength: 0)
                 }
             }
 
@@ -210,7 +256,8 @@ struct PullRequestDetailHeader: View {
     @ViewBuilder
     private var titleText: some View {
         let title = Text(detail.title)
-            .font(.system(size: 22, weight: .bold))
+            .font(.system(size: 26, weight: .bold))
+            .tracking(-0.5)
         if detail.canEdit {
             title
                 .onTapGesture(count: 2) { isEditingTitle = true }
@@ -267,13 +314,13 @@ struct BranchTag: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .foregroundStyle(Theme.branch)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 1.5)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 2)
                 .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
                         .fill(isHovering ? Theme.branchFillHover : Theme.branchFill)
                 )
-                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
@@ -500,9 +547,11 @@ struct PullRequestStateBadge: View {
     var body: some View {
         Label(title, systemImage: iconName)
             .font(.caption.weight(.semibold))
-            .padding(.horizontal, 9)
-            .padding(.vertical, 3)
-            .background(Capsule().fill(color.opacity(0.13)))
+            .padding(.leading, 8)
+            .padding(.trailing, 10)
+            .frame(height: 24)
+            .background(Capsule().fill(color.opacity(0.14)))
+            .overlay(Capsule().strokeBorder(color.opacity(state == .draft ? 0 : 0.28), lineWidth: 0.5))
             .foregroundStyle(color)
     }
 
@@ -545,88 +594,82 @@ struct PullRequestConversationView: View {
 
     @State private var isEditingBody = false
 
-    private static let composerID = "comment-composer"
-
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack(spacing: 6) {
-                            Text(detail.authorLogin)
-                                .font(.callout.weight(.semibold))
-                            Text("opened this pull request \(detail.createdAt.formatted(.relative(presentation: .named)))")
-                                .font(.callout)
-                                .foregroundStyle(.secondary)
-                            Spacer(minLength: 8)
-                            if detail.canEdit && !isEditingBody {
-                                Button {
-                                    isEditingBody = true
-                                } label: {
-                                    Image(systemName: "pencil")
-                                }
-                                .buttonStyle(QuietButtonStyle())
-                                .help("Edit description")
-                            }
-                        }
-
-                        Group {
-                            if isEditingBody {
-                                PullRequestBodyEditor(body: detail.body,
-                                                      onCancel: { isEditingBody = false },
-                                                      onSave: { body in
-                                                          try await onSaveBody(body)
-                                                          isEditingBody = false
-                                                      })
-                            } else if detail.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                Text("No description provided.")
-                                    .italic()
-                                    .foregroundStyle(.secondary)
-                            } else {
-                                MarkdownView(markdown: detail.body)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(18)
-                        .background(
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .strokeBorder(Theme.hairline)
-                        )
-                    }
-
-                    if let comments {
-                        ForEach(comments) { comment in
-                            PullRequestCommentView(comment: comment)
-                                .padding(16)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                        .fill(Theme.cardFill)
-                                )
-                        }
-                    } else {
-                        ProgressView()
-                            .controlSize(.small)
-                            .frame(maxWidth: .infinity)
-                    }
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Add a comment")
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(spacing: 8) {
+                        AvatarView(login: detail.authorLogin)
+                        Text(detail.authorLogin)
                             .font(.callout.weight(.semibold))
-                        CommentComposer(placeholder: "Leave a comment (Markdown supported)",
-                                        submitTitle: "Comment",
-                                        focusRequest: commentFocusRequest,
-                                        onSubmit: onComment)
+                        Text("opened this pull request \(detail.createdAt.formatted(.relative(presentation: .named)))")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 8)
+                        if detail.canEdit && !isEditingBody {
+                            Button {
+                                isEditingBody = true
+                            } label: {
+                                Image(systemName: "pencil")
+                            }
+                            .buttonStyle(QuietButtonStyle())
+                            .help("Edit description")
+                        }
                     }
-                    .id(Self.composerID)
+
+                    Group {
+                        if isEditingBody {
+                            PullRequestBodyEditor(body: detail.body,
+                                                  onCancel: { isEditingBody = false },
+                                                  onSave: { body in
+                                                      try await onSaveBody(body)
+                                                      isEditingBody = false
+                                                  })
+                        } else if detail.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Text("No description provided.")
+                                .italic()
+                                .foregroundStyle(.secondary)
+                        } else {
+                            MarkdownView(markdown: detail.body)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(.horizontal, 28)
-                .padding(.vertical, 24)
+                .padding(.horizontal, 20)
+                .padding(.top, 16)
+                .padding(.bottom, 18)
+                .conversationCard()
+
+                if let comments {
+                    ForEach(comments) { comment in
+                        PullRequestCommentView(comment: comment)
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 15)
+                            .conversationCard()
+                    }
+                } else {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            .padding(.horizontal, 32)
+            .padding(.top, 20)
+            .padding(.bottom, 24)
+            .frame(maxWidth: 900, alignment: .leading)
+            .background(PageScrollAnchor())
+        }
+        // The comment box floats in glass over the bottom of the conversation, which scrolls under it.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            CommentComposer(placeholder: "Leave a comment (Markdown supported)",
+                            submitTitle: "Comment",
+                            style: .floating,
+                            focusRequest: commentFocusRequest,
+                            onSubmit: onComment)
+                .frame(maxWidth: 900 - 64)
+                .padding(.horizontal, 32)
+                .padding(.bottom, 20)
                 .frame(maxWidth: 900, alignment: .leading)
-                .background(PageScrollAnchor())
-            }
-            .onChange(of: commentFocusRequest) { _ in
-                withAnimation { proxy.scrollTo(Self.composerID, anchor: .bottom) }
-            }
         }
     }
 }
@@ -802,5 +845,14 @@ enum DiffColors {
             text += part
         }
         return text.characters.isEmpty ? AttributedString(" ") : text
+    }
+}
+
+private extension View {
+    /// The soft rounded card behind the description and each comment.
+    func conversationCard() -> some View {
+        let shape = RoundedRectangle(cornerRadius: Theme.cardCornerRadius, style: .continuous)
+        return background(shape.fill(Theme.cardFill))
+            .overlay(shape.strokeBorder(Theme.hairline, lineWidth: 0.5))
     }
 }

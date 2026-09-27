@@ -41,6 +41,7 @@ struct GithubPanelApp: App {
         WindowGroup("Pull Request", for: PullRequestReference.self) { $reference in
             if let reference {
                 PullRequestDetailView(viewModel: PullRequestDetailViewModel(reference: reference, monitor: monitor))
+                    .background(ZStack { WindowBackdrop(); Theme.contentBackground }.ignoresSafeArea())
             }
         }
         .defaultSize(width: 960, height: 760)

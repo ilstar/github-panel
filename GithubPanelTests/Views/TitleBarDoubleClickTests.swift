@@ -32,26 +32,70 @@ final class TitleBarDoubleClickTests: XCTestCase {
 
     @MainActor
     func testTitleBarStripTakesClicksEvenWhenPaneBackgroundsRunUnderIt() throws {
+        let window = makeStripWindow()
+        defer { window.close() }
+        // Like ContentView: pane backgrounds run up under the hidden title bar, with the title bar area over them.
+        window.contentView = NSHostingView(rootView: Color.clear.background(stripBackground))
+        window.layoutIfNeeded()
+
+        XCTAssertTrue(hit(window, at: NSPoint(x: 300, y: 395)) is TitleBarDoubleClickView)
+        XCTAssertFalse(hit(window, at: NSPoint(x: 300, y: 200)) is TitleBarDoubleClickView)
+    }
+
+    @MainActor
+    func testControlsInTheTitleBarStripTakeTheirOwnClicks() throws {
+        let window = makeStripWindow()
+        defer { window.close() }
+        // Like the refresh button and the pull request toolbar, which sit in the strip.
+        let root = VStack {
+            Button("Refresh") {}
+                .frame(width: 120, height: 30)
+                .padding(.top, 6)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .ignoresSafeArea(.container, edges: .top)
+        .background(stripBackground)
+        window.contentView = NSHostingView(rootView: root)
+        window.layoutIfNeeded()
+
+        let titleBarHeight = TitleBarDoubleClickView.titleBarHeight(of: window)
+        XCTAssertGreaterThan(titleBarHeight, 36, "The toolbar strip should make the title bar taller")
+        XCTAssertFalse(hit(window, at: NSPoint(x: 300, y: 400 - 21)) is TitleBarDoubleClickView)
+        XCTAssertTrue(hit(window, at: NSPoint(x: 40, y: 400 - 21)) is TitleBarDoubleClickView)
+    }
+
+    func testToolbarStripIsInstalledOnce() {
+        let window = makeStripWindow()
+        defer { window.close() }
+        let toolbar = window.toolbar
+        WindowToolbarStripView.install(in: window)
+        XCTAssertTrue(window.toolbar === toolbar)
+        XCTAssertEqual(window.toolbar?.identifier, WindowToolbarStripView.toolbarIdentifier)
+    }
+
+    private var stripBackground: some View {
+        ZStack {
+            Color.white
+            TitleBarDoubleClickArea()
+        }
+        .ignoresSafeArea()
+    }
+
+    private func makeStripWindow() -> NSWindow {
         let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 600, height: 400),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                               backing: .buffered,
                               defer: false)
         window.isReleasedWhenClosed = false
         window.titlebarAppearsTransparent = true
-        window.titleVisibility = .hidden
-        // Like ContentView: a pane whose background color runs up under the hidden title bar.
-        let root = Color.white
-            .background(Color.gray.ignoresSafeArea())
-            .background(Color.white.ignoresSafeArea())
-            .overlay(TitleBarDoubleClickArea().ignoresSafeArea())
-        window.contentView = NSHostingView(rootView: root)
-        window.layoutIfNeeded()
-        defer { window.close() }
+        WindowToolbarStripView.install(in: window)
+        return window
+    }
 
-        let frameView = try XCTUnwrap(window.contentView?.superview)
-        let top = frameView.hitTest(frameView.convert(NSPoint(x: 300, y: 395), from: nil))
-        let middle = frameView.hitTest(frameView.convert(NSPoint(x: 300, y: 200), from: nil))
-        XCTAssertTrue(top is TitleBarDoubleClickView, String(describing: top))
-        XCTAssertFalse(middle is TitleBarDoubleClickView, String(describing: middle))
+    /// The view a click lands on, for a point in window coordinates.
+    private func hit(_ window: NSWindow, at point: NSPoint) -> NSView? {
+        guard let frameView = window.contentView?.superview else { return nil }
+        return frameView.hitTest(frameView.convert(point, from: nil))
     }
 }

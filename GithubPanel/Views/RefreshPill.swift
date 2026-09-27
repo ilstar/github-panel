@@ -57,16 +57,15 @@ struct RefreshPill: View {
                 }
                 .foregroundStyle(isHovering && isEnabled ? Color.primary : Color.secondary)
             }
-            .padding(.leading, 8)
-            .padding(.trailing, 6)
-            .padding(.vertical, 5)
-            .background(
-                Capsule()
-                    .fill(isHovering && isEnabled ? Theme.rowHover : Color.clear)
-            )
+            .padding(.leading, 12)
+            .padding(.trailing, 9)
+            .frame(height: 34)
+            .controlChrome(in: Capsule())
+            .brightness(isHovering && isEnabled ? 0.03 : 0)
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .focusEffectDisabledIfAvailable()
         .disabled(!isEnabled)
         .help("Refresh")
         .accessibilityLabel("Refresh")

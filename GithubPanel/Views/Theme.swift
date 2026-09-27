@@ -1,17 +1,36 @@
 import SwiftUI
 import AppKit
 
-/// Shared colors and small building blocks for a quiet, Things-like look:
-/// flat rows on a soft background, one accent for selection, and color only where it carries meaning.
+/// Shared colors and small building blocks for a glassy, current-macOS look: the list floats in a
+/// translucent sidebar over the desktop, controls are capsules, the selected row is a raised chip,
+/// and color appears only where it carries meaning.
 enum Theme {
-    /// The list pane on the left, a shade off the white detail pane.
-    static let listBackground = Color(light: NSColor(red: 0.965, green: 0.965, blue: 0.972, alpha: 1),
-                                      dark: NSColor(red: 0.135, green: 0.135, blue: 0.145, alpha: 1))
-    static let rowHover = Color.primary.opacity(0.045)
-    static let rowSelection = Color.accentColor.opacity(0.14)
-    /// A soft fill for cards such as comments and the token form.
-    static let cardFill = Color.primary.opacity(0.035)
+    /// The floating sidebar panel's tint over the window backdrop. Used where Liquid Glass is unavailable.
+    static let sidebarFill = Color(light: NSColor(white: 1, alpha: 0.42),
+                                   dark: NSColor(white: 1, alpha: 0.06))
+    /// The pull request pane, mostly opaque so text and diffs read cleanly over the backdrop.
+    static let contentBackground = Color(light: NSColor(white: 1, alpha: 0.88),
+                                         dark: NSColor(red: 0.086, green: 0.086, blue: 0.106, alpha: 0.86))
+    static let rowHover = Color(light: NSColor(white: 1, alpha: 0.4),
+                                dark: NSColor(white: 1, alpha: 0.06))
+    /// The selected row: a raised white chip rather than an accent tint.
+    static let rowSelection = Color(light: NSColor(white: 1, alpha: 0.84),
+                                    dark: NSColor(white: 1, alpha: 0.13))
+    /// Capsule controls that sit on the sidebar or a card, such as the tab switcher and refresh button.
+    static let controlFill = Color(light: NSColor(white: 1, alpha: 0.58),
+                                   dark: NSColor(white: 1, alpha: 0.08))
+    /// The selected segment of a ``GlassSegmentedControl``.
+    static let segmentSelection = Color(light: .white,
+                                        dark: NSColor(white: 1, alpha: 0.2))
+    /// The bright edge along the top of glass surfaces.
+    static let glassHighlight = Color(light: NSColor(white: 1, alpha: 0.9),
+                                      dark: NSColor(white: 1, alpha: 0.14))
+    /// A soft fill for cards such as the description, comments and the token form.
+    static let cardFill = Color(light: NSColor(white: 1, alpha: 0.72),
+                                dark: NSColor(white: 1, alpha: 0.05))
     static let hairline = Color.primary.opacity(0.08)
+    /// The Merge and Add to queue buttons: a flat green that keeps white text readable.
+    static let mergeFill = Color(red: 0.122, green: 0.498, blue: 0.239)
 
     static let green = Color(light: NSColor(red: 0.13, green: 0.55, blue: 0.29, alpha: 1),
                              dark: NSColor(red: 0.30, green: 0.78, blue: 0.45, alpha: 1))
@@ -29,7 +48,11 @@ enum Theme {
     static let branchFillHover = Color(light: NSColor(red: 0.776, green: 0.914, blue: 1.0, alpha: 1),
                                        dark: NSColor(red: 0.220, green: 0.545, blue: 0.992, alpha: 0.25))
 
-    static let rowCornerRadius: CGFloat = 8
+    static let rowCornerRadius: CGFloat = 14
+    static let cardCornerRadius: CGFloat = 18
+    static let sidebarCornerRadius: CGFloat = 20
+    /// The gap between the floating sidebar and the window edges.
+    static let sidebarInset: CGFloat = 8
 }
 
 extension Color {
@@ -48,29 +71,32 @@ struct TagView: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 10, weight: .semibold))
-            .tracking(0.3)
+            .font(.system(size: 9.5, weight: .bold))
+            .tracking(0.4)
             .padding(.horizontal, 6)
             .padding(.vertical, 1.5)
-            .background(Capsule().fill(color.opacity(0.13)))
+            .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(color.opacity(0.14)))
             .foregroundStyle(color)
     }
 }
 
-/// The flat, rounded background behind a list row: a faint fill on hover, the accent when selected.
+/// The rounded background behind a list row: a faint fill on hover, a raised chip when selected.
 struct ListRowBackground: ViewModifier {
     let isSelected: Bool
     let isHovering: Bool
 
     func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: Theme.rowCornerRadius, style: .continuous)
         content
             .padding(.horizontal, 10)
             .padding(.vertical, 9)
             .background(
-                RoundedRectangle(cornerRadius: Theme.rowCornerRadius, style: .continuous)
+                shape
                     .fill(isSelected ? Theme.rowSelection : isHovering ? Theme.rowHover : Color.clear)
+                    .overlay(shape.strokeBorder(Theme.hairline, lineWidth: 0.5).opacity(isSelected ? 0.7 : 0))
+                    .shadow(color: .black.opacity(isSelected ? 0.07 : 0), radius: 5, y: 2)
             )
-            .contentShape(RoundedRectangle(cornerRadius: Theme.rowCornerRadius, style: .continuous))
+            .contentShape(shape)
             .animation(.easeOut(duration: 0.12), value: isHovering)
     }
 }
@@ -156,17 +182,186 @@ struct RowIcon: View {
         Group {
             if inCircle {
                 Image(systemName: systemName)
-                    .font(.system(size: 8.5, weight: .bold))
+                    .font(.system(size: 9.5, weight: .bold))
                     .foregroundStyle(.white)
-                    .frame(width: 16, height: 16)
+                    .frame(width: 19, height: 19)
                     .background(Circle().fill(color))
             } else {
                 Image(systemName: systemName)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.system(size: 18, weight: .semibold))
                     .symbolRenderingMode(.palette)
                     .foregroundStyle(.white, color)
             }
         }
-        .frame(width: 20)
+        .shadow(color: .black.opacity(0.14), radius: 1, y: 0.5)
+        .frame(width: 22)
+    }
+}
+
+// MARK: - Glass
+
+/// The window's backdrop: the desktop, blurred and tinted, showing through behind the panes.
+struct WindowBackdrop: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .underWindowBackground
+        view.blendingMode = .behindWindow
+        view.state = .followsWindowActiveState
+        return view
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
+}
+
+/// Where a glass surface sits, which decides how it is drawn before macOS 26.
+enum GlassRole {
+    /// A large panel such as the sidebar.
+    case panel
+    /// A control on a pane, such as a toolbar button group or the comment box.
+    case control
+}
+
+extension View {
+    /// Liquid Glass on macOS 26 and later. Before that, a translucent fill with a bright top edge and
+    /// a hairline, which reads the same way over the window backdrop.
+    @ViewBuilder
+    func glassSurface<S: InsettableShape>(_ role: GlassRole, in shape: S) -> some View {
+        if #available(macOS 26.0, *) {
+            glassEffect(role == .control ? .regular.interactive() : .regular, in: shape)
+        } else {
+            background(
+                shape
+                    .fill(role == .panel ? Theme.sidebarFill : Theme.controlFill)
+                    .background(.ultraThinMaterial, in: shape)
+            )
+            .glassEdges(in: shape, shadowRadius: role == .panel ? 18 : 3)
+        }
+    }
+
+    /// A control drawn on a glass panel, where Liquid Glass would stack on glass: a soft white capsule
+    /// with the same edges as glass.
+    func controlChrome<S: InsettableShape>(in shape: S) -> some View {
+        background(shape.fill(Theme.controlFill))
+            .glassEdges(in: shape, shadowRadius: 1.5)
+    }
+
+    /// The bright top edge, hairline and soft shadow shared by glass surfaces.
+    func glassEdges<S: InsettableShape>(in shape: S, shadowRadius: CGFloat) -> some View {
+        overlay(
+            shape.strokeBorder(
+                LinearGradient(colors: [Theme.glassHighlight, Theme.glassHighlight.opacity(0.2)],
+                               startPoint: .top, endPoint: .bottom),
+                lineWidth: 1
+            )
+        )
+        .overlay(shape.strokeBorder(Color.black.opacity(0.07), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.08), radius: shadowRadius, y: shadowRadius / 3)
+    }
+}
+
+private struct TitleBarHeightKey: EnvironmentKey {
+    static let defaultValue: CGFloat? = nil
+}
+
+extension EnvironmentValues {
+    /// The height of the window's title bar strip when a view runs up into it, as in the main window.
+    var titleBarHeight: CGFloat? {
+        get { self[TitleBarHeightKey.self] }
+        set { self[TitleBarHeightKey.self] = newValue }
+    }
+}
+
+extension View {
+    /// Hides the focus ring on custom controls whose selection already shows focus. Needs macOS 14.
+    @ViewBuilder
+    func focusEffectDisabledIfAvailable() -> some View {
+        if #available(macOS 14.0, *) {
+            focusEffectDisabled()
+        } else {
+            self
+        }
+    }
+}
+
+/// A segmented control drawn as a capsule with a raised white segment that slides to the selection.
+struct GlassSegmentedControl<Value: Hashable>: View {
+    struct Segment: Identifiable {
+        let value: Value
+        let title: String
+        var id: Value { value }
+    }
+
+    @Binding var selection: Value
+    let segments: [Segment]
+    /// Stretches the segments to share the full width, like the tab switcher over the list.
+    var fillsWidth = false
+
+    @Namespace private var namespace
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(segments) { segment in
+                let isSelected = segment.value == selection
+                Button {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                        selection = segment.value
+                    }
+                } label: {
+                    Text(segment.title)
+                        .font(.system(size: 13, weight: isSelected ? .semibold : .medium))
+                        .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+                        .lineLimit(1)
+                        .padding(.horizontal, 14)
+                        .frame(maxWidth: fillsWidth ? .infinity : nil)
+                        .frame(height: 28)
+                        .background {
+                            if isSelected {
+                                Capsule()
+                                    .fill(Theme.segmentSelection)
+                                    .shadow(color: .black.opacity(0.1), radius: 3, y: 1.5)
+                                    .overlay(Capsule().strokeBorder(Color.black.opacity(0.05), lineWidth: 0.5))
+                                    .matchedGeometryEffect(id: "selection", in: namespace)
+                            }
+                        }
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .focusEffectDisabledIfAvailable()
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
+            }
+        }
+        .padding(3)
+        .controlChrome(in: Capsule())
+    }
+}
+
+/// A round avatar with the login's first letter, in a color that stays the same for that login.
+struct AvatarView: View {
+    let login: String
+    var size: CGFloat = 24
+
+    var body: some View {
+        Text(login.prefix(1).uppercased())
+            .font(.system(size: size * 0.46, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: size, height: size)
+            .background(Circle().fill(Self.palette[Self.paletteIndex(for: login)]))
+            .shadow(color: .black.opacity(0.12), radius: 1, y: 0.5)
+            .accessibilityHidden(true)
+    }
+
+    static let palette: [Color] = [
+        Color(red: 0.173, green: 0.624, blue: 0.455),
+        Color(red: 0.184, green: 0.490, blue: 0.882),
+        Color(red: 0.788, green: 0.282, blue: 0.431),
+        Color(red: 0.431, green: 0.337, blue: 0.812),
+        Color(red: 0.827, green: 0.447, blue: 0.118),
+        Color(red: 0.059, green: 0.557, blue: 0.588)
+    ]
+
+    /// A stable index into ``palette``. `hashValue` changes between launches, so this sums the scalars.
+    static func paletteIndex(for login: String) -> Int {
+        let sum = login.lowercased().unicodeScalars.reduce(0) { $0 &+ Int($1.value) }
+        return sum % palette.count
     }
 }

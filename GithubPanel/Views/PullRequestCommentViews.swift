@@ -6,8 +6,9 @@ struct PullRequestCommentView: View {
     let comment: PullRequestComment
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                AvatarView(login: comment.authorLogin)
                 Text(comment.authorLogin)
                     .font(.callout.weight(.semibold))
                 Text("commented \(comment.createdAt.formatted(.relative(presentation: .named)))")
@@ -34,8 +35,16 @@ struct PullRequestCommentView: View {
 
 /// A text box for writing a comment. Keeps the draft and shows GitHub's error when posting fails.
 struct CommentComposer: View {
+    enum Style {
+        /// A bordered box with its buttons underneath, for replies and comments on diff lines.
+        case inline
+        /// A one-line glass bar with the button beside the text, floating over the conversation.
+        case floating
+    }
+
     let placeholder: String
     let submitTitle: String
+    var style: Style = .inline
     /// Shows a Cancel button and handles Escape. Nil for the always-visible composer on the Conversation tab.
     var onCancel: (() -> Void)?
     /// Takes focus each time this goes up.
@@ -49,6 +58,71 @@ struct CommentComposer: View {
     @FocusState private var isFocused: Bool
 
     var body: some View {
+        Group {
+            switch style {
+            case .inline: inlineBody
+            case .floating: floatingBody
+            }
+        }
+        .onAppear {
+            // An inline composer opens from a click on a line, so start typing right away.
+            if onCancel != nil { isFocused = true }
+        }
+        .onChange(of: focusRequest) { _ in
+            isFocused = true
+        }
+    }
+
+    private var floatingBody: some View {
+        let shape = RoundedRectangle(cornerRadius: 23, style: .continuous)
+        return VStack(alignment: .leading, spacing: 6) {
+            if let errorMessage {
+                errorText(errorMessage)
+                    .padding(.horizontal, 18)
+            }
+            HStack(alignment: .bottom, spacing: 10) {
+                ZStack(alignment: .topLeading) {
+                    TextEditor(text: $text)
+                        .font(.body)
+                        .scrollContentBackground(.hidden)
+                        .focused($isFocused)
+                        .frame(minHeight: 22, maxHeight: 160)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if text.isEmpty {
+                        Text(placeholder)
+                            .foregroundStyle(.tertiary)
+                            .padding(.leading, 5)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .padding(.vertical, 5)
+                if isPosting {
+                    ProgressView()
+                        .controlSize(.small)
+                        .padding(.bottom, 8)
+                }
+                submitButton
+                    .controlSize(.large)
+                    .capsuleButtonShape()
+            }
+            .padding(.leading, 14)
+            .padding(.trailing, 7)
+            .padding(.vertical, 7)
+            .glassSurface(.control, in: shape)
+            .overlay(shape.strokeBorder(Color.accentColor.opacity(isFocused ? 0.5 : 0), lineWidth: 1))
+            .animation(.easeOut(duration: 0.15), value: isFocused)
+        }
+    }
+
+    private func errorText(_ message: String) -> some View {
+        Text(message)
+            .font(.caption)
+            .foregroundStyle(.red)
+            .textSelection(.enabled)
+            .lineLimit(3)
+    }
+
+    private var inlineBody: some View {
         VStack(alignment: .leading, spacing: 8) {
             ZStack(alignment: .topLeading) {
                 TextEditor(text: $text)
@@ -67,21 +141,17 @@ struct CommentComposer: View {
             }
             .padding(6)
             .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(Color(nsColor: .textBackgroundColor))
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .stroke(isFocused ? Color.accentColor : Color.secondary.opacity(0.3), lineWidth: 1)
             )
 
             HStack(spacing: 8) {
                 if let errorMessage {
-                    Text(errorMessage)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                        .textSelection(.enabled)
-                        .lineLimit(3)
+                    errorText(errorMessage)
                 }
                 Spacer(minLength: 8)
                 if isPosting {
@@ -93,13 +163,6 @@ struct CommentComposer: View {
                 }
                 submitButton
             }
-        }
-        .onAppear {
-            // An inline composer opens from a click on a line, so start typing right away.
-            if onCancel != nil { isFocused = true }
-        }
-        .onChange(of: focusRequest) { _ in
-            isFocused = true
         }
     }
 
@@ -263,5 +326,17 @@ private struct ThreadBadge: View {
             .padding(.vertical, 2)
             .background(Capsule().fill(Color.secondary.opacity(0.15)))
             .foregroundStyle(.secondary)
+    }
+}
+
+private extension View {
+    /// A capsule button, like the Comment button on the floating comment bar. Needs macOS 14.
+    @ViewBuilder
+    func capsuleButtonShape() -> some View {
+        if #available(macOS 14.0, *) {
+            buttonBorderShape(.capsule)
+        } else {
+            self
+        }
     }
 }
