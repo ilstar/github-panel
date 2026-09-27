@@ -183,19 +183,10 @@ struct PullRequestDetailHeader: View {
             HStack(spacing: 8) {
                 PullRequestStateBadge(state: detail.state)
 
-                Text(summaryText)
+                summary
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                    .tint(Theme.branch)
-                    .lineLimit(2)
                     .padding(.leading, 2)
-                    .environment(\.openURL, OpenURLAction { url in
-                        guard let branch = BranchLink.branch(from: url) else { return .systemAction }
-                        Pasteboard.copy(branch)
-                        showCopiedBranch()
-                        return .handled
-                    })
-                    .help("Click a branch name to copy it")
 
                 if copiedBranchNotice {
                     Text("Copied")
@@ -230,19 +221,26 @@ struct PullRequestDetailHeader: View {
         }
     }
 
-    private var summaryText: AttributedString {
-        Self.summary(for: detail)
+    /// "octocat wants to merge 2 commits into [main] from [feature] · owner/repo", with each branch
+    /// as a tag that copies its name, like GitHub.
+    private var summary: some View {
+        HStack(spacing: 5) {
+            Text(Self.summaryLead(for: detail))
+                .lineLimit(1)
+                .layoutPriority(2)
+            BranchTag(name: detail.baseRef, onCopy: showCopiedBranch)
+            Text("from")
+                .fixedSize()
+            BranchTag(name: detail.headRef, onCopy: showCopiedBranch)
+                .layoutPriority(1)
+            Text("· \(detail.reference.repoFullName)")
+                .lineLimit(1)
+        }
     }
 
-    /// The line under the title, with each branch name as a link that copies it.
-    static func summary(for detail: PullRequestDetail) -> AttributedString {
+    static func summaryLead(for detail: PullRequestDetail) -> String {
         let commits = detail.commits == 1 ? "1 commit" : "\(detail.commits) commits"
-        var text = AttributedString("\(detail.authorLogin) wants to merge \(commits) into ")
-        text += BranchLink.text(detail.baseRef)
-        text += AttributedString(" from ")
-        text += BranchLink.text(detail.headRef)
-        text += AttributedString(" · \(detail.reference.repoFullName)")
-        return text
+        return "\(detail.authorLogin) wants to merge \(commits) into"
     }
 
     private func showCopiedBranch() {
@@ -253,30 +251,33 @@ struct PullRequestDetailHeader: View {
     }
 }
 
-/// Branch names in the header are links with this scheme, so clicking one copies it instead of opening a page.
-enum BranchLink {
-    static let scheme = "githubpanel-copy-branch"
+/// A branch name in a soft blue tag, like GitHub's. Clicking it copies the name.
+struct BranchTag: View {
+    let name: String
+    let onCopy: () -> Void
+    @State private var isHovering = false
 
-    static func url(for branch: String) -> URL? {
-        var components = URLComponents()
-        components.scheme = scheme
-        components.host = "branch"
-        components.queryItems = [URLQueryItem(name: "name", value: branch)]
-        return components.url
-    }
-
-    static func branch(from url: URL) -> String? {
-        guard url.scheme == scheme,
-              let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-        else { return nil }
-        return components.queryItems?.first { $0.name == "name" }?.value
-    }
-
-    static func text(_ branch: String) -> AttributedString {
-        var text = AttributedString(branch)
-        text.link = url(for: branch)
-        text.font = .callout.monospaced()
-        return text
+    var body: some View {
+        Button {
+            Pasteboard.copy(name)
+            onCopy()
+        } label: {
+            Text(name)
+                .font(.system(.callout, design: .monospaced))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .foregroundStyle(Theme.branch)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 1.5)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(isHovering ? Theme.branchFillHover : Theme.branchFill)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .help("Copy branch name")
     }
 }
 

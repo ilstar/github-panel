@@ -33,7 +33,7 @@ enum TitleBarDoubleClickAction: Equatable {
 }
 
 /// Lets the hidden title bar strip behave like a real one: drag to move and double-click to zoom.
-/// Sits behind the window's content, so buttons and text at the top keep their own clicks.
+/// Covers the whole window but only takes clicks in the title bar strip, letting everything else through.
 struct TitleBarDoubleClickArea: NSViewRepresentable {
     func makeNSView(context: Context) -> TitleBarDoubleClickView {
         TitleBarDoubleClickView()

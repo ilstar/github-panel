@@ -38,6 +38,9 @@ struct ContentView: View {
         }
         .frame(minWidth: ListPaneLayout.minWindowWidth, minHeight: 500)
         .background(paneBackgrounds)
+        // On top, because the panes' backgrounds also run up under the title bar and would take its clicks.
+        // It only answers clicks in the title bar strip, where there are no controls.
+        .overlay(TitleBarDoubleClickArea().ignoresSafeArea())
         .background(KeyCommandMonitor(handler: handleKeyCommand))
         .focusedSceneValue(\.pullRequestList, listActions)
         .onAppear {
@@ -68,7 +71,6 @@ struct ContentView: View {
                 Color(nsColor: .textBackgroundColor)
             }
         }
-        .overlay(TitleBarDoubleClickArea())
         .ignoresSafeArea()
     }
 

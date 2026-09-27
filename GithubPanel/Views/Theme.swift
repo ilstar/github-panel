@@ -21,9 +21,13 @@ enum Theme {
                               dark: NSColor(red: 0.70, green: 0.55, blue: 1.00, alpha: 1))
     static let amber = Color(light: NSColor(red: 0.80, green: 0.50, blue: 0.05, alpha: 1),
                              dark: NSColor(red: 1.00, green: 0.72, blue: 0.30, alpha: 1))
-    /// Branch names, which can be clicked to copy them.
-    static let branch = Color(light: NSColor(red: 0.04, green: 0.41, blue: 0.85, alpha: 1),
-                              dark: NSColor(red: 0.35, green: 0.65, blue: 1.00, alpha: 1))
+    /// Branch name tags, in GitHub's blue on a pale blue fill.
+    static let branch = Color(light: NSColor(red: 0.035, green: 0.412, blue: 0.855, alpha: 1),
+                              dark: NSColor(red: 0.267, green: 0.576, blue: 0.973, alpha: 1))
+    static let branchFill = Color(light: NSColor(red: 0.867, green: 0.957, blue: 1.0, alpha: 1),
+                                  dark: NSColor(red: 0.220, green: 0.545, blue: 0.992, alpha: 0.15))
+    static let branchFillHover = Color(light: NSColor(red: 0.776, green: 0.914, blue: 1.0, alpha: 1),
+                                       dark: NSColor(red: 0.220, green: 0.545, blue: 0.992, alpha: 0.25))
 
     static let rowCornerRadius: CGFloat = 8
 }
