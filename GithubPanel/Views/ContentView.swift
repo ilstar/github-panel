@@ -28,7 +28,7 @@ struct ContentView: View {
         // A plain HStack instead of HSplitView: HSplitView snaps back to its ideal
         // width whenever the detail pane is replaced for a new selection.
         GeometryReader { proxy in
-            // Both panes run up into the title bar strip, which holds the refresh button and the pull request's toolbar.
+            // Both panes run up into the title bar strip, which holds the tab switcher and the pull request's toolbar.
             let titleBarHeight = max(proxy.safeAreaInsets.top, Self.minimumTitleBarHeight)
             HStack(spacing: 0) {
                 listPane(titleBarHeight: titleBarHeight)
@@ -103,14 +103,19 @@ struct ContentView: View {
 
     /// The title bar strip's height when the window reports none, such as in full screen.
     static let minimumTitleBarHeight: CGFloat = 44
+    /// Room kept for the window buttons at the left of the title bar strip, measured from the list pane's
+    /// content edge, so the tab switcher starts just after them.
+    static let windowButtonsWidth: CGFloat = 76
+    /// The list pane's leading padding: the sidebar's inset plus the 6 points that keep rows inside its corners.
+    static let listLeadingPadding: CGFloat = Theme.sidebarInset + 6
 
     private func listPane(titleBarHeight: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            // The window buttons sit on the left of this strip.
-            HStack {
-                Spacer(minLength: 0)
-                refreshPill
-                    .fixedSize()
+            // The window buttons sit on the left of this strip, and the tab switcher takes the rest of it.
+            HStack(spacing: 0) {
+                Color.clear
+                    .frame(width: Self.windowButtonsWidth)
+                PullRequestTabPicker(selection: $monitor.selectedTab)
             }
             .frame(height: titleBarHeight - Theme.sidebarInset)
 
@@ -120,9 +125,15 @@ struct ContentView: View {
             }
 
             prSection
+
+            // Keeps the refresh button at the bottom even when the list above is short, such as the token form.
+            Spacer(minLength: 0)
+
+            refreshPill
+                .fixedSize()
         }
         // Rows sit 6 points inside the sidebar panel, so their corners follow the panel's.
-        .padding(.leading, Theme.sidebarInset + 6)
+        .padding(.leading, Self.listLeadingPadding)
         .padding(.trailing, Theme.sidebarInset + 5)
         .padding(.top, Theme.sidebarInset)
         .padding(.bottom, Theme.sidebarInset + 4)
@@ -206,11 +217,9 @@ struct ContentView: View {
 
     private var prSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            PullRequestTabPicker(selection: $monitor.selectedTab)
-
             listTitle
                 .padding(.horizontal, 10)
-                .padding(.top, 12)
+                .padding(.top, 6)
                 .padding(.bottom, 2)
 
             if !monitor.hasToken {

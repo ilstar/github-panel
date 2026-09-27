@@ -28,8 +28,7 @@ struct PullRequestDetailView: View {
                                          segments: tabSegments(fileCount: content.files.count),
                                          htmlURL: content.detail.htmlURL,
                                          isLoading: viewModel.isLoading,
-                                         onRefresh: reload,
-                                         onEditTitle: content.detail.canEdit ? { isEditingTitle = true } : nil)
+                                         onRefresh: reload)
                     .padding(.leading, 28)
                     .padding(.trailing, 20)
                     .frame(height: max(titleBarHeight ?? 0, 54))
@@ -133,15 +132,13 @@ struct PullRequestDetailView: View {
 }
 
 /// The row over the pull request: the Conversation / Files changed switcher on the left and the
-/// Reload, Edit and Open on GitHub buttons in glass capsules on the right.
+/// Reload and Open on GitHub buttons in glass capsules on the right. Edit title sits by the title instead.
 struct PullRequestDetailToolbar: View {
     @Binding var selectedTab: PullRequestDetailTab
     let segments: [GlassSegmentedControl<PullRequestDetailTab>.Segment]
     let htmlURL: URL
     let isLoading: Bool
     let onRefresh: () -> Void
-    /// Nil when the viewer cannot edit the pull request.
-    let onEditTitle: (() -> Void)?
 
     var body: some View {
         HStack(spacing: 10) {
@@ -150,23 +147,12 @@ struct PullRequestDetailToolbar: View {
 
             Spacer(minLength: 12)
 
-            HStack(spacing: 0) {
-                Button(action: onRefresh) {
-                    toolbarIcon("arrow.clockwise")
-                }
-                .disabled(isLoading)
-                .help("Reload")
-
-                if let onEditTitle {
-                    Rectangle()
-                        .fill(Theme.hairline)
-                        .frame(width: 1, height: 16)
-                    Button(action: onEditTitle) {
-                        toolbarIcon("pencil")
-                    }
-                    .help("Edit title")
-                }
+            Button(action: onRefresh) {
+                toolbarIcon("arrow.clockwise")
             }
+            .disabled(isLoading)
+            .help("Reload")
+            .accessibilityLabel("Reload")
             .buttonStyle(.plain)
             .padding(.horizontal, 3)
             .frame(height: 34)
@@ -222,6 +208,9 @@ struct PullRequestDetailHeader: View {
                     Text("#\(String(detail.reference.number))")
                         .font(.system(size: 26, weight: .regular))
                         .foregroundStyle(.tertiary)
+                    if Self.showsEditTitleButton(for: detail) {
+                        editTitleButton
+                    }
                     Spacer(minLength: 0)
                 }
             }
@@ -250,6 +239,27 @@ struct PullRequestDetailHeader: View {
             }
             .font(.callout.monospacedDigit())
         }
+    }
+
+    /// Only the author can rename a pull request, so only they get the pencil.
+    static func showsEditTitleButton(for detail: PullRequestDetail) -> Bool {
+        detail.canEdit
+    }
+
+    /// A quiet pencil right after the title, so it is clear the button edits the title.
+    private var editTitleButton: some View {
+        Button {
+            isEditingTitle = true
+        } label: {
+            Image(systemName: "pencil")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.tertiary)
+                .frame(width: 28, height: 28)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help("Edit title")
+        .accessibilityLabel("Edit title")
     }
 
     /// An editable title opens its editor on double-click, so it gives up text selection.
