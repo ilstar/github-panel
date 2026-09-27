@@ -439,7 +439,6 @@ struct ContentView: View {
                         }
                         .scrollIndicators(.hidden)
                         .onAppear {
-                            monitor.loadHistoryIfNeeded()
                             if selectedHistoryID == nil {
                                 selectedHistoryID = monitor.historyRows.first?.id
                             }

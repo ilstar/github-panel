@@ -10,6 +10,20 @@ final class PRMonitorPollingTests: XCTestCase {
         await monitor.handleTimerTick()
 
         XCTAssertEqual(api.fetchOpenPRTokens.count, 1)
+        XCTAssertEqual(api.fetchReviewRequestsTokens.count, 1)
+        XCTAssertTrue(api.fetchClosedPRCalls.isEmpty)
+    }
+
+    func testTimerTickSkipsReviewRequestsWhileBackingOff() async {
+        let api = FakeGitHubAPI()
+        let dateProvider = FakeDateProvider(now: Date(timeIntervalSince1970: 0))
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"), dateProvider: dateProvider)
+
+        await monitor.refreshNow()
+        dateProvider.now = Date(timeIntervalSince1970: 29)
+        await monitor.handleTimerTick()
+
+        XCTAssertEqual(api.fetchReviewRequestsTokens.count, 1)
     }
 
     func testTimerTickSkipsFetchRightAfterRecentRefresh() async {
