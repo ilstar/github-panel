@@ -134,6 +134,7 @@ struct PullRequestDetailHeader: View {
     let onRefresh: () -> Void
     /// Saves a new title. Throws to keep the draft and show the error.
     let onSaveTitle: (String) async throws -> Void
+    @State private var copiedBranchNotice = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -182,11 +183,17 @@ struct PullRequestDetailHeader: View {
             HStack(spacing: 8) {
                 PullRequestStateBadge(state: detail.state)
 
-                Text(summaryText)
+                summary
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                    .lineLimit(2)
                     .padding(.leading, 2)
+
+                if copiedBranchNotice {
+                    Text("Copied")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .transition(.opacity)
+                }
 
                 Spacer(minLength: 12)
 
@@ -214,9 +221,63 @@ struct PullRequestDetailHeader: View {
         }
     }
 
-    private var summaryText: String {
+    /// "octocat wants to merge 2 commits into [main] from [feature] · owner/repo", with each branch
+    /// as a tag that copies its name, like GitHub.
+    private var summary: some View {
+        HStack(spacing: 5) {
+            Text(Self.summaryLead(for: detail))
+                .lineLimit(1)
+                .layoutPriority(2)
+            BranchTag(name: detail.baseRef, onCopy: showCopiedBranch)
+            Text("from")
+                .fixedSize()
+            BranchTag(name: detail.headRef, onCopy: showCopiedBranch)
+                .layoutPriority(1)
+            Text("· \(detail.reference.repoFullName)")
+                .lineLimit(1)
+        }
+    }
+
+    static func summaryLead(for detail: PullRequestDetail) -> String {
         let commits = detail.commits == 1 ? "1 commit" : "\(detail.commits) commits"
-        return "\(detail.authorLogin) wants to merge \(commits) into \(detail.baseRef) from \(detail.headRef) · \(detail.reference.repoFullName)"
+        return "\(detail.authorLogin) wants to merge \(commits) into"
+    }
+
+    private func showCopiedBranch() {
+        withAnimation(.easeOut(duration: 0.15)) { copiedBranchNotice = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            withAnimation(.easeOut(duration: 0.3)) { copiedBranchNotice = false }
+        }
+    }
+}
+
+/// A branch name in a soft blue tag, like GitHub's. Clicking it copies the name.
+struct BranchTag: View {
+    let name: String
+    let onCopy: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Button {
+            Pasteboard.copy(name)
+            onCopy()
+        } label: {
+            Text(name)
+                .font(.system(.callout, design: .monospaced))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .foregroundStyle(Theme.branch)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 1.5)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(isHovering ? Theme.branchFillHover : Theme.branchFill)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .help("Copy branch name")
     }
 }
 
