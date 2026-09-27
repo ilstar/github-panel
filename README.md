@@ -2,7 +2,7 @@
 
 Mini macOS app to monitor your active GitHub pull request checks.
 
-<img width="853" height="818" alt="Screenshot 2026-04-19 at 4 48 56 PM" src="https://github.com/user-attachments/assets/e35838c2-0bd1-4f66-bb9b-d9c6be2cd482" />
+<img width="1524" height="1022" alt="Screenshot 2026-09-26 at 5 09 21 PM" src="https://github.com/user-attachments/assets/023a1d6e-3cae-4fba-8d58-f69694d3126c" />
 
 
 ## How it works
