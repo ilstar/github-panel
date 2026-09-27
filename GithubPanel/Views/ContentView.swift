@@ -67,13 +67,13 @@ struct ContentView: View {
         }
     }
 
-    /// The window's backdrop, the floating glass sidebar and the pull request pane, drawn behind the
+    /// The window's background, the floating sidebar and the pull request pane, drawn behind the
     /// whole window so they run up under the hidden title bar.
     private var paneBackgrounds: some View {
         GeometryReader { proxy in
             let listWidth = ListPaneLayout.clampedWidth(listPaneWidth, totalWidth: proxy.size.width)
             ZStack(alignment: .topLeading) {
-                WindowBackdrop()
+                Theme.windowBackground
                 Theme.contentBackground
                     .padding(.leading, listWidth + ListPaneLayout.dividerWidth)
                 sidebarPanel
@@ -84,7 +84,7 @@ struct ContentView: View {
         .ignoresSafeArea()
     }
 
-    /// The list's floating panel. It sits in the window's background, so the rows draw over its glass.
+    /// The list's floating panel. It sits in the window's background, so the rows draw over its gradient.
     private var sidebarPanel: some View {
         let shape = RoundedRectangle(cornerRadius: Theme.sidebarCornerRadius, style: .continuous)
         return ZStack {

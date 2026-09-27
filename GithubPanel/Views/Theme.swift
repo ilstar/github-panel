@@ -2,15 +2,16 @@ import SwiftUI
 import AppKit
 
 /// Shared colors and small building blocks for a glassy, current-macOS look: the list floats in a
-/// translucent sidebar over the desktop, controls are capsules, the selected row is a raised chip,
-/// and color appears only where it carries meaning.
+/// sidebar with its own soft gradient, controls are capsules, the selected row is a raised chip,
+/// and color appears only where it carries meaning. Nothing shows the desktop through, so the window
+/// looks the same whatever is behind it.
 enum Theme {
-    /// The floating sidebar panel's tint over the window backdrop. Used where Liquid Glass is unavailable.
-    static let sidebarFill = Color(light: NSColor(white: 1, alpha: 0.28),
-                                   dark: NSColor(white: 1, alpha: 0.06))
-    /// The pull request pane, mostly opaque so text and diffs read cleanly over the backdrop.
-    static let contentBackground = Color(light: NSColor(white: 1, alpha: 0.88),
-                                         dark: NSColor(red: 0.086, green: 0.086, blue: 0.106, alpha: 0.86))
+    /// The window behind the floating sidebar, around its edges.
+    static let windowBackground = Color(light: NSColor(red: 0.925, green: 0.933, blue: 0.953, alpha: 1),
+                                        dark: NSColor(red: 0.106, green: 0.106, blue: 0.125, alpha: 1))
+    /// The pull request pane.
+    static let contentBackground = Color(light: NSColor(red: 0.992, green: 0.992, blue: 0.996, alpha: 1),
+                                         dark: NSColor(red: 0.118, green: 0.118, blue: 0.137, alpha: 1))
     static let rowHover = Color(light: NSColor(white: 1, alpha: 0.4),
                                 dark: NSColor(white: 1, alpha: 0.06))
     /// The selected row: a raised white chip rather than an accent tint.
@@ -200,28 +201,43 @@ struct RowIcon: View {
 
 // MARK: - Glass
 
-/// The window's backdrop: the desktop, blurred and tinted, showing through behind the panes.
-struct WindowBackdrop: NSViewRepresentable {
-    /// Of the behind-window materials, this one tints the least, so the desktop's colors show through the
-    /// sidebar. The window and sidebar materials look almost white over a colorful desktop.
-    static let material = NSVisualEffectView.Material.fullScreenUI
+/// The sidebar's own background: two colors blending from the top left to the bottom right, under a
+/// wash and a soft sheen along the top. It is opaque, so it looks the same whatever is behind the window.
+struct SidebarGradient: View {
+    /// The Graphite palette: a light gray into a cooler, darker gray.
+    static let startColor = Color(light: NSColor(red: 0.827, green: 0.843, blue: 0.875, alpha: 1),
+                                  dark: NSColor(red: 0.200, green: 0.216, blue: 0.247, alpha: 1))
+    static let endColor = Color(light: NSColor(red: 0.682, green: 0.714, blue: 0.769, alpha: 1),
+                                dark: NSColor(red: 0.133, green: 0.145, blue: 0.169, alpha: 1))
+    /// How much of the gradient's color comes through the wash, from 0 to 100.
+    static let strength: Double = 10
+    /// The wash that softens the gradient: white in light mode, a dark gray in dark mode.
+    static let wash = Color(light: NSColor(white: 1, alpha: washOpacity(strength: strength, isDark: false)),
+                            dark: NSColor(red: 0.149, green: 0.149, blue: 0.180,
+                                          alpha: washOpacity(strength: strength, isDark: true)))
+    static let sheen = Color(light: NSColor(white: 1, alpha: 0.45),
+                             dark: NSColor(white: 1, alpha: 0.06))
+    /// How far down the sheen fades out, as a fraction of the height.
+    static let sheenDepth: CGFloat = 0.26
 
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        Self.makeView()
+    /// A weaker gradient gets a more opaque wash.
+    static func washOpacity(strength: Double, isDark: Bool) -> CGFloat {
+        let weakness = (100 - min(max(strength, 0), 100)) / 100
+        return isDark ? 0.20 + weakness * 0.55 : 0.18 + weakness * 0.6
     }
 
-    static func makeView() -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        view.material = WindowBackdrop.material
-        view.blendingMode = .behindWindow
-        view.state = .followsWindowActiveState
-        return view
+    var body: some View {
+        ZStack {
+            LinearGradient(colors: [Self.startColor, Self.endColor], startPoint: .topLeading, endPoint: .bottomTrailing)
+            Self.wash
+            LinearGradient(stops: [.init(color: Self.sheen, location: 0),
+                                   .init(color: Self.sheen.opacity(0), location: Self.sheenDepth)],
+                           startPoint: .top, endPoint: .bottom)
+        }
     }
-
-    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
 }
 
-/// Where a glass surface sits, which decides how it is drawn before macOS 26.
+/// Where a glass surface sits, which decides how it is drawn.
 enum GlassRole {
     /// A large panel such as the sidebar.
     case panel
@@ -230,21 +246,21 @@ enum GlassRole {
 }
 
 extension View {
-    /// Liquid Glass on macOS 26 and later. Before that, a translucent fill with a bright top edge and
-    /// a hairline, which reads the same way over the window backdrop.
+    /// A panel is the sidebar's gradient with a bright top edge and a hairline. A control is Liquid Glass
+    /// on macOS 26 and later, and before that a soft fill with the same edges.
     @ViewBuilder
     func glassSurface<S: InsettableShape>(_ role: GlassRole, in shape: S) -> some View {
-        if #available(macOS 26.0, *) {
-            // Clear glass for the sidebar so the desktop shows through it; regular glass for controls,
-            // which need to stand out from what is behind them.
-            glassEffect(role == .control ? .regular.interactive() : .clear, in: shape)
-        } else {
-            background(
-                shape
-                    .fill(role == .panel ? Theme.sidebarFill : Theme.controlFill)
-                    .background(.ultraThinMaterial, in: shape)
-            )
-            .glassEdges(in: shape, shadowRadius: role == .panel ? 18 : 3)
+        switch role {
+        case .panel:
+            background(SidebarGradient().clipShape(shape))
+                .glassEdges(in: shape, shadowRadius: 18)
+        case .control:
+            if #available(macOS 26.0, *) {
+                glassEffect(.regular.interactive(), in: shape)
+            } else {
+                background(shape.fill(Theme.controlFill).background(.ultraThinMaterial, in: shape))
+                    .glassEdges(in: shape, shadowRadius: 3)
+            }
         }
     }
 
