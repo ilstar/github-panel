@@ -1,42 +1,31 @@
 # GithubPanel
 
-Mini macOS app to monitor your active GitHub pull request checks.
+A native macOS app for managing your GitHub pull requests: follow checks, review
+code, comment, and merge without opening a browser.
 
 <img width="1524" height="1022" alt="Screenshot 2026-09-26 at 5 09 21 PM" src="https://github.com/user-attachments/assets/023a1d6e-3cae-4fba-8d58-f69694d3126c" />
 
 
-## How it works
-- Stores a GitHub token in Keychain.
-- Finds your most recently updated open PR (authored by you).
-- Polls check status every 60 seconds.
-- Sends a macOS notification when checks move from pending to success or failure.
-- Clicking the notification opens the PR in the browser.
-- Selecting a PR in the list shows it on the right: its description on the
-  *Conversation* tab and the code diff on the *Files changed* tab. ⌘-click or
-  Return opens the PR on GitHub; right-click to open it in its own window.
-- Comments: the *Conversation* tab lists the PR's comments and has a box to add
-  one. On *Files changed*, review threads show under the lines they comment on
-  (resolved ones start folded; outdated ones are listed after the file's diff).
-  Hover over a diff line and click **+** to start a new thread, or click
-  *Reply…* in a thread. ⌘Return posts; Escape cancels. Comments post right away,
-  not as part of a pending review.
-
-## Keyboard shortcuts
-Every shortcut is in the menu bar, and **Help → Keyboard Shortcuts** (⌘/ or ?) lists
-them all in one window. Single keys work when you are not typing in a text box;
-click a pull request in the list to leave one.
-
-- **List:** ↓/↑ or J/K move the selection on any tab, Space/⇧Space scroll the pull
-  request on the right, Return opens it on GitHub, ⌘1/⌘2/⌘3 switch tabs, ⌘R
-  refreshes the list and the selected pull request.
-- **Selected pull request:** ⌘O open on GitHub, ⌥⌘O open in a new window, ⇧⌘C copy
-  URL, ⌥⌘C copy branch name, ⇧⌘M the row's merge button (Merge, Mark ready,
-  auto-merge…), ⌥⌘E edit title, ⌥⌘N write a comment, ⇧⌘[ / ⇧⌘] switch between
-  Conversation and Files changed.
-- **Files changed:** ⌘F filter files, ⌃⌘S file tree, ⌥⌘↓/⌥⌘↑ next/previous file,
-  V mark the current file viewed and move on, ⌥⌘← / ⌥⌘→ collapse/expand all,
-  ⌃⌘W hide whitespace, ⌥⌘U unified/split.
-- **Anywhere:** ⌃⌥⌘G shows or hides the app. Change it in Settings.
+## Features
+- **Your pull requests in one place:** *My PRs* lists the open pull requests you
+  wrote, *To Review* groups the ones waiting on your review by who asked, and
+  *History* shows what you recently merged or closed.
+- **Check status and notifications:** checks refresh every 60 seconds by default
+  (you can change this in Settings). A macOS notification appears when checks
+  move from pending to success or failure. Click it to open the pull request.
+- **Merge from the list:** each row has the next action it needs, such as Merge,
+  Mark ready, enable or disable auto-merge, or add to the merge queue.
+- **Pull request details:** select a pull request to see it on the right. The
+  *Conversation* tab shows its Markdown description and comments. The *Files
+  changed* tab shows the diff, with a file tree, a filter, viewed-file tracking,
+  and unified or split views. If you wrote the pull request, you can edit its
+  title and description in place.
+- **Comments:** add general comments, start a review thread on any diff line,
+  or reply in a thread. Comments post right away, not as part of a pending
+  review.
+- **Keyboard shortcuts:** most actions have one. **Help → Keyboard Shortcuts**
+  (⌘/) lists them all, and a global shortcut shows or hides the app.
+- Your GitHub token is stored in the Keychain.
 
 ## GitHub token scopes
 - `repo` for private repositories.
