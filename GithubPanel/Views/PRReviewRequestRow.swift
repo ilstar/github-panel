@@ -11,11 +11,11 @@ struct PRReviewRequestRow: View {
     var body: some View {
         HStack(spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                RowIcon(systemName: "eye.circle.fill", color: Theme.amber)
+                reviewerIcon
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(pr.title)
-                        .font(.system(size: 13.5, weight: .medium))
+                        .font(.system(size: 13.5, weight: .semibold))
                         .lineLimit(1)
                         .help(pr.title)
 
@@ -37,6 +37,17 @@ struct PRReviewRequestRow: View {
         .listRowBackground(isSelected: isSelected, isHovering: isHovering)
         .onHover { hovering in
             isHovering = hovering
+        }
+    }
+
+    /// The author's avatar, like the design's review rows. The eye stands in when GitHub gives no author.
+    @ViewBuilder
+    private var reviewerIcon: some View {
+        if let author = pr.authorLogin {
+            AvatarView(login: author, size: 21)
+                .frame(width: 22)
+        } else {
+            RowIcon(systemName: "eye.circle.fill", color: Theme.amber)
         }
     }
 

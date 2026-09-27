@@ -22,15 +22,14 @@ enum ListPaneLayout {
     }
 }
 
-/// A thin divider that resizes the list pane when dragged.
+/// The gap between the sidebar and the pull request pane. It draws nothing, and resizes the list when dragged.
 struct ListPaneDivider: View {
     @Binding var width: Double
     let totalWidth: CGFloat
     @State private var dragStartWidth: Double?
 
     var body: some View {
-        Rectangle()
-            .fill(Color(nsColor: .separatorColor))
+        Color.clear
             .frame(width: ListPaneLayout.dividerWidth)
             .frame(maxHeight: .infinity)
             .overlay(

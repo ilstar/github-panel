@@ -31,7 +31,7 @@ struct PRRow: View {
     private var summary: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(pr.title)
-                .font(.system(size: 13.5, weight: .medium))
+                .font(.system(size: 13.5, weight: .semibold))
                 .lineLimit(1)
                 .help(pr.title)
 
@@ -67,12 +67,17 @@ struct PRRow: View {
                     .font(.caption.weight(.semibold))
                     .lineLimit(1)
             }
-            .padding(.horizontal, 11)
-            .frame(height: 24)
+            .padding(.leading, 10)
+            .padding(.trailing, 12)
+            .frame(height: 26)
             .foregroundStyle(mergeForeground)
             .background(
                 Capsule()
                     .fill(mergeFill)
+            )
+            .overlay(
+                Capsule()
+                    .strokeBorder(mergeRing, lineWidth: 0.5)
             )
             .contentShape(Capsule())
         }
@@ -100,17 +105,32 @@ struct PRRow: View {
     }
 
     /// Only the buttons that do something get a fill. The others read as quiet status text.
+    /// All of them are flat: no sheen or shadow, so the green buttons match the tinted ones.
     private var mergeFill: Color {
         switch mergeButtonState {
         case .merge, .enqueue:
-            return isMergeButtonHovering ? Theme.green.opacity(0.85) : Theme.green
+            return isMergeButtonHovering ? Theme.mergeFill.opacity(0.88) : Theme.mergeFill
         case .markReady, .enableAutoMerge, .disableAutoMerge:
-            return Color.accentColor.opacity(isMergeButtonHovering ? 0.2 : 0.12)
+            return Color.accentColor.opacity(isMergeButtonHovering ? 0.22 : 0.15)
         case .queued:
-            return Theme.green.opacity(isMergeButtonHovering ? 0.18 : 0.1)
+            return Theme.green.opacity(isMergeButtonHovering ? 0.2 : 0.14)
         case .checksFailed:
-            return Theme.red.opacity(0.1)
+            return Theme.red.opacity(0.12)
         case .blocked, .statusUnavailable, .waitingForChecks, .working:
+            return Color.clear
+        }
+    }
+
+    /// A hairline around the tinted buttons that keeps them crisp on the glass.
+    private var mergeRing: Color {
+        switch mergeButtonState {
+        case .markReady, .enableAutoMerge, .disableAutoMerge:
+            return Color.accentColor.opacity(0.3)
+        case .queued:
+            return Theme.green.opacity(0.3)
+        case .checksFailed:
+            return Theme.red.opacity(0.28)
+        case .merge, .enqueue, .blocked, .statusUnavailable, .waitingForChecks, .working:
             return Color.clear
         }
     }

@@ -37,3 +37,6 @@ xcuserdata/
 
 # Local tool permissions
 .claude/settings.local.json
+
+# Coverage data written when the app binary runs directly
+*.profraw

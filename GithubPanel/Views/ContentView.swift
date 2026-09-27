@@ -28,19 +28,26 @@ struct ContentView: View {
         // A plain HStack instead of HSplitView: HSplitView snaps back to its ideal
         // width whenever the detail pane is replaced for a new selection.
         GeometryReader { proxy in
+            // Both panes run up into the title bar strip, which holds the refresh button and the pull request's toolbar.
+            let titleBarHeight = max(proxy.safeAreaInsets.top, Self.minimumTitleBarHeight)
             HStack(spacing: 0) {
-                listPane
+                listPane(titleBarHeight: titleBarHeight)
                     .frame(width: ListPaneLayout.clampedWidth(listPaneWidth, totalWidth: proxy.size.width))
                 ListPaneDivider(width: $listPaneWidth, totalWidth: proxy.size.width)
                 detailPane
+                    .environment(\.titleBarHeight, titleBarHeight)
                     .frame(minWidth: ListPaneLayout.minDetailWidth, maxWidth: .infinity, maxHeight: .infinity)
             }
+            .ignoresSafeArea(.container, edges: .top)
         }
         .frame(minWidth: ListPaneLayout.minWindowWidth, minHeight: 500)
-        .background(paneBackgrounds)
-        // On top, because the panes' backgrounds also run up under the title bar and would take its clicks.
-        // It only answers clicks in the title bar strip, where there are no controls.
-        .overlay(TitleBarDoubleClickArea().ignoresSafeArea())
+        // The title bar area sits over the panes' backgrounds, so it takes clicks there, and under the controls
+        // in the strip, so they take theirs. It only answers clicks in the title bar strip.
+        .background(ZStack {
+            paneBackgrounds
+            TitleBarDoubleClickArea().ignoresSafeArea()
+        })
+        .background(WindowToolbarStrip())
         .background(KeyCommandMonitor(handler: handleKeyCommand))
         .focusedSceneValue(\.pullRequestList, listActions)
         .onAppear {
@@ -60,36 +67,65 @@ struct ContentView: View {
         }
     }
 
-    /// Both panes' backgrounds, drawn behind the whole window so they run up under the hidden title bar.
+    /// The window's backdrop, the floating glass sidebar and the pull request pane, drawn behind the
+    /// whole window so they run up under the hidden title bar.
     private var paneBackgrounds: some View {
         GeometryReader { proxy in
-            HStack(spacing: 0) {
-                Theme.listBackground
-                    .frame(width: ListPaneLayout.clampedWidth(listPaneWidth, totalWidth: proxy.size.width))
-                Color(nsColor: .separatorColor)
-                    .frame(width: ListPaneLayout.dividerWidth)
-                Color(nsColor: .textBackgroundColor)
+            let listWidth = ListPaneLayout.clampedWidth(listPaneWidth, totalWidth: proxy.size.width)
+            ZStack(alignment: .topLeading) {
+                WindowBackdrop()
+                Theme.contentBackground
+                    .padding(.leading, listWidth + ListPaneLayout.dividerWidth)
+                sidebarPanel
+                    .frame(width: listWidth - Theme.sidebarInset * 2 + ListPaneLayout.dividerWidth)
+                    .padding(Theme.sidebarInset)
             }
         }
         .ignoresSafeArea()
     }
 
-    private var listPane: some View {
-        ZStack {
-            background
-
-            VStack(alignment: .leading, spacing: 16) {
-                if monitor.isUsingMockData {
-                    mockDataBanner
-                        .padding(.horizontal, 10)
-                }
-
-                prSection
+    /// The list's floating panel. It sits in the window's background, so the rows draw over its glass.
+    private var sidebarPanel: some View {
+        let shape = RoundedRectangle(cornerRadius: Theme.sidebarCornerRadius, style: .continuous)
+        return ZStack {
+            if showsEmptyPullRequestBackground {
+                Image(EmptyPullRequestsBackground.imageName)
+                    .resizable()
+                    .scaledToFill()
+                    .accessibilityHidden(true)
+                    .transition(.opacity)
             }
-            .padding(.horizontal, 14)
-            .padding(.top, 12)
-            .padding(.bottom, 12)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipShape(shape)
+        .glassSurface(.panel, in: shape)
+    }
+
+    /// The title bar strip's height when the window reports none, such as in full screen.
+    static let minimumTitleBarHeight: CGFloat = 44
+
+    private func listPane(titleBarHeight: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // The window buttons sit on the left of this strip.
+            HStack {
+                Spacer(minLength: 0)
+                refreshPill
+                    .fixedSize()
+            }
+            .frame(height: titleBarHeight - Theme.sidebarInset)
+
+            if monitor.isUsingMockData {
+                mockDataBanner
+                    .padding(.horizontal, 10)
+            }
+
+            prSection
+        }
+        // Rows sit 6 points inside the sidebar panel, so their corners follow the panel's.
+        .padding(.leading, Theme.sidebarInset + 6)
+        .padding(.trailing, Theme.sidebarInset + 5)
+        .padding(.top, Theme.sidebarInset)
+        .padding(.bottom, Theme.sidebarInset + 4)
     }
 
     @ViewBuilder
@@ -98,7 +134,6 @@ struct ContentView: View {
             PullRequestDetailView(viewModel: PullRequestDetailViewModel(reference: reference, monitor: monitor))
             .id(reference)
             .environment(\.pageScroller, pageScroller)
-            .background(Color(nsColor: .textBackgroundColor).ignoresSafeArea())
         } else {
             VStack(spacing: 10) {
                 Image(systemName: monitor.hasToken ? "arrow.triangle.pull" : "key")
@@ -109,7 +144,6 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(nsColor: .textBackgroundColor).ignoresSafeArea())
         }
     }
 
@@ -160,31 +194,24 @@ struct ContentView: View {
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(nsColor: .textBackgroundColor))
+            RoundedRectangle(cornerRadius: Theme.cardCornerRadius, style: .continuous)
+                .fill(Theme.cardFill)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: Theme.cardCornerRadius, style: .continuous)
                 .strokeBorder(Theme.hairline)
         )
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 4)
     }
 
     private var prSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .center) {
-                PullRequestTabPicker(selection: $monitor.selectedTab)
-
-                Spacer()
-                refreshPill
-                    .fixedSize()
-            }
-            .padding(.horizontal, 10)
+            PullRequestTabPicker(selection: $monitor.selectedTab)
 
             listTitle
                 .padding(.horizontal, 10)
-                .padding(.top, 14)
-                .padding(.bottom, 4)
+                .padding(.top, 12)
+                .padding(.bottom, 2)
 
             if !monitor.hasToken {
                 tokenCallout
@@ -203,19 +230,35 @@ struct ContentView: View {
 
     /// A large heading for the visible tab, like a list title in Things.
     private var listTitle: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Image(systemName: monitor.selectedTab.systemImage)
-                .font(.system(size: 22, weight: .semibold))
+        HStack(alignment: .center, spacing: 10) {
+            listTitleIcon
                 .foregroundStyle(monitor.selectedTab.tint)
-            Text(monitor.selectedTab.title)
-                .font(.system(size: 26, weight: .bold))
-            if let count = listCount, count > 0 {
-                Text(String(count))
-                    .font(.system(size: 20, weight: .medium))
-                    .monospacedDigit()
-                    .foregroundStyle(.tertiary)
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(monitor.selectedTab.title)
+                    .font(.system(size: 28, weight: .bold))
+                    .tracking(-0.4)
+                if let count = listCount, count > 0 {
+                    Text(String(count))
+                        .font(.system(size: 20, weight: .medium))
+                        .monospacedDigit()
+                        .foregroundStyle(.tertiary)
+                }
             }
             Spacer(minLength: 0)
+        }
+    }
+
+    /// GitHub's pull request mark for My PRs, drawn to match the design; SF Symbols for the other tabs.
+    @ViewBuilder
+    private var listTitleIcon: some View {
+        if monitor.selectedTab == .open {
+            PullRequestGlyph()
+                .stroke(style: StrokeStyle(lineWidth: 2.1, lineCap: .round, lineJoin: .round))
+                .frame(width: 24, height: 24)
+        } else {
+            Image(systemName: monitor.selectedTab.systemImage)
+                .font(.system(size: 21, weight: .semibold))
+                .frame(width: 24, height: 24)
         }
     }
 
@@ -364,24 +407,19 @@ struct ContentView: View {
     @ViewBuilder
     private func reviewRequestGroup(_ group: ReviewRequestGroup) -> some View {
         let rows = monitor.reviewRequests.rows(in: group)
-        // A section heading with a hairline under it, like a heading inside a Things list.
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(group.title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
-                Text(String(rows.count))
-                    .font(.caption.weight(.medium))
-                    .monospacedDigit()
-                    .foregroundStyle(.tertiary)
-            }
-            Rectangle()
-                .fill(Theme.hairline)
-                .frame(height: 1)
+        // A small accent heading over each group, like a sidebar section heading.
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(group.title)
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundStyle(Color.accentColor)
+            Text(String(rows.count))
+                .font(.caption.weight(.medium))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 10)
-        .padding(.top, group == ReviewRequestGroup.allCases.first ? 4 : 20)
-        .padding(.bottom, 4)
+        .padding(.horizontal, 12)
+        .padding(.top, group == ReviewRequestGroup.allCases.first ? 4 : 16)
+        .padding(.bottom, 2)
 
         if rows.isEmpty {
             Text(group.emptyText)
@@ -488,7 +526,7 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: Theme.rowCornerRadius, style: .continuous)
-                .fill(Theme.red.opacity(0.08))
+                .fill(Theme.red.opacity(0.1))
         )
     }
 
@@ -536,7 +574,8 @@ struct ContentView: View {
                 Image(systemName: "chevron.left")
                     .font(.caption.weight(.bold))
                     .frame(width: 30, height: 26)
-                    .contentShape(Rectangle())
+                    .controlChrome(in: Capsule())
+                    .contentShape(Capsule())
             }
             .buttonStyle(.plain)
             .disabled(!monitor.canLoadPreviousHistoryPage)
@@ -554,7 +593,8 @@ struct ContentView: View {
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.bold))
                     .frame(width: 30, height: 26)
-                    .contentShape(Rectangle())
+                    .controlChrome(in: Capsule())
+                    .contentShape(Capsule())
             }
             .buttonStyle(.plain)
             .disabled(!monitor.canLoadNextHistoryPage)
@@ -570,25 +610,6 @@ struct ContentView: View {
         Color.clear
             .frame(maxWidth: .infinity, minHeight: 220)
             .accessibilityHidden(true)
-    }
-
-    private var background: some View {
-        ZStack {
-            Theme.listBackground
-
-            if showsEmptyPullRequestBackground {
-                GeometryReader { proxy in
-                    Image(EmptyPullRequestsBackground.imageName)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: proxy.size.width, height: proxy.size.height)
-                        .clipped()
-                        .accessibilityHidden(true)
-                }
-                .transition(.opacity)
-            }
-        }
-        .ignoresSafeArea()
     }
 
     private var showsEmptyPullRequestBackground: Bool {
@@ -726,25 +747,23 @@ struct ContentView: View {
     }
 }
 
-/// Sized to its segments so its leading edge lines up with the pull request list;
-/// a wider fixed frame centers the control and indents it past the rows.
+/// The My PRs / To Review / History switcher over the list. Its segments share the row's width,
+/// so its edges line up with the rows under it.
 struct PullRequestTabPicker: View {
     @Binding var selection: PullRequestTab
 
+    static let segments = PullRequestTab.allCases.map {
+        GlassSegmentedControl<PullRequestTab>.Segment(value: $0, title: $0.title)
+    }
+
     var body: some View {
-        Picker("", selection: $selection) {
-            ForEach(PullRequestTab.allCases) { tab in
-                Text(tab.title).tag(tab)
-            }
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .fixedSize()
+        GlassSegmentedControl(selection: $selection, segments: Self.segments, fillsWidth: true)
     }
 }
 
 
 private extension PullRequestTab {
+    /// My PRs draws ``PullRequestGlyph`` instead; this is its stand-in.
     var systemImage: String {
         switch self {
         case .open: return "arrow.triangle.pull"

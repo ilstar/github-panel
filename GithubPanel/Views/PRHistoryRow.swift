@@ -15,7 +15,7 @@ struct PRHistoryRow: View {
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(pr.title)
-                        .font(.system(size: 13.5, weight: .medium))
+                        .font(.system(size: 13.5, weight: .semibold))
                         .lineLimit(1)
                         .help(pr.title)
 
