@@ -3,32 +3,60 @@ import XCTest
 
 @MainActor
 final class PRMonitorHistoryTests: XCTestCase {
-    func testSuccessfulEmptyHistoryLoadsOnlyOnceWhenUsingIfNeeded() async {
+    func testSelectingHistoryTabReloadsEachTime() async {
+        let api = FakeGitHubAPI()
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+
+        monitor.selectedTab = .history
+        await waitUntil { !monitor.isHistoryLoading && api.fetchClosedPRCalls.count == 1 }
+        monitor.selectedTab = .open
+        monitor.selectedTab = .history
+        await waitUntil { !monitor.isHistoryLoading && api.fetchClosedPRCalls.count == 2 }
+
+        XCTAssertTrue(api.fetchOpenPRTokens.isEmpty)
+        XCTAssertTrue(api.fetchReviewRequestsTokens.isEmpty)
+    }
+
+    func testSelectingHistoryWhileItIsLoadingSharesOneRequest() async {
         let gate = SuspendedHistoryRequests()
         let api = FakeGitHubAPI()
         api.historyHandler = { _, _, page, perPage in
             try await gate.next(page: page, perPage: perPage)
         }
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
-        let loaded = expectation(description: "History loaded")
-        let cancellable = monitor.$lastHistoryRefreshAt.dropFirst().sink { _ in loaded.fulfill() }
 
-        monitor.loadHistoryIfNeeded()
+        monitor.selectedTab = .history
         await gate.waitForRequestCount(1)
-        monitor.loadHistoryIfNeeded()
-        let initialRequestCount = await gate.requestCount
-        XCTAssertEqual(initialRequestCount, 1)
+        monitor.selectedTab = .open
+        monitor.selectedTab = .history
+        for _ in 0..<20 { await Task.yield() }
 
+        let requestCount = await gate.requestCount
+        XCTAssertEqual(requestCount, 1)
         await gate.resumeNext(returning: PullRequestHistoryPage(rows: [], page: 1, perPage: 10, totalCount: 0))
-        await fulfillment(of: [loaded], timeout: 2)
-        _ = cancellable
-        await Task.yield()
+    }
 
-        monitor.loadHistoryIfNeeded()
-        await Task.yield()
-        let finalRequestCount = await gate.requestCount
-        XCTAssertEqual(finalRequestCount, 1)
-        XCTAssertTrue(monitor.historyRows.isEmpty)
+    func testTimerAndRefreshNowDoNotLoadHistory() async {
+        let api = FakeGitHubAPI()
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+
+        await monitor.handleTimerTick()
+        await monitor.refreshNow()
+
+        XCTAssertTrue(api.fetchClosedPRCalls.isEmpty)
+    }
+
+    func testRefreshSelectedTabOnHistoryReloadsOnlyHistory() async {
+        let api = FakeGitHubAPI()
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+        monitor.selectedTab = .history
+        await waitUntil { !monitor.isHistoryLoading && api.fetchClosedPRCalls.count == 1 }
+
+        await monitor.refreshSelectedTab()
+
+        XCTAssertEqual(api.fetchClosedPRCalls.count, 2)
+        XCTAssertTrue(api.fetchOpenPRTokens.isEmpty)
+        XCTAssertTrue(api.fetchReviewRequestsTokens.isEmpty)
     }
 
     func testIdenticalHistoryRowsDoNotPublishAgainButRefreshTimestampAdvances() async {
@@ -74,26 +102,6 @@ final class PRMonitorHistoryTests: XCTestCase {
 
         await monitor.refreshCurrentHistoryPage()
         XCTAssertEqual(api.fetchClosedPRCalls.count, 3)
-    }
-
-    func testCredentialChangeResetsSuccessfulHistoryLoadState() async {
-        let api = FakeGitHubAPI()
-        let store = FakeTokenStore(token: "old")
-        let monitor = makeMonitor(api: api, tokenStore: store)
-
-        await monitor.refreshCurrentHistoryPage()
-        XCTAssertEqual(api.fetchClosedPRCalls.count, 1)
-
-        let gate = SuspendedHistoryRequests()
-        api.historyHandler = { _, _, page, perPage in
-            try await gate.next(page: page, perPage: perPage)
-        }
-        monitor.saveToken("new")
-        monitor.loadHistoryIfNeeded()
-        await gate.waitForRequestCount(1)
-
-        XCTAssertEqual(api.fetchClosedPRCalls.count, 2)
-        await gate.resumeNext(returning: PullRequestHistoryPage(rows: [], page: 1, perPage: 10, totalCount: 0))
     }
 
     func testRefreshHistoryLoadsRequestedPageAndPaginationState() async {
@@ -145,5 +153,12 @@ final class PRMonitorHistoryTests: XCTestCase {
         XCTAssertTrue(monitor.historyRows.isEmpty)
         XCTAssertEqual(monitor.lastHistoryError, "history boom")
         XCTAssertNil(monitor.lastError)
+    }
+
+    private func waitUntil(_ condition: () -> Bool) async {
+        for _ in 0..<200 where !condition() {
+            await Task.yield()
+        }
+        XCTAssertTrue(condition())
     }
 }

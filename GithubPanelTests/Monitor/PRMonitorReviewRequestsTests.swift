@@ -73,38 +73,72 @@ final class PRMonitorReviewRequestsTests: XCTestCase {
         XCTAssertFalse(monitor.isReviewRequestsLoading)
     }
 
-    func testSelectingReviewsTabLoadsReviewRequestsEachTime() async {
+    func testSwitchingBetweenMyPullRequestsAndReviewsDoesNotFetch() async {
         let api = FakeGitHubAPI()
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
-        let loaded = expectation(description: "Review requests loaded")
-        loaded.expectedFulfillmentCount = 2
-        let cancellable = monitor.$lastReviewRequestsRefreshAt.dropFirst().sink { _ in loaded.fulfill() }
 
         monitor.selectedTab = .reviews
-        await waitUntil { !monitor.isReviewRequestsLoading && api.fetchReviewRequestsTokens.count == 1 }
         monitor.selectedTab = .open
         monitor.selectedTab = .reviews
+        for _ in 0..<20 { await Task.yield() }
 
-        await fulfillment(of: [loaded], timeout: 2)
-        _ = cancellable
-        XCTAssertEqual(api.fetchReviewRequestsTokens.count, 2)
-    }
-
-    func testRefreshSelectedTabRefreshesOnlyTheVisibleTab() async {
-        let api = FakeGitHubAPI()
-        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
-        monitor.selectedTab = .reviews
-        await waitUntil { !monitor.isReviewRequestsLoading && api.fetchReviewRequestsTokens.count == 1 }
-
-        await monitor.refreshSelectedTab()
-        XCTAssertEqual(api.fetchReviewRequestsTokens.count, 2)
+        XCTAssertTrue(api.fetchReviewRequestsTokens.isEmpty)
         XCTAssertTrue(api.fetchOpenPRTokens.isEmpty)
         XCTAssertTrue(api.fetchClosedPRCalls.isEmpty)
+    }
+
+    func testRefreshNowLoadsMyPullRequestsAndReviewRequestsTogether() async {
+        let api = FakeGitHubAPI()
+        api.rows = [row(number: 1, status: .success)]
+        api.reviewRequests = ReviewRequests(fromMe: [reviewRequestRow(number: 2)], fromMyTeams: [])
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+
+        await monitor.refreshNow()
+
+        XCTAssertEqual(monitor.prRows.map(\.number), [1])
+        XCTAssertEqual(monitor.reviewRequests, api.reviewRequests)
+        XCTAssertFalse(monitor.isLoading)
+        XCTAssertFalse(monitor.isReviewRequestsLoading)
+        XCTAssertTrue(api.fetchClosedPRCalls.isEmpty)
+    }
+
+    func testStartLoadsReviewRequests() async {
+        let api = FakeGitHubAPI()
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+
+        monitor.start()
+
+        await waitUntil { api.fetchReviewRequestsTokens.count == 1 && api.fetchOpenPRTokens.count == 1 }
+        XCTAssertTrue(api.fetchClosedPRCalls.isEmpty)
+    }
+
+    func testReviewRequestFailureDoesNotClearMyPullRequests() async {
+        let api = FakeGitHubAPI()
+        api.rows = [row(number: 1, status: .success)]
+        api.reviewRequestsHandler = { _ in throw TestError(message: "reviews offline") }
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+
+        await monitor.refreshNow()
+
+        XCTAssertEqual(monitor.prRows.map(\.number), [1])
+        XCTAssertNil(monitor.lastError)
+        XCTAssertEqual(monitor.lastReviewRequestsError, "reviews offline")
+    }
+
+    func testRefreshSelectedTabRefreshesBothListsFromEitherTab() async {
+        let api = FakeGitHubAPI()
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+
+        monitor.selectedTab = .reviews
+        await monitor.refreshSelectedTab()
+        XCTAssertEqual(api.fetchReviewRequestsTokens.count, 1)
+        XCTAssertEqual(api.fetchOpenPRTokens.count, 1)
 
         monitor.selectedTab = .open
         await monitor.refreshSelectedTab()
-        XCTAssertEqual(api.fetchOpenPRTokens.count, 1)
         XCTAssertEqual(api.fetchReviewRequestsTokens.count, 2)
+        XCTAssertEqual(api.fetchOpenPRTokens.count, 2)
+        XCTAssertTrue(api.fetchClosedPRCalls.isEmpty)
     }
 
     func testSelectedTabLoadingFollowsTheVisibleTab() {

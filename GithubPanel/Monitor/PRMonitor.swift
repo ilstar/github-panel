@@ -60,7 +60,6 @@ final class PRMonitor: ObservableObject {
     private var refreshQueued = false
     private var refreshRevision = 0
     private var prefetchTask: Task<Void, Never>?
-    private var historyLoadedSuccessfully = false
     private var lastStates: [String: CheckState] = [:]
     private var nextTimerRefreshAt: Date?
     private var consecutiveThrottledFailures = 0
@@ -141,7 +140,6 @@ final class PRMonitor: ObservableObject {
         activeRefreshTask = nil
         activeRefreshID = nil
         refreshQueued = false
-        historyLoadedSuccessfully = false
         nextTimerRefreshAt = nil
         consecutiveThrottledFailures = 0
         prefetchTask?.cancel()
@@ -181,7 +179,16 @@ final class PRMonitor: ObservableObject {
         return sessionToken
     }
 
+    /// Refreshes My PRs and To Review together. App start, timer ticks and manual refresh on
+    /// either tab all come through here, so switching between the two tabs never fetches.
     func refreshNow() async {
+        guard loadSessionToken() != nil else { return }
+        async let reviewRequests: Void = refreshReviewRequests()
+        await refreshOpenPullRequests()
+        await reviewRequests
+    }
+
+    private func refreshOpenPullRequests() async {
         guard loadSessionToken() != nil else { return }
         let task = startRefreshIfNeeded()
         await task.value
@@ -197,42 +204,30 @@ final class PRMonitor: ObservableObject {
 
     func refreshSelectedTab() async {
         switch selectedTab {
-        case .open: await refreshNow()
-        case .reviews: await refreshReviewRequests()
+        case .open, .reviews: await refreshNow()
         case .history: await refreshCurrentHistoryPage()
         }
     }
 
+    /// My PRs and To Review stay fresh through `refreshNow()`. History is rarely used, so the
+    /// timer skips it and it reloads only when its tab is shown or refreshed by hand.
     private func loadSelectedTab() {
-        switch selectedTab {
-        case .open:
-            break
-        case .reviews:
-            // Review requests change often, so reload whenever the tab is shown.
-            Task { await refreshReviewRequests() }
-        case .history:
-            loadHistoryIfNeeded()
-        }
-    }
-
-    func loadHistoryIfNeeded() {
-        Task {
-            await refreshHistory(page: historyPage, onlyIfNeeded: true)
-        }
+        guard selectedTab == .history else { return }
+        Task { await refreshCurrentHistoryPage() }
     }
 
     func refreshCurrentHistoryPage() async {
-        await refreshHistory(page: historyPage, onlyIfNeeded: false)
+        await refreshHistory(page: historyPage)
     }
 
     func loadNextHistoryPage() async {
         guard canLoadNextHistoryPage else { return }
-        await refreshHistory(page: historyPage + 1, onlyIfNeeded: false)
+        await refreshHistory(page: historyPage + 1)
     }
 
     func loadPreviousHistoryPage() async {
         guard canLoadPreviousHistoryPage else { return }
-        await refreshHistory(page: historyPage - 1, onlyIfNeeded: false)
+        await refreshHistory(page: historyPage - 1)
     }
 
     var canLoadPreviousHistoryPage: Bool {
@@ -252,10 +247,9 @@ final class PRMonitor: ObservableObject {
         return "\(start)-\(end) of \(historyTotalCount)"
     }
 
-    private func refreshHistory(page: Int, onlyIfNeeded: Bool) async {
+    private func refreshHistory(page: Int) async {
         guard let token = loadSessionToken() else { return }
         guard !isHistoryLoading else { return }
-        guard !onlyIfNeeded || !historyLoadedSuccessfully else { return }
         let session = credentialSession
         isHistoryLoading = true
         lastHistoryError = nil
@@ -276,13 +270,11 @@ final class PRMonitor: ObservableObject {
             setHistoryRows(page.rows)
             historyPage = page.page
             historyTotalCount = page.totalCount
-            historyLoadedSuccessfully = true
             lastHistoryRefreshAt = dateProvider.now
         } catch {
             guard session == credentialSession else { return }
             setHistoryRows([])
             historyTotalCount = 0
-            historyLoadedSuccessfully = false
             lastHistoryError = error.localizedDescription
         }
         isHistoryLoading = false
@@ -427,7 +419,7 @@ final class PRMonitor: ObservableObject {
         if activeRefreshTask != nil {
             refreshQueued = true
         }
-        await refreshNow()
+        await refreshOpenPullRequests()
     }
 
     private func setPRRows(_ rows: [PullRequestRow]) {
