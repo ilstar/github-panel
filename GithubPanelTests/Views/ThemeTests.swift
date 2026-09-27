@@ -39,6 +39,14 @@ final class ThemeTests: XCTestCase {
         XCTAssertGreaterThan(try resolvedWhite(color, in: .darkAqua), 0.95)
     }
 
+    @MainActor
+    func testWindowBackdropLetsTheDesktopShowThrough() {
+        // The window and sidebar materials wash the desktop out to near white behind the glass sidebar.
+        let view = WindowBackdrop.makeView()
+        XCTAssertEqual(view.material, .fullScreenUI)
+        XCTAssertEqual(view.blendingMode, .behindWindow)
+    }
+
     private func resolvedWhite(_ color: NSColor, in name: NSAppearance.Name) throws -> CGFloat {
         let appearance = try XCTUnwrap(NSAppearance(named: name))
         var white: CGFloat = -1

@@ -6,7 +6,7 @@ import AppKit
 /// and color appears only where it carries meaning.
 enum Theme {
     /// The floating sidebar panel's tint over the window backdrop. Used where Liquid Glass is unavailable.
-    static let sidebarFill = Color(light: NSColor(white: 1, alpha: 0.42),
+    static let sidebarFill = Color(light: NSColor(white: 1, alpha: 0.28),
                                    dark: NSColor(white: 1, alpha: 0.06))
     /// The pull request pane, mostly opaque so text and diffs read cleanly over the backdrop.
     static let contentBackground = Color(light: NSColor(white: 1, alpha: 0.88),
@@ -202,9 +202,17 @@ struct RowIcon: View {
 
 /// The window's backdrop: the desktop, blurred and tinted, showing through behind the panes.
 struct WindowBackdrop: NSViewRepresentable {
+    /// Of the behind-window materials, this one tints the least, so the desktop's colors show through the
+    /// sidebar. The window and sidebar materials look almost white over a colorful desktop.
+    static let material = NSVisualEffectView.Material.fullScreenUI
+
     func makeNSView(context: Context) -> NSVisualEffectView {
+        Self.makeView()
+    }
+
+    static func makeView() -> NSVisualEffectView {
         let view = NSVisualEffectView()
-        view.material = .underWindowBackground
+        view.material = WindowBackdrop.material
         view.blendingMode = .behindWindow
         view.state = .followsWindowActiveState
         return view
@@ -227,7 +235,9 @@ extension View {
     @ViewBuilder
     func glassSurface<S: InsettableShape>(_ role: GlassRole, in shape: S) -> some View {
         if #available(macOS 26.0, *) {
-            glassEffect(role == .control ? .regular.interactive() : .regular, in: shape)
+            // Clear glass for the sidebar so the desktop shows through it; regular glass for controls,
+            // which need to stand out from what is behind them.
+            glassEffect(role == .control ? .regular.interactive() : .clear, in: shape)
         } else {
             background(
                 shape
@@ -363,5 +373,34 @@ struct AvatarView: View {
     static func paletteIndex(for login: String) -> Int {
         let sum = login.lowercased().unicodeScalars.reduce(0) { $0 &+ Int($1.value) }
         return sum % palette.count
+    }
+}
+
+/// GitHub's pull request mark: two commits on a branch and an arrow into the base. Drawn on a 24-point grid
+/// and scaled to fit, so stroke it with a width suited to its size.
+struct PullRequestGlyph: Shape {
+    func path(in rect: CGRect) -> Path {
+        let scale = min(rect.width, rect.height) / 24
+        func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+            CGPoint(x: rect.minX + x * scale, y: rect.minY + y * scale)
+        }
+        var path = Path()
+        let radius = 2.2 * scale
+        for (x, y) in [(6.0, 6.2), (6.0, 18.0), (18.0, 18.0)] {
+            path.addEllipse(in: CGRect(x: rect.minX + x * scale - radius, y: rect.minY + y * scale - radius,
+                                       width: radius * 2, height: radius * 2))
+        }
+        // The branch's line between its two commits.
+        path.move(to: point(6, 8.4))
+        path.addLine(to: point(6, 15.8))
+        // From the base commit up and over, ending in an arrow pointing left.
+        path.move(to: point(18, 15.8))
+        path.addLine(to: point(18, 10))
+        path.addQuadCurve(to: point(15, 7), control: point(18, 7))
+        path.addLine(to: point(10.5, 7))
+        path.move(to: point(12.8, 4.6))
+        path.addLine(to: point(10.4, 7))
+        path.addLine(to: point(12.8, 9.4))
+        return path
     }
 }

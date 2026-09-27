@@ -230,20 +230,35 @@ struct ContentView: View {
 
     /// A large heading for the visible tab, like a list title in Things.
     private var listTitle: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Image(systemName: monitor.selectedTab.systemImage)
-                .font(.system(size: 22, weight: .semibold))
+        HStack(alignment: .center, spacing: 10) {
+            listTitleIcon
                 .foregroundStyle(monitor.selectedTab.tint)
-            Text(monitor.selectedTab.title)
-                .font(.system(size: 28, weight: .bold))
-                .tracking(-0.4)
-            if let count = listCount, count > 0 {
-                Text(String(count))
-                    .font(.system(size: 20, weight: .medium))
-                    .monospacedDigit()
-                    .foregroundStyle(.tertiary)
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(monitor.selectedTab.title)
+                    .font(.system(size: 28, weight: .bold))
+                    .tracking(-0.4)
+                if let count = listCount, count > 0 {
+                    Text(String(count))
+                        .font(.system(size: 20, weight: .medium))
+                        .monospacedDigit()
+                        .foregroundStyle(.tertiary)
+                }
             }
             Spacer(minLength: 0)
+        }
+    }
+
+    /// GitHub's pull request mark for My PRs, drawn to match the design; SF Symbols for the other tabs.
+    @ViewBuilder
+    private var listTitleIcon: some View {
+        if monitor.selectedTab == .open {
+            PullRequestGlyph()
+                .stroke(style: StrokeStyle(lineWidth: 2.1, lineCap: .round, lineJoin: .round))
+                .frame(width: 24, height: 24)
+        } else {
+            Image(systemName: monitor.selectedTab.systemImage)
+                .font(.system(size: 21, weight: .semibold))
+                .frame(width: 24, height: 24)
         }
     }
 
@@ -748,6 +763,7 @@ struct PullRequestTabPicker: View {
 
 
 private extension PullRequestTab {
+    /// My PRs draws ``PullRequestGlyph`` instead; this is its stand-in.
     var systemImage: String {
         switch self {
         case .open: return "arrow.triangle.pull"
