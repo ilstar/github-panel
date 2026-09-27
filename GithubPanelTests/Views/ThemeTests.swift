@@ -39,12 +39,41 @@ final class ThemeTests: XCTestCase {
         XCTAssertGreaterThan(try resolvedWhite(color, in: .darkAqua), 0.95)
     }
 
-    @MainActor
-    func testWindowBackdropLetsTheDesktopShowThrough() {
-        // The window and sidebar materials wash the desktop out to near white behind the glass sidebar.
-        let view = WindowBackdrop.makeView()
-        XCTAssertEqual(view.material, .fullScreenUI)
-        XCTAssertEqual(view.blendingMode, .behindWindow)
+    func testWindowAndSidebarAreOpaqueSoTheDesktopNeverShowsThrough() throws {
+        let colors = [Theme.windowBackground, Theme.contentBackground, SidebarGradient.startColor, SidebarGradient.endColor]
+        for color in colors {
+            for name in [NSAppearance.Name.aqua, .darkAqua] {
+                XCTAssertEqual(try resolvedAlpha(NSColor(color), in: name), 1, accuracy: 0.001, "\(color) in \(name.rawValue)")
+            }
+        }
+    }
+
+    func testSidebarGradientRunsFromLighterToDarkerInBothAppearances() throws {
+        for name in [NSAppearance.Name.aqua, .darkAqua] {
+            let start = try resolvedWhite(NSColor(SidebarGradient.startColor), in: name)
+            let end = try resolvedWhite(NSColor(SidebarGradient.endColor), in: name)
+            XCTAssertGreaterThan(start, end, name.rawValue)
+        }
+    }
+
+    func testSidebarWashIsMoreOpaqueForAWeakerGradient() {
+        // Graphite at 10% strength, as chosen on the design canvas.
+        XCTAssertEqual(SidebarGradient.strength, 10)
+        XCTAssertEqual(SidebarGradient.washOpacity(strength: 10, isDark: false), 0.72, accuracy: 0.001)
+        XCTAssertEqual(SidebarGradient.washOpacity(strength: 10, isDark: true), 0.695, accuracy: 0.001)
+        XCTAssertEqual(SidebarGradient.washOpacity(strength: 100, isDark: false), 0.18, accuracy: 0.001)
+        XCTAssertEqual(SidebarGradient.washOpacity(strength: 0, isDark: false), 0.78, accuracy: 0.001)
+        // Out-of-range strengths are clamped.
+        XCTAssertEqual(SidebarGradient.washOpacity(strength: 150, isDark: true), 0.20, accuracy: 0.001)
+    }
+
+    private func resolvedAlpha(_ color: NSColor, in name: NSAppearance.Name) throws -> CGFloat {
+        let appearance = try XCTUnwrap(NSAppearance(named: name))
+        var alpha: CGFloat = -1
+        appearance.performAsCurrentDrawingAppearance {
+            alpha = color.usingColorSpace(.sRGB)?.alphaComponent ?? -1
+        }
+        return alpha
     }
 
     private func resolvedWhite(_ color: NSColor, in name: NSAppearance.Name) throws -> CGFloat {

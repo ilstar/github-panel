@@ -5,10 +5,12 @@ struct SettingsView: View {
     @EnvironmentObject private var monitor: PRMonitor
     @State private var tokenInput: String = ""
     @State private var isSaving = false
+    @AppStorage(AppAppearance.defaultsKey) private var appearance: AppAppearance = .system
 
     var body: some View {
         Form {
             tokenSection
+            appearanceSection
             refreshSection
             hooksSection
             shortcutSection
@@ -50,6 +52,22 @@ struct SettingsView: View {
             }
         } header: {
             Text("GitHub Token")
+        }
+    }
+
+    private var appearanceSection: some View {
+        Section {
+            Picker("Appearance", selection: $appearance) {
+                ForEach(AppAppearance.allCases) { option in
+                    Text(option.title).tag(option)
+                }
+            }
+            .pickerStyle(.segmented)
+            .onChange(of: appearance) { newValue in
+                newValue.apply()
+            }
+        } header: {
+            Text("Appearance")
         }
     }
 

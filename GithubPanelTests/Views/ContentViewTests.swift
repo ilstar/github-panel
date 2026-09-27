@@ -21,4 +21,22 @@ final class ContentViewTests: XCTestCase {
         host.layoutSubtreeIfNeeded()
         XCTAssertEqual(host.fittingSize.width, 420, accuracy: 1)
     }
+
+    func testTabSwitcherInTheTitleBarStripStartsAfterTheWindowButtons() throws {
+        // The switcher shares the title bar strip with the window buttons, so it must begin to their right.
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800),
+                              styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                              backing: .buffered,
+                              defer: false)
+        window.titlebarAppearsTransparent = true
+        WindowToolbarStripView.install(in: window)
+
+        let zoom = try XCTUnwrap(window.standardWindowButton(.zoomButton))
+        let buttonsEnd = zoom.convert(zoom.bounds, to: nil).maxX
+        let switcherStart = ContentView.listLeadingPadding + ContentView.windowButtonsWidth
+
+        XCTAssertLessThanOrEqual(buttonsEnd + 6, switcherStart)
+        // And not so far that it leaves a wide empty gap.
+        XCTAssertLessThanOrEqual(switcherStart - buttonsEnd, 24)
+    }
 }

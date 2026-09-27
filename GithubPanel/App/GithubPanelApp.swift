@@ -17,6 +17,7 @@ struct GithubPanelApp: App {
                                                          userDriverDelegate: nil)
 
         if !ProcessInfo.processInfo.isRunningTests {
+            AppAppearance.stored().apply()
             NotificationManager.shared.configure()
             KeyboardShortcuts.onKeyUp(for: .toggleApp) {
                 AppVisibility.toggle()
@@ -41,7 +42,7 @@ struct GithubPanelApp: App {
         WindowGroup("Pull Request", for: PullRequestReference.self) { $reference in
             if let reference {
                 PullRequestDetailView(viewModel: PullRequestDetailViewModel(reference: reference, monitor: monitor))
-                    .background(ZStack { WindowBackdrop(); Theme.contentBackground }.ignoresSafeArea())
+                    .background(Theme.contentBackground.ignoresSafeArea())
             }
         }
         .defaultSize(width: 960, height: 760)
