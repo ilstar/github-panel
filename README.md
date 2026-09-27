@@ -3,7 +3,8 @@
 A native macOS app for managing your GitHub pull requests: follow checks, review
 code, comment, and merge without opening a browser.
 
-<img width="1524" height="1022" alt="Screenshot 2026-09-26 at 5 09 21 PM" src="https://github.com/user-attachments/assets/023a1d6e-3cae-4fba-8d58-f69694d3126c" />
+<img width="1720" height="1278" alt="Screenshot 2026-09-27 at 10 25 25 AM" src="https://github.com/user-attachments/assets/d00424a1-bcb8-4e72-9848-435063efe037" />
+
 
 
 ## Features
