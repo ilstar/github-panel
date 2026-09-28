@@ -24,14 +24,64 @@ final class MergeButtonStateTests: XCTestCase {
     func testPRWithoutChecksDoesNotShowWaitingWhenOtherwiseBlocked() {
         let state = MergeButtonState.resolve(for: pullRequest(status: .noChecks, mergeStateStatus: "BLOCKED"), isWorking: false)
 
-        XCTAssertEqual(state, MergeButtonState.blocked)
+        XCTAssertEqual(state, MergeButtonState.blocked(.branchRules))
         XCTAssertNotEqual(state.title, "Waiting for checks")
+    }
+
+    func testBlockedButtonNamesTheReason() {
+        let cases: [(mergeStateStatus: String, decision: ReviewDecision?, reason: MergeBlockReason, title: String)] = [
+            ("DIRTY", nil, .conflicts, "Merge conflict"),
+            ("BEHIND", nil, .behindBase, "Out of date"),
+            ("BLOCKED", .changesRequested, .changesRequested, "Changes requested"),
+            ("BLOCKED", .reviewRequired, .needsApproval, "Needs approval"),
+            ("BLOCKED", .approved, .branchRules, "Blocked by rules"),
+            ("BLOCKED", nil, .branchRules, "Blocked by rules"),
+            ("UNKNOWN", nil, .checkingMergeability, "Checking merge"),
+            ("UNSTABLE", nil, .other, "Not mergeable")
+        ]
+
+        for testCase in cases {
+            let pr = pullRequest(status: .success,
+                                 mergeStateStatus: testCase.mergeStateStatus,
+                                 reviewStatus: PullRequestReviewStatus(decision: testCase.decision))
+            let state = MergeButtonState.resolve(for: pr, isWorking: false)
+
+            XCTAssertEqual(state, .blocked(testCase.reason), testCase.mergeStateStatus)
+            XCTAssertEqual(state.title, testCase.title, testCase.mergeStateStatus)
+            XCTAssertFalse(state.isClickable)
+            XCTAssertEqual(state.helpText, testCase.reason.explanation)
+        }
+    }
+
+    func testConflictShowsInsteadOfAutoMergeOrWaiting() {
+        let canAutoMerge = pullRequest(status: .pending, canEnableAutoMerge: true, mergeStateStatus: "DIRTY")
+        let waiting = pullRequest(status: .pending, mergeStateStatus: "DIRTY")
+
+        XCTAssertEqual(MergeButtonState.resolve(for: canAutoMerge, isWorking: false), .blocked(.conflicts))
+        XCTAssertEqual(MergeButtonState.resolve(for: waiting, isWorking: false), .blocked(.conflicts))
+    }
+
+    func testFailedChecksAndEnabledAutoMergeStillWinOverAConflict() {
+        let failed = pullRequest(status: .failure, mergeStateStatus: "DIRTY")
+        let autoMergeOn = pullRequest(status: .pending, isAutoMergeEnabled: true, mergeStateStatus: "DIRTY")
+
+        XCTAssertEqual(MergeButtonState.resolve(for: failed, isWorking: false), .checksFailed)
+        XCTAssertEqual(MergeButtonState.resolve(for: autoMergeOn, isWorking: false), .disableAutoMerge)
+    }
+
+    func testActionableButtonsHaveNoHelpText() {
+        XCTAssertNil(MergeButtonState.merge.helpText)
+        XCTAssertNil(MergeButtonState.enableAutoMerge.helpText)
+        XCTAssertNotNil(MergeButtonState.checksFailed.helpText)
     }
 
     private func pullRequest(status: CheckState,
                              isDraft: Bool = false,
                              mergeQueueEnabled: Bool = false,
-                             mergeStateStatus: String = "CLEAN") -> PullRequestRow {
+                             isAutoMergeEnabled: Bool = false,
+                             canEnableAutoMerge: Bool = false,
+                             mergeStateStatus: String = "CLEAN",
+                             reviewStatus: PullRequestReviewStatus = .none) -> PullRequestRow {
         PullRequestRow(id: "acme/widgets#1",
                        nodeID: "PR_node",
                        title: "Example PR",
@@ -41,12 +91,13 @@ final class MergeButtonStateTests: XCTestCase {
                        headSHA: "abc123",
                        status: status,
                        isDraft: isDraft,
-                       isAutoMergeEnabled: false,
-                       canEnableAutoMerge: false,
+                       isAutoMergeEnabled: isAutoMergeEnabled,
+                       canEnableAutoMerge: canEnableAutoMerge,
                        canDisableAutoMerge: false,
                        isMergeQueueEnabled: mergeQueueEnabled,
                        isInMergeQueue: false,
                        mergeStateStatus: mergeStateStatus,
-                       updatedAt: Date(timeIntervalSince1970: 0))
+                       updatedAt: Date(timeIntervalSince1970: 0),
+                       reviewStatus: reviewStatus)
     }
 }

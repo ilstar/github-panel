@@ -135,7 +135,8 @@ final class PRMonitorActionTests: XCTestCase {
             (row(number: 8, status: .success, mergeQueue: true, inMergeQueue: true), .queued, nil),
             (row(number: 9, status: .pending), .waitingForChecks, nil),
             (row(number: 10, status: .unknown), .statusUnavailable, nil),
-            (row(number: 11, status: .success, mergeStateStatus: "BLOCKED"), .blocked, nil)
+            (row(number: 11, status: .success, mergeStateStatus: "BLOCKED"), .blocked(.branchRules), nil),
+            (row(number: 12, status: .pending, canEnableAutoMerge: true, mergeStateStatus: "DIRTY"), .blocked(.conflicts), nil)
         ]
 
         for (item, expectedState, expectedCall) in cases {

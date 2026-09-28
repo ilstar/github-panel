@@ -87,6 +87,7 @@ struct PRRow: View {
         }
         .buttonStyle(.plain)
         .fixedSize()
+        .help(mergeButtonState.helpText ?? "")
         .disabled(mergeButtonState == .working)
         .opacity(mergeButtonState == .working ? 0.75 : 1)
         .animation(.easeInOut(duration: 0.12), value: isMergeButtonHovering)
