@@ -63,7 +63,7 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertTrue(body.query.contains("first: 50, after: $after, states: [OPEN]"))
         XCTAssertNil(body.variables["after"])
         XCTAssertTrue(body.query.contains("field: UPDATED_AT, direction: DESC"))
-        XCTAssertTrue(body.query.contains("repository { nameWithOwner }"))
+        XCTAssertTrue(body.query.contains("nameWithOwner"))
         XCTAssertTrue(body.query.contains("contexts(first: 1) { totalCount }"))
         XCTAssertTrue(body.query.contains("reviewDecision"))
         XCTAssertTrue(body.query.contains("latestOpinionatedReviews(first: 20)"))
@@ -259,7 +259,7 @@ final class GitHubAPITests: XCTestCase {
         let successTransport = MockHTTPTransport()
         successTransport.enqueue(json: #"{"merged":true}"#)
         let successAPI = GitHubAPI(transport: successTransport)
-        let successMerged = try await successAPI.mergePullRequest(token: "token", repoFullName: "acme/widgets", number: 7)
+        let successMerged = try await successAPI.mergePullRequest(token: "token", repoFullName: "acme/widgets", number: 7, method: .merge)
         XCTAssertTrue(successMerged)
         let successRequest = try XCTUnwrap(successTransport.requests.first)
         XCTAssertEqual(successRequest.httpMethod, "PUT")
@@ -270,19 +270,50 @@ final class GitHubAPITests: XCTestCase {
         let fallbackTransport = MockHTTPTransport()
         fallbackTransport.enqueue(json: #"{"not_merged_field":true}"#)
         let fallbackAPI = GitHubAPI(transport: fallbackTransport)
-        let fallbackMerged = try await fallbackAPI.mergePullRequest(token: "token", repoFullName: "acme/widgets", number: 7)
+        let fallbackMerged = try await fallbackAPI.mergePullRequest(token: "token", repoFullName: "acme/widgets", number: 7, method: .merge)
         XCTAssertTrue(fallbackMerged)
 
         let failureTransport = MockHTTPTransport()
         failureTransport.enqueue(json: #"{"message":"Cannot merge"}"#, statusCode: 405)
         let failureAPI = GitHubAPI(transport: failureTransport)
         do {
-            _ = try await failureAPI.mergePullRequest(token: "token", repoFullName: "acme/widgets", number: 7)
+            _ = try await failureAPI.mergePullRequest(token: "token", repoFullName: "acme/widgets", number: 7, method: .merge)
             XCTFail("Expected GitHubAPIError")
         } catch let error as GitHubAPIError {
             XCTAssertEqual(error.statusCode, 405)
             XCTAssertEqual(error.message, #"{"message":"Cannot merge"}"#)
         }
+    }
+
+    func testMergePullRequestSendsTheChosenMethod() async throws {
+        for method in MergeMethod.allCases {
+            let transport = MockHTTPTransport()
+            transport.enqueue(json: #"{"merged":true}"#)
+
+            _ = try await GitHubAPI(transport: transport).mergePullRequest(token: "token", repoFullName: "acme/widgets",
+                                                                             number: 7, method: method)
+
+            XCTAssertEqual(transport.requests.first?.jsonBody?["merge_method"] as? String, method.restValue)
+        }
+        XCTAssertEqual(MergeMethod.allCases.map(\.restValue), ["merge", "squash", "rebase"])
+    }
+
+    func testFetchOpenPRsDecodesTheRepositoryMergeMethods() async throws {
+        let response = openPRResponse.replacingOccurrences(
+            of: #""updatedAt":"2026-04-12T12:34:56Z","repository":{"nameWithOwner":"acme/widgets"}"#,
+            with: #""updatedAt":"2026-04-12T12:34:56Z","repository":{"nameWithOwner":"acme/widgets","mergeCommitAllowed":false,"squashMergeAllowed":true,"rebaseMergeAllowed":true,"viewerDefaultMergeMethod":"REBASE"}"#)
+        XCTAssertNotEqual(response, openPRResponse)
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: response)
+
+        let rows = try await GitHubAPI(transport: transport).fetchOpenPRs(token: "token").rows
+
+        XCTAssertEqual(rows[0].mergeMethods, RepositoryMergeMethods(allowed: [.squash, .rebase], suggested: .rebase))
+        // Without the settings, only merge commits are assumed, as before.
+        XCTAssertEqual(rows[1].mergeMethods, RepositoryMergeMethods(allowed: [.merge], suggested: .merge))
+        let body = try transport.graphQLBody(at: 0)
+        XCTAssertTrue(body.query.contains("squashMergeAllowed"))
+        XCTAssertTrue(body.query.contains("viewerDefaultMergeMethod"))
     }
 
     func testFetchPullRequestDetailDecodesPullAndFiles() async throws {
@@ -585,10 +616,11 @@ final class GitHubAPITests: XCTestCase {
 
         let enableTransport = MockHTTPTransport()
         enableTransport.enqueue(json: #"{"data":{"enablePullRequestAutoMerge":{"pullRequest":{"id":"PR_node"}}}}"#)
-        try await GitHubAPI(transport: enableTransport).enableAutoMerge(token: "token", pullRequestID: "PR_node")
+        try await GitHubAPI(transport: enableTransport).enableAutoMerge(token: "token", pullRequestID: "PR_node", mergeMethod: .squash)
         body = try enableTransport.graphQLBody(at: 0)
         XCTAssertTrue(body.query.contains("enablePullRequestAutoMerge"))
-        XCTAssertTrue(body.query.contains("mergeMethod: MERGE"))
+        XCTAssertTrue(body.query.contains("mergeMethod: $method"))
+        XCTAssertEqual(body.variables["method"] as? String, "SQUASH")
 
         let disableTransport = MockHTTPTransport()
         disableTransport.enqueue(json: #"{"data":{"disablePullRequestAutoMerge":{"pullRequest":{"id":"PR_node"}}}}"#)

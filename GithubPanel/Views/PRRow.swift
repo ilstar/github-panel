@@ -6,6 +6,8 @@ struct PRRow: View {
     let relativeFormatter: RelativeDateTimeFormatter
     let now: Date
     let isMerging: Bool
+    /// The method the Merge and Enable auto-merge buttons use.
+    var mergeMethod: MergeMethod = .merge
     let onAction: () -> Void
 
     @State private var isHovering = false
@@ -87,7 +89,7 @@ struct PRRow: View {
         }
         .buttonStyle(.plain)
         .fixedSize()
-        .help(mergeButtonState.helpText ?? "")
+        .help(mergeButtonHelp)
         .disabled(mergeButtonState == .working)
         .opacity(mergeButtonState == .working ? 0.75 : 1)
         .animation(.easeInOut(duration: 0.12), value: isMergeButtonHovering)
@@ -102,7 +104,14 @@ struct PRRow: View {
     }
 
     private var mergeButtonTitle: String {
-        mergeButtonState.title
+        mergeButtonState.title(mergeMethod: mergeMethod)
+    }
+
+    private var mergeButtonHelp: String {
+        if mergeButtonState == .enableAutoMerge {
+            return "Auto-merge will \(mergeMethod.title.lowercased()) once GitHub allows it."
+        }
+        return mergeButtonState.helpText ?? ""
     }
 
     private var mergeIconName: String {

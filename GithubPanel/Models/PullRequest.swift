@@ -18,6 +18,7 @@ struct PullRequestRow: Identifiable, Equatable {
     let mergeStateStatus: String
     let updatedAt: Date
     var reviewStatus: PullRequestReviewStatus = .none
+    var mergeMethods = RepositoryMergeMethods()
 
     var canMergeImmediately: Bool {
         status.isPassing

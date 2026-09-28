@@ -7,9 +7,9 @@ protocol GitHubAPIClient {
     func fetchReviewRequests(token: String) async throws -> ReviewRequests
     func enqueuePullRequest(token: String, pullRequestID: String) async throws
     func markPullRequestReadyForReview(token: String, pullRequestID: String) async throws
-    func enableAutoMerge(token: String, pullRequestID: String) async throws
+    func enableAutoMerge(token: String, pullRequestID: String, mergeMethod: MergeMethod) async throws
     func disableAutoMerge(token: String, pullRequestID: String) async throws
-    func mergePullRequest(token: String, repoFullName: String, number: Int) async throws -> Bool
+    func mergePullRequest(token: String, repoFullName: String, number: Int, method: MergeMethod) async throws -> Bool
     func fetchPullRequestDetail(token: String, reference: PullRequestReference) async throws -> PullRequestDetailContent
     func setFileViewed(token: String, pullRequestID: String, path: String, viewed: Bool) async throws
     func fetchPullRequestComments(token: String, reference: PullRequestReference) async throws -> PullRequestComments

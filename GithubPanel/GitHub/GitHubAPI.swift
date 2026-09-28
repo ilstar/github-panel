@@ -27,7 +27,13 @@ final class GitHubAPI: GitHubAPIClient {
                 number
                 url
                 updatedAt
-                repository { nameWithOwner }
+                repository {
+                  nameWithOwner
+                  mergeCommitAllowed
+                  squashMergeAllowed
+                  rebaseMergeAllowed
+                  viewerDefaultMergeMethod
+                }
                 headRefOid
                 isDraft
                 autoMergeRequest { enabledAt }
@@ -91,7 +97,8 @@ final class GitHubAPI: GitHubAPIClient {
                            isInMergeQueue: pr.isInMergeQueue,
                            mergeStateStatus: pr.mergeStateStatus,
                            updatedAt: pr.updatedAt,
-                           reviewStatus: pr.reviewStatus)
+                           reviewStatus: pr.reviewStatus,
+                           mergeMethods: pr.repository.mergeMethods)
         }
         return OpenPullRequests(login: login, rows: rows)
     }
@@ -175,10 +182,10 @@ final class GitHubAPI: GitHubAPIClient {
         _ = try await graphQL(Response.self, query: query, variables: ["id": pullRequestID], token: token)
     }
 
-    func enableAutoMerge(token: String, pullRequestID: String) async throws {
+    func enableAutoMerge(token: String, pullRequestID: String, mergeMethod: MergeMethod) async throws {
         let query = """
-        mutation($id: ID!) {
-          enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: MERGE }) {
+        mutation($id: ID!, $method: PullRequestMergeMethod!) {
+          enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: $method }) {
             pullRequest { id }
           }
         }
@@ -186,7 +193,8 @@ final class GitHubAPI: GitHubAPIClient {
         struct Response: Decodable { let enablePullRequestAutoMerge: EnableResult? }
         struct EnableResult: Decodable { let pullRequest: PullRequestNode }
         struct PullRequestNode: Decodable { let id: String }
-        _ = try await graphQL(Response.self, query: query, variables: ["id": pullRequestID], token: token)
+        _ = try await graphQL(Response.self, query: query,
+                              variables: ["id": pullRequestID, "method": mergeMethod.rawValue], token: token)
     }
 
     func disableAutoMerge(token: String, pullRequestID: String) async throws {
@@ -203,13 +211,13 @@ final class GitHubAPI: GitHubAPIClient {
         _ = try await graphQL(Response.self, query: query, variables: ["id": pullRequestID], token: token)
     }
 
-    func mergePullRequest(token: String, repoFullName: String, number: Int) async throws -> Bool {
+    func mergePullRequest(token: String, repoFullName: String, number: Int, method: MergeMethod) async throws -> Bool {
         let parts = repoFullName.split(separator: "/", maxSplits: 1).map(String.init)
         guard parts.count == 2 else { throw URLError(.badURL) }
         var request = makeRequest(path: "/repos/\(parts[0])/\(parts[1])/pulls/\(number)/merge", token: token)
         request.httpMethod = "PUT"
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        request.httpBody = try JSONSerialization.data(withJSONObject: ["merge_method": "merge"])
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["merge_method": method.restValue])
 
         let (data, response) = try await transport.data(for: request)
         guard let http = response as? HTTPURLResponse else {
@@ -691,6 +699,19 @@ private struct PullRequestNode: Decodable {
 
     struct Repository: Decodable {
         let nameWithOwner: String
+        /// Only the My PRs query asks for these.
+        var mergeCommitAllowed: Bool?
+        var squashMergeAllowed: Bool?
+        var rebaseMergeAllowed: Bool?
+        var viewerDefaultMergeMethod: String?
+
+        var mergeMethods: RepositoryMergeMethods {
+            let allowed: [(MergeMethod, Bool?)] = [(.merge, mergeCommitAllowed),
+                                                   (.squash, squashMergeAllowed),
+                                                   (.rebase, rebaseMergeAllowed)]
+            return RepositoryMergeMethods(allowed: allowed.filter { $0.1 ?? ($0.0 == .merge) }.map { $0.0 },
+                                          suggested: viewerDefaultMergeMethod.flatMap(MergeMethod.init(rawValue:)) ?? .merge)
+        }
     }
 
     let id: String

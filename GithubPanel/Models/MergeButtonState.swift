@@ -89,6 +89,11 @@ enum MergeButtonState: Equatable {
         }
     }
 
+    /// The label, naming the merge method on a Merge button.
+    func title(mergeMethod: MergeMethod) -> String {
+        self == .merge ? mergeMethod.buttonTitle : title
+    }
+
     /// Why the button does nothing, for its tooltip.
     var helpText: String? {
         switch self {

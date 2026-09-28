@@ -310,6 +310,7 @@ struct ContentView: View {
                                 relativeFormatter: relativeFormatter,
                                 now: now,
                                 isMerging: mergeInFlight.contains(pr.id),
+                                mergeMethod: monitor.mergeMethod(for: pr),
                                 onAction: {
                                     actOnPullRequest(pr: pr)
                                 }
@@ -321,6 +322,7 @@ struct ContentView: View {
                             }
                             .contextMenu {
                                 pullRequestContextMenu(pr.reference, htmlURL: pr.htmlURL)
+                                mergeMethodMenu(for: pr)
                             }
                         }
                     }
@@ -736,7 +738,7 @@ struct ContentView: View {
         guard monitor.selectedTab == .open,
               let pr = monitor.prRows.first(where: { $0.id == selectedPRID }) else { return nil }
         let state = MergeButtonState.resolve(for: pr, isWorking: mergeInFlight.contains(pr.id))
-        return PrimaryAction(title: state.title, isEnabled: state.isClickable) {
+        return PrimaryAction(title: state.title(mergeMethod: monitor.mergeMethod(for: pr)), isEnabled: state.isClickable) {
             actOnPullRequest(pr: pr)
         }
     }
@@ -746,6 +748,20 @@ struct ContentView: View {
         NSApp.keyWindow?.endTyping()
         if NSEvent.modifierFlags.contains(.command) {
             NSWorkspace.shared.open(htmlURL)
+        }
+    }
+
+    /// Picks how Merge and Enable auto-merge merge this repository's pull requests. Checked items come from the picker.
+    @ViewBuilder
+    private func mergeMethodMenu(for pr: PullRequestRow) -> some View {
+        if pr.mergeMethods.allowed.count > 1 {
+            Divider()
+            Picker("Merge Method", selection: Binding(get: { monitor.mergeMethod(for: pr) },
+                                                      set: { monitor.chooseMergeMethod($0, for: pr.repoFullName) })) {
+                ForEach(pr.mergeMethods.allowed) { method in
+                    Text(method.title).tag(method)
+                }
+            }
         }
     }
 

@@ -62,7 +62,7 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
         }
     }
 
-    func enableAutoMerge(token: String, pullRequestID: String) async throws {
+    func enableAutoMerge(token: String, pullRequestID: String, mergeMethod: MergeMethod) async throws {
         updatePullRequest(with: pullRequestID) { pr in
             pr.copy(isAutoMergeEnabled: true, canEnableAutoMerge: false, canDisableAutoMerge: true)
         }
@@ -74,7 +74,7 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
         }
     }
 
-    func mergePullRequest(token: String, repoFullName: String, number: Int) async throws -> Bool {
+    func mergePullRequest(token: String, repoFullName: String, number: Int, method: MergeMethod) async throws -> Bool {
         locked { _ = pullRequests.removeValue(forKey: "\(repoFullName)#\(number)") }
         return true
     }
@@ -434,7 +434,9 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
                         isInMergeQueue: isInMergeQueue,
                         mergeStateStatus: mergeStateStatus,
                         updatedAt: Date(timeIntervalSince1970: 0),
-                        reviewStatus: reviewStatus)
+                        reviewStatus: reviewStatus,
+                        // Like most team repositories: squash by default, merge commits allowed, rebase off.
+                        mergeMethods: RepositoryMergeMethods(allowed: [.merge, .squash], suggested: .squash))
     }
 }
 
@@ -463,7 +465,8 @@ private extension PullRequestRow {
                         isInMergeQueue: isInMergeQueue ?? self.isInMergeQueue,
                         mergeStateStatus: mergeStateStatus ?? self.mergeStateStatus,
                         updatedAt: updatedAt ?? self.updatedAt,
-                        reviewStatus: reviewStatus)
+                        reviewStatus: reviewStatus,
+                        mergeMethods: mergeMethods)
     }
 }
 #endif

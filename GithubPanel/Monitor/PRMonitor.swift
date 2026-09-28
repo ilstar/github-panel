@@ -43,6 +43,9 @@ final class PRMonitor: ObservableObject {
         }
     }
 
+    /// Merge methods picked from a row's menu, keyed by repository. Also saved to defaults.
+    @Published private var mergeMethodChoices: [String: MergeMethod] = [:]
+
     private let api: GitHubAPIClient
     private let tokenStore: TokenStoring
     private let notificationPoster: NotificationPosting
@@ -543,7 +546,8 @@ final class PRMonitor: ObservableObject {
                 try await api.enqueuePullRequest(token: token, pullRequestID: row.nodeID)
                 await requireFreshRefresh(for: session)
             case .merge:
-                let merged = try await api.mergePullRequest(token: token, repoFullName: row.repoFullName, number: row.number)
+                let merged = try await api.mergePullRequest(token: token, repoFullName: row.repoFullName,
+                                                            number: row.number, method: mergeMethod(for: row))
                 guard session == credentialSession else { return }
                 if merged {
                     setPRRows(prRows.filter { $0.id != row.id })
@@ -555,7 +559,7 @@ final class PRMonitor: ObservableObject {
                 try await api.disableAutoMerge(token: token, pullRequestID: row.nodeID)
                 await requireFreshRefresh(for: session)
             case .enableAutoMerge:
-                try await api.enableAutoMerge(token: token, pullRequestID: row.nodeID)
+                try await api.enableAutoMerge(token: token, pullRequestID: row.nodeID, mergeMethod: mergeMethod(for: row))
                 await requireFreshRefresh(for: session)
             case .markReady, .queued, .checksFailed, .blocked, .statusUnavailable, .waitingForChecks, .working:
                 return
@@ -567,6 +571,23 @@ final class PRMonitor: ObservableObject {
     }
 }
 
+extension PRMonitor {
+    /// The method Merge and Enable auto-merge use: the one picked for the repository if it still allows it,
+    /// otherwise the one GitHub suggests.
+    func mergeMethod(for row: PullRequestRow) -> MergeMethod {
+        let chosen = mergeMethodChoices[row.repoFullName]
+            ?? defaults.string(forKey: DefaultsKeys.mergeMethod(for: row.repoFullName)).flatMap(MergeMethod.init(rawValue:))
+        if let chosen, row.mergeMethods.allowed.contains(chosen) { return chosen }
+        return row.mergeMethods.defaultMethod
+    }
+
+    /// Remembers the method for every pull request in the repository.
+    func chooseMergeMethod(_ method: MergeMethod, for repoFullName: String) {
+        mergeMethodChoices[repoFullName] = method
+        defaults.set(method.rawValue, forKey: DefaultsKeys.mergeMethod(for: repoFullName))
+    }
+}
+
 struct MissingTokenError: LocalizedError {
     var errorDescription: String? { "Add a GitHub token to load pull requests." }
 }
@@ -575,4 +596,8 @@ private enum DefaultsKeys {
     static let refreshInterval = "GithubPanel.refreshInterval"
     static let allSucceededHookScript = "GithubPanel.hooks.allSucceededScript"
     static let anyFailuresHookScript = "GithubPanel.hooks.anyFailuresScript"
+
+    static func mergeMethod(for repoFullName: String) -> String {
+        "GithubPanel.mergeMethod.\(repoFullName)"
+    }
 }
