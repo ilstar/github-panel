@@ -19,9 +19,15 @@ struct PRReviewRequestRow: View {
                         .lineLimit(1)
                         .help(pr.title)
 
-                    RowSubtitle(text: "\(pr.repoFullName)#\(String(pr.number))", detail: detailText) {
+                    RowSubtitle(text: Self.subtitleText(for: pr), detail: detailText) {
                         if pr.isDraft {
                             TagView(text: "DRAFT")
+                        }
+                        if let checkState = pr.checkState {
+                            Image(systemName: checkState.symbolName)
+                                .foregroundStyle(checkState.tint)
+                                .help(checkState.descriptionText)
+                                .accessibilityLabel(checkState.descriptionText)
                         }
                     }
                 }
@@ -51,10 +57,19 @@ struct PRReviewRequestRow: View {
         }
     }
 
+    /// "owner/repo#12 · +120 −30": where the pull request lives and how big it is.
+    static func subtitleText(for pr: ReviewRequestRow) -> String {
+        let place = "\(pr.repoFullName)#\(String(pr.number))"
+        guard let additions = pr.additions, let deletions = pr.deletions else { return place }
+        return "\(place) · +\(additions) −\(deletions)"
+    }
+
+    /// How long the author has waited on me, or when the pull request last changed when GitHub does not say.
     private var detailText: String {
-        let updated = "updated \(relativeFormatter.localizedString(for: pr.updatedAt, relativeTo: now))"
-        guard let author = pr.authorLogin else { return updated.capitalizedFirstLetter }
-        return "by \(author) · \(updated)"
+        let when = pr.requestedAt.map { "requested \(relativeFormatter.localizedString(for: $0, relativeTo: now))" }
+            ?? "updated \(relativeFormatter.localizedString(for: pr.updatedAt, relativeTo: now))"
+        guard let author = pr.authorLogin else { return when.capitalizedFirstLetter }
+        return "by \(author) · \(when)"
     }
 }
 

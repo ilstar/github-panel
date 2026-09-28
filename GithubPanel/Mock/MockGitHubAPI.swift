@@ -388,7 +388,8 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
     }
 
     private static func makeReviewRequests(now: Date) -> ReviewRequests {
-        func request(number: Int, title: String, author: String, isDraft: Bool = false) -> ReviewRequestRow {
+        func request(number: Int, title: String, author: String, isDraft: Bool = false,
+                     checkState: CheckState?, additions: Int, deletions: Int, hoursWaiting: Double) -> ReviewRequestRow {
             ReviewRequestRow(id: "mock/github-panel#\(number)",
                              title: title,
                              number: number,
@@ -396,14 +397,22 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
                              htmlURL: URL(string: "https://github.com/mock/github-panel/pull/\(number)")!,
                              authorLogin: author,
                              isDraft: isDraft,
-                             updatedAt: now.addingTimeInterval(TimeInterval(-(number - 300) * 3_600)))
+                             updatedAt: now.addingTimeInterval(TimeInterval(-(number - 300) * 3_600)),
+                             checkState: checkState,
+                             additions: additions,
+                             deletions: deletions,
+                             requestedAt: now.addingTimeInterval(-hoursWaiting * 3_600))
         }
         return ReviewRequests(fromMe: [
-            request(number: 301, title: "Review: tidy the settings window", author: "octocat"),
-            request(number: 302, title: "Review: faster diff parsing", author: "hubot")
+            request(number: 301, title: "Review: tidy the settings window", author: "octocat",
+                    checkState: .success, additions: 42, deletions: 18, hoursWaiting: 50),
+            request(number: 302, title: "Review: faster diff parsing", author: "hubot",
+                    checkState: .failure, additions: 380, deletions: 95, hoursWaiting: 5)
         ], fromMyTeams: [
-            request(number: 303, title: "Team review: rename the release task", author: "monalisa"),
-            request(number: 304, title: "Team review: draft icon refresh", author: "octocat", isDraft: true)
+            request(number: 303, title: "Team review: rename the release task", author: "monalisa",
+                    checkState: .pending, additions: 6, deletions: 6, hoursWaiting: 26),
+            request(number: 304, title: "Team review: draft icon refresh", author: "octocat", isDraft: true,
+                    checkState: nil, additions: 120, deletions: 0, hoursWaiting: 1)
         ])
     }
 

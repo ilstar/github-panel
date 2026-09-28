@@ -169,19 +169,27 @@ struct PRRow: View {
     }
 
     private var statusIcon: some View {
-        Group {
-            switch pr.status {
-            case .success:
-                RowIcon(systemName: "checkmark.circle.fill", color: Theme.green)
-            case .noChecks:
-                RowIcon(systemName: "minus.circle.fill", color: .secondary)
-            case .failure, .error:
-                RowIcon(systemName: "xmark.circle.fill", color: Theme.red)
-            case .pending:
-                RowIcon(systemName: "clock.circle.fill", color: Theme.amber)
-            case .unknown:
-                RowIcon(systemName: "questionmark.circle.fill", color: .secondary)
-            }
+        RowIcon(systemName: pr.status.symbolName, color: pr.status.tint)
+    }
+}
+
+extension CheckState {
+    var symbolName: String {
+        switch self {
+        case .success: return "checkmark.circle.fill"
+        case .noChecks: return "minus.circle.fill"
+        case .failure, .error: return "xmark.circle.fill"
+        case .pending: return "clock.circle.fill"
+        case .unknown: return "questionmark.circle.fill"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .success: return Theme.green
+        case .noChecks, .unknown: return .secondary
+        case .failure, .error: return Theme.red
+        case .pending: return Theme.amber
         }
     }
 }

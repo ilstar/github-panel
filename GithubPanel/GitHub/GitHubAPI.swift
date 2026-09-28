@@ -130,6 +130,7 @@ final class GitHubAPI: GitHubAPIClient {
     func fetchReviewRequests(token: String) async throws -> ReviewRequests {
         let query = """
         query {
+          viewer { login }
           direct: search(query: "is:pr is:open archived:false user-review-requested:@me sort:updated-desc", type: ISSUE, first: 50) {
             nodes { ...ReviewRequestFields }
           }
@@ -147,11 +148,31 @@ final class GitHubAPI: GitHubAPIClient {
           isDraft
           repository { nameWithOwner }
           author { login }
+          additions
+          deletions
+          statusCheckRollup {
+            state
+            contexts(first: 1) { totalCount }
+          }
+          timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT], last: 20) {
+            nodes {
+              ... on ReviewRequestedEvent {
+                createdAt
+                requestedReviewer {
+                  __typename
+                  ... on User { login }
+                }
+              }
+            }
+          }
         }
         """
         let response = try await graphQL(ReviewRequestsResponse.self,
                                          query: query, variables: [:], token: token)
-        return ReviewRequests(direct: response.direct.rows, all: response.all.rows)
+        let login = response.viewer?.login
+        // A direct request's wait starts when I was asked; a team request's when a team was.
+        return ReviewRequests(direct: response.direct.rows { $0.typename == "User" && (login == nil || $0.login == login) },
+                              all: response.all.rows { $0.typename == "Team" })
     }
 
     func enqueuePullRequest(token: String, pullRequestID: String) async throws {
@@ -762,22 +783,34 @@ private struct PullRequestNode: Decodable {
 }
 
 private struct ReviewRequestsResponse: Decodable {
+    let viewer: Author?
     let direct: Search
     let all: Search
 
     struct Search: Decodable {
         let nodes: [Node]
 
-        var rows: [ReviewRequestRow] {
+        /// `isMyRequest` picks the review-requested events that count as asking me.
+        func rows(isMyRequest: (Reviewer) -> Bool) -> [ReviewRequestRow] {
             nodes.map { pr in
-                ReviewRequestRow(id: "\(pr.repository.nameWithOwner)#\(pr.number)",
-                                 title: pr.title,
-                                 number: pr.number,
-                                 repoFullName: pr.repository.nameWithOwner,
-                                 htmlURL: pr.url,
-                                 authorLogin: pr.author?.login,
-                                 isDraft: pr.isDraft,
-                                 updatedAt: pr.updatedAt)
+                let requests = (pr.timelineItems?.nodes ?? []).filter { event in
+                    event.requestedReviewer.map(isMyRequest) ?? false
+                }
+                return ReviewRequestRow(id: "\(pr.repository.nameWithOwner)#\(pr.number)",
+                                        title: pr.title,
+                                        number: pr.number,
+                                        repoFullName: pr.repository.nameWithOwner,
+                                        htmlURL: pr.url,
+                                        authorLogin: pr.author?.login,
+                                        isDraft: pr.isDraft,
+                                        updatedAt: pr.updatedAt,
+                                        checkState: pr.statusCheckRollup.map {
+                                            CheckState(githubStatus: $0.state,
+                                                       hasCheckContexts: $0.contexts.map { $0.totalCount > 0 })
+                                        },
+                                        additions: pr.additions,
+                                        deletions: pr.deletions,
+                                        requestedAt: requests.compactMap(\.createdAt).max())
             }
         }
     }
@@ -790,6 +823,29 @@ private struct ReviewRequestsResponse: Decodable {
         let isDraft: Bool
         let repository: PullRequestNode.Repository
         let author: Author?
+        let additions: Int?
+        let deletions: Int?
+        let statusCheckRollup: StatusCheckRollup?
+        let timelineItems: Timeline?
+    }
+
+    struct Timeline: Decodable {
+        let nodes: [Event]
+    }
+
+    struct Event: Decodable {
+        let createdAt: Date?
+        let requestedReviewer: Reviewer?
+    }
+
+    struct Reviewer: Decodable {
+        let typename: String
+        let login: String?
+
+        enum CodingKeys: String, CodingKey {
+            case typename = "__typename"
+            case login
+        }
     }
 
     struct Author: Decodable {

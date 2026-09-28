@@ -211,6 +211,50 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertTrue(body.query.contains("is:pr is:open archived:false"))
     }
 
+    func testFetchReviewRequestsDecodesChecksSizeAndWhenIWasAsked() async throws {
+        let transport = MockHTTPTransport()
+        let asked = """
+        "timelineItems":{"nodes":[
+          {"createdAt":"2026-04-01T10:00:00Z","requestedReviewer":{"__typename":"User","login":"fred"}},
+          {"createdAt":"2026-04-02T10:00:00Z","requestedReviewer":{"__typename":"User","login":"hubot"}},
+          {"createdAt":"2026-04-03T10:00:00Z","requestedReviewer":{"__typename":"Team"}},
+          {"createdAt":"2026-04-04T10:00:00Z","requestedReviewer":{"__typename":"User","login":"fred"}},
+          {"createdAt":"2026-04-05T10:00:00Z","requestedReviewer":null}
+        ]}
+        """
+        let direct = """
+        {"id":"PR_a","title":"Direct","number":4,"url":"https://github.com/acme/widgets/pull/4",
+         "updatedAt":"2026-04-12T12:34:56Z","isDraft":false,
+         "repository":{"nameWithOwner":"acme/widgets"},"author":{"login":"octocat"},
+         "additions":120,"deletions":30,"statusCheckRollup":{"state":"FAILURE"},\(asked)}
+        """
+        let team = """
+        {"id":"PR_b","title":"Team","number":9,"url":"https://github.com/acme/gears/pull/9",
+         "updatedAt":"2026-04-13T12:34:56Z","isDraft":false,
+         "repository":{"nameWithOwner":"acme/gears"},"author":{"login":"hubot"},
+         "additions":1,"deletions":0,"statusCheckRollup":null,\(asked)}
+        """
+        transport.enqueue(json: """
+        {"data":{"viewer":{"login":"fred"},"direct":{"nodes":[\(direct)]},"all":{"nodes":[\(team),\(direct)]}}}
+        """)
+
+        let requests = try await GitHubAPI(transport: transport).fetchReviewRequests(token: "token")
+
+        let date = ISO8601DateFormatter()
+        let mine = try XCTUnwrap(requests.fromMe.first)
+        XCTAssertEqual(mine.checkState, .failure)
+        XCTAssertEqual(mine.additions, 120)
+        XCTAssertEqual(mine.deletions, 30)
+        // The latest request to me, not to someone else or a team.
+        XCTAssertEqual(mine.requestedAt, date.date(from: "2026-04-04T10:00:00Z"))
+        let teams = try XCTUnwrap(requests.fromMyTeams.first)
+        XCTAssertNil(teams.checkState)
+        XCTAssertEqual(teams.requestedAt, date.date(from: "2026-04-03T10:00:00Z"))
+        let body = try transport.graphQLBody(at: 0)
+        XCTAssertTrue(body.query.contains("viewer { login }"))
+        XCTAssertTrue(body.query.contains("timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT], last: 20)"))
+    }
+
     func testGraphQLErrorsAreSurfaced() async throws {
         let transport = MockHTTPTransport()
         transport.enqueue(json: #"{"data":null,"errors":[{"message":"Nope"},{"message":"Still nope"}]}"#)
