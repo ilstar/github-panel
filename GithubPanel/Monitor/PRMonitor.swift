@@ -524,6 +524,13 @@ final class PRMonitor: ObservableObject {
         await requireFreshRefresh(for: session)
     }
 
+    /// Submits a review, then refreshes To Review, which drops a pull request once I have reviewed it.
+    func submitReview(_ review: NewPullRequestReview, on reference: PullRequestReference) async throws {
+        guard let token = loadSessionToken() else { throw MissingTokenError() }
+        try await api.submitReview(token: token, reference: reference, review: review)
+        await refreshReviewRequests()
+    }
+
     func requestMarkReady(for row: PullRequestRow) async {
         guard row.isDraft, let token = loadSessionToken() else { return }
         let session = credentialSession

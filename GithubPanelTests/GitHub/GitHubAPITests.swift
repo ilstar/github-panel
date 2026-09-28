@@ -450,6 +450,7 @@ final class GitHubAPITests: XCTestCase {
                 .fetchPullRequestDetail(token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7))
 
             XCTAssertEqual(content.detail.canEdit, testCase.canEdit, testCase.json)
+            XCTAssertEqual(content.detail.isViewerAuthor, testCase.json.contains(#""viewerDidAuthor":true"#), testCase.json)
         }
     }
 
@@ -640,6 +641,43 @@ final class GitHubAPITests: XCTestCase {
             XCTFail("Expected an error")
         } catch {
             XCTAssertEqual(error.localizedDescription, "GitHub API error (422): Validation Failed")
+        }
+    }
+
+    func testSubmitReviewPostsTheVerdictAgainstTheLoadedCommit() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: #"{"id":80}"#)
+        transport.enqueue(json: #"{"id":81}"#)
+        let api = GitHubAPI(transport: transport)
+        let reference = PullRequestReference(repoFullName: "acme/widgets", number: 7)
+
+        try await api.submitReview(token: "token", reference: reference,
+                                   review: NewPullRequestReview(event: .requestChanges, body: "Please add tests.", commitID: "abc123"))
+        try await api.submitReview(token: "token", reference: reference,
+                                   review: NewPullRequestReview(event: .approve, body: "", commitID: "abc123"))
+
+        let changes = transport.requests[0]
+        XCTAssertEqual(changes.httpMethod, "POST")
+        XCTAssertEqual(changes.url?.path, "/repos/acme/widgets/pulls/7/reviews")
+        XCTAssertEqual(changes.jsonBody?["event"] as? String, "REQUEST_CHANGES")
+        XCTAssertEqual(changes.jsonBody?["body"] as? String, "Please add tests.")
+        XCTAssertEqual(changes.jsonBody?["commit_id"] as? String, "abc123")
+        // A blank approval sends no body at all.
+        XCTAssertEqual(transport.requests[1].jsonBody?["event"] as? String, "APPROVE")
+        XCTAssertNil(transport.requests[1].jsonBody?["body"])
+    }
+
+    func testSubmitReviewSurfacesGitHubsRefusal() async {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: #"{"message":"Unprocessable Entity"}"#, statusCode: 422)
+
+        do {
+            try await GitHubAPI(transport: transport).submitReview(
+                token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7),
+                review: NewPullRequestReview(event: .approve, body: "", commitID: "abc123"))
+            XCTFail("Expected an error")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, "GitHub API error (422): Unprocessable Entity")
         }
     }
 

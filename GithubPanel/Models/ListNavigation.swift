@@ -8,6 +8,18 @@ enum ListNavigation {
         guard let current, let index = ids.firstIndex(of: current) else { return ids.first }
         return ids[min(max(index + offset, 0), ids.count - 1)]
     }
+
+    /// The id to select once the list changes from `oldIDs` to `newIDs`: the current one while it is still listed,
+    /// otherwise the next row that is, so reviewing or merging down the list does not jump back to its top.
+    static func selection<ID: Equatable>(after current: ID?, oldIDs: [ID], newIDs: [ID]) -> ID? {
+        guard let current, let index = oldIDs.firstIndex(of: current) else {
+            return current.flatMap { newIDs.contains($0) ? $0 : nil } ?? newIDs.first
+        }
+        if newIDs.contains(current) { return current }
+        return oldIDs[(index + 1)...].first { newIDs.contains($0) }
+            ?? oldIDs[..<index].last { newIDs.contains($0) }
+            ?? newIDs.first
+    }
 }
 
 extension PullRequestDetailTab {

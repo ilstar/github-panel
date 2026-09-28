@@ -14,6 +14,9 @@ struct ContentView: View {
     @State private var selectedPRID: String?
     @State private var selectedReviewID: String?
     @State private var selectedHistoryID: String?
+    /// The rows last seen on My PRs and To Review, to pick the row that takes a removed one's place.
+    @State private var openRowIDs: [String] = []
+    @State private var reviewRowIDs: [String] = []
     @State private var mergeInFlight: Set<String> = []
     @State private var pageScroller = PageScroller()
     @AppStorage(ListPaneLayout.widthDefaultsKey) private var listPaneWidth: Double = ListPaneLayout.defaultWidth
@@ -331,14 +334,14 @@ struct ContentView: View {
             }
             .scrollIndicators(.hidden)
             .onAppear {
+                openRowIDs = monitor.prRows.map(\.id)
                 if selectedPRID == nil {
                     selectedPRID = monitor.prRows.first?.id
                 }
             }
             .onChange(of: monitor.prRows.map { $0.id }) { newIDs in
-                if selectedPRID == nil || !newIDs.contains(selectedPRID ?? "") {
-                    selectedPRID = newIDs.first
-                }
+                selectedPRID = ListNavigation.selection(after: selectedPRID, oldIDs: openRowIDs, newIDs: newIDs)
+                openRowIDs = newIDs
             }
             .onChange(of: selectedPRID) { id in
                 scrollToSelection(id, with: proxy)
@@ -384,14 +387,14 @@ struct ContentView: View {
             }
         }
         .onAppear {
+            reviewRowIDs = monitor.reviewRequests.rows.map(\.id)
             if selectedReviewID == nil {
                 selectedReviewID = monitor.reviewRequests.rows.first?.id
             }
         }
         .onChange(of: monitor.reviewRequests.rows.map { $0.id }) { newIDs in
-            if selectedReviewID == nil || !newIDs.contains(selectedReviewID ?? "") {
-                selectedReviewID = newIDs.first
-            }
+            selectedReviewID = ListNavigation.selection(after: selectedReviewID, oldIDs: reviewRowIDs, newIDs: newIDs)
+            reviewRowIDs = newIDs
         }
     }
 

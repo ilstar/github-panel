@@ -21,6 +21,26 @@ final class ListNavigationTests: XCTestCase {
         XCTAssertEqual(ListNavigation.neighbor(of: "gone", in: ids, offset: 1), "a")
     }
 
+    func testSelectionStaysWhileTheRowIsListed() {
+        XCTAssertEqual(ListNavigation.selection(after: "b", oldIDs: ids, newIDs: ["c", "b"]), "b")
+    }
+
+    func testSelectionMovesToTheNextRowWhenItsRowLeaves() {
+        XCTAssertEqual(ListNavigation.selection(after: "a", oldIDs: ids, newIDs: ["b", "c"]), "b")
+        XCTAssertEqual(ListNavigation.selection(after: "b", oldIDs: ids, newIDs: ["a", "c"]), "c")
+    }
+
+    func testSelectionMovesUpWhenTheLastRowLeaves() {
+        XCTAssertEqual(ListNavigation.selection(after: "c", oldIDs: ids, newIDs: ["a", "b"]), "b")
+    }
+
+    func testSelectionStartsAtTheTopWithoutAPreviousRow() {
+        XCTAssertEqual(ListNavigation.selection(after: nil, oldIDs: [], newIDs: ids), "a")
+        XCTAssertEqual(ListNavigation.selection(after: "gone", oldIDs: [], newIDs: ids), "a")
+        XCTAssertEqual(ListNavigation.selection(after: "b", oldIDs: [], newIDs: ids), "b")
+        XCTAssertNil(ListNavigation.selection(after: "a", oldIDs: ids, newIDs: []))
+    }
+
     func testEmptyListHasNoNeighbor() {
         XCTAssertNil(ListNavigation.neighbor(of: "a", in: [String](), offset: 1))
     }

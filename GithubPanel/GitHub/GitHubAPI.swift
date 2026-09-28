@@ -272,6 +272,7 @@ final class GitHubAPI: GitHubAPIClient {
         let viewed = viewer?.viewedFiles ?? []
         var detail = pull.detail(reference: reference)
         detail.canEdit = viewer?.canEdit ?? false
+        detail.isViewerAuthor = viewer?.isAuthor ?? false
         return PullRequestDetailContent(detail: detail,
                                         files: files.map { file in
                                             var file = file.file
@@ -385,9 +386,24 @@ final class GitHubAPI: GitHubAPIClient {
         _ = try await decode(Updated.self, request: request)
     }
 
+    /// Submits a review with its verdict in one step, so GitHub publishes it right away instead of keeping it pending.
+    func submitReview(token: String, reference: PullRequestReference, review: NewPullRequestReview) async throws {
+        let (owner, name) = try repoParts(reference.repoFullName)
+        var request = makeRequest(path: "/repos/\(owner)/\(name)/pulls/\(reference.number)/reviews", token: token)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var fields: [String: String] = ["event": review.event.rawValue, "commit_id": review.commitID]
+        if !review.body.isEmpty {
+            fields["body"] = review.body
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: fields)
+        struct Created: Decodable { let id: Int }
+        _ = try await decode(Created.self, request: request)
+    }
+
     /// Paths the viewer marked as viewed, and whether they may edit the pull request.
     /// GitHub reports files changed since they were viewed as `DISMISSED`, not `VIEWED`.
-    private func fetchViewerState(token: String, owner: String, name: String, number: Int) async throws -> (viewedFiles: Set<String>, canEdit: Bool) {
+    private func fetchViewerState(token: String, owner: String, name: String, number: Int) async throws -> (viewedFiles: Set<String>, canEdit: Bool, isAuthor: Bool) {
         let query = """
         query($owner: String!, $name: String!, $number: Int!) {
           repository(owner: $owner, name: $name) {
@@ -405,8 +421,9 @@ final class GitHubAPI: GitHubAPIClient {
                                          token: token)
         let pullRequest = response.repository?.pullRequest
         let nodes = pullRequest?.files?.nodes ?? []
-        let canEdit = pullRequest?.viewerDidAuthor == true && pullRequest?.viewerCanUpdate == true
-        return (Set(nodes.filter { $0.viewerViewedState == "VIEWED" }.map(\.path)), canEdit)
+        let isAuthor = pullRequest?.viewerDidAuthor == true
+        let canEdit = isAuthor && pullRequest?.viewerCanUpdate == true
+        return (Set(nodes.filter { $0.viewerViewedState == "VIEWED" }.map(\.path)), canEdit, isAuthor)
     }
 
     private func repoParts(_ repoFullName: String) throws -> (owner: String, name: String) {

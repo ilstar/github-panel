@@ -7,7 +7,7 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
     private let user = GitHubUser(login: "mock-user")
     private var pullRequests: [String: PullRequestRow]
     private let history: [PullRequestHistoryRow]
-    private let reviewRequests: ReviewRequests
+    private var reviewRequests: ReviewRequests
     /// Viewed file paths, keyed by pull request node ID.
     private var viewedFiles: [String: Set<String>] = [:]
     /// Comments, keyed by pull request reference ID. Filled with fixtures on first read.
@@ -47,7 +47,15 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
     }
 
     func fetchReviewRequests(token: String) async throws -> ReviewRequests {
-        reviewRequests
+        locked { reviewRequests }
+    }
+
+    /// Like GitHub, a review answers the request, so the pull request leaves To Review.
+    func submitReview(token: String, reference: PullRequestReference, review: NewPullRequestReview) async throws {
+        locked {
+            reviewRequests = ReviewRequests(fromMe: reviewRequests.fromMe.filter { $0.id != reference.id },
+                                            fromMyTeams: reviewRequests.fromMyTeams.filter { $0.id != reference.id })
+        }
     }
 
     func enqueuePullRequest(token: String, pullRequestID: String) async throws {
@@ -111,6 +119,7 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
                                        changedFiles: Self.detailFiles.count,
                                        commits: 3,
                                        canEdit: isOwn,
+                                       isViewerAuthor: isOwn,
                                        updatedAt: pullRequests[reference.id]?.updatedAt)
         let viewed = viewedFiles[nodeID] ?? []
         let files = Self.detailFiles.map { file in

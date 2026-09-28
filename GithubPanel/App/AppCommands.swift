@@ -91,6 +91,12 @@ struct AppCommands: Commands {
             .keyboardShortcut(.addComment)
             .disabled(detail == nil)
 
+            Button("Review Changes…") {
+                detail?.review?()
+            }
+            .keyboardShortcut(.reviewChanges)
+            .disabled(detail?.review == nil)
+
             Divider()
 
             Button("Show Previous Tab") {

@@ -11,6 +11,7 @@ final class PullRequestDetailViewModel: ObservableObject {
     typealias PostComment = (NewPullRequestComment, PullRequestReference) async throws -> Void
     /// Saves a new title, description, or both. Nil leaves that field as it is on GitHub.
     typealias Edit = (PullRequestReference, String?, String?) async throws -> Void
+    typealias SubmitReview = (NewPullRequestReview, PullRequestReference) async throws -> Void
 
     let reference: PullRequestReference
     /// The last loaded content. Kept when a reload fails so the window does not go blank.
@@ -25,12 +26,15 @@ final class PullRequestDetailViewModel: ObservableObject {
     @Published private(set) var comments: PullRequestComments?
     /// Review threads for each file, keyed by filename.
     @Published private(set) var threadIndexes: [String: ReviewThreadIndex] = [:]
+    /// The verdict of the review submitted from this view, once GitHub accepts it.
+    @Published private(set) var submittedReview: PullRequestReviewEvent?
 
     private let fetch: Fetch
     private let syncViewed: SetViewed
     private let fetchComments: FetchComments
     private let sendComment: PostComment
     private let sendEdit: Edit
+    private let sendReview: SubmitReview
     private let cache: PullRequestDetailCache?
     /// Presentations built so far, keyed by filename and whether whitespace changes are hidden.
     private var presentations: [PresentationKey: DiffPresentation] = [:]
@@ -46,6 +50,7 @@ final class PullRequestDetailViewModel: ObservableObject {
          fetchComments: @escaping FetchComments = { _ in .empty },
          postComment: @escaping PostComment = { _, _ in },
          edit: @escaping Edit = { _, _, _ in },
+         submitReview: @escaping SubmitReview = { _, _ in },
          cache: PullRequestDetailCache? = nil) {
         self.reference = reference
         self.fetch = fetch
@@ -53,6 +58,7 @@ final class PullRequestDetailViewModel: ObservableObject {
         self.fetchComments = fetchComments
         self.sendComment = postComment
         self.sendEdit = edit
+        self.sendReview = submitReview
         self.cache = cache
         if let cached = cache?.entry(for: reference) {
             apply(cached.content)
@@ -75,6 +81,9 @@ final class PullRequestDetailViewModel: ObservableObject {
                   },
                   edit: { [monitor] reference, title, body in
                       try await monitor.editPullRequest(reference, title: title, body: body)
+                  },
+                  submitReview: { [monitor] review, reference in
+                      try await monitor.submitReview(review, on: reference)
                   },
                   cache: monitor.detailCache)
     }
@@ -152,6 +161,21 @@ final class PullRequestDetailViewModel: ObservableObject {
         detail.body = body ?? detail.body
         content = PullRequestDetailContent(detail: detail, files: current.files)
         cacheContent()
+    }
+
+    /// Whether the viewer may approve or request changes. GitHub does not let authors review their own pull request.
+    var canReview: Bool {
+        guard let detail = content?.detail else { return false }
+        return !detail.isViewerAuthor && (detail.state == .open || detail.state == .draft)
+    }
+
+    /// Submits a review of the head commit that was loaded. Throws when GitHub refuses it, so the form can keep the draft.
+    func submitReview(_ event: PullRequestReviewEvent, body: String) async throws {
+        guard canReview, let commitID = content?.detail.headSHA else { return }
+        let body = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !event.requiresBody || !body.isEmpty else { return }
+        try await sendReview(NewPullRequestReview(event: event, body: body, commitID: commitID), reference)
+        submittedReview = event
     }
 
     /// Posts a new review thread on a diff line, against the head commit that was loaded.
