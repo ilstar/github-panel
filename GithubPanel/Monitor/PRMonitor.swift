@@ -24,6 +24,8 @@ final class PRMonitor: ObservableObject {
     @Published var historyPage: Int = 1
     @Published var historyTotalCount: Int = 0
     let isUsingMockData: Bool
+    /// A pull request a clicked notification asked to show. The main window selects it, then clears this.
+    @Published var pullRequestToShow: PullRequestToShow?
     /// Details and comments of pull requests loaded so far, shared by every detail view.
     let detailCache = PullRequestDetailCache()
     @Published var refreshInterval: TimeInterval {
@@ -64,6 +66,11 @@ final class PRMonitor: ObservableObject {
     private var refreshRevision = 0
     private var prefetchTask: Task<Void, Never>?
     private var lastStates: [String: CheckState] = [:]
+    private var lastReviewStatuses: [String: PullRequestReviewStatus] = [:]
+    /// Review requests seen since the token was set. Nil until the first load, so the first list posts nothing.
+    private var knownReviewRequestIDs: Set<String>?
+    /// Main windows showing the list. A clicked notification opens GitHub while there are none.
+    private var listWindowCount = 0
     private var nextTimerRefreshAt: Date?
     private var consecutiveThrottledFailures = 0
     private let maxThrottledBackoff: TimeInterval = 30 * 60
@@ -147,6 +154,8 @@ final class PRMonitor: ObservableObject {
         consecutiveThrottledFailures = 0
         prefetchTask?.cancel()
         prefetchTask = nil
+        lastReviewStatuses = [:]
+        knownReviewRequestIDs = nil
         detailCache.removeAll()
         isLoading = false
         isHistoryLoading = false
@@ -292,6 +301,7 @@ final class PRMonitor: ObservableObject {
         do {
             let requests = try await api.fetchReviewRequests(token: token)
             guard session == credentialSession else { return }
+            notifyAboutNewReviewRequests(requests)
             setReviewRequests(requests)
             lastReviewRequestsRefreshAt = dateProvider.now
         } catch {
@@ -456,10 +466,42 @@ final class PRMonitor: ObservableObject {
                 runHookIfConfigured(for: pr)
             }
             lastStates[pr.id] = pr.status
+            if let previous = lastReviewStatuses[pr.id] {
+                notifyAboutNewReviews(on: pr, previous: previous)
+            }
+            lastReviewStatuses[pr.id] = pr.reviewStatus
         }
 
         // Remove states for PRs that are no longer in the list.
         lastStates = lastStates.filter { seen.contains($0.key) }
+        lastReviewStatuses = lastReviewStatuses.filter { seen.contains($0.key) }
+    }
+
+    /// Posts one notification for reviewers who approved since the last refresh, and one for those who asked for changes.
+    private func notifyAboutNewReviews(on pr: PullRequestRow, previous: PullRequestReviewStatus) {
+        let approvers = pr.reviewStatus.approvedBy.filter { !previous.approvedBy.contains($0) }
+        let requesters = pr.reviewStatus.changesRequestedBy.filter { !previous.changesRequestedBy.contains($0) }
+        if !approvers.isEmpty {
+            notificationPoster.postPullRequestNotification(
+                PullRequestNotification(kind: .approved(by: approvers), reference: pr.reference,
+                                        pullRequestTitle: pr.title, htmlURL: pr.htmlURL))
+        }
+        if !requesters.isEmpty {
+            notificationPoster.postPullRequestNotification(
+                PullRequestNotification(kind: .changesRequested(by: requesters), reference: pr.reference,
+                                        pullRequestTitle: pr.title, htmlURL: pr.htmlURL))
+        }
+    }
+
+    /// Posts a notification for each ready pull request that asks for my review since the last refresh.
+    private func notifyAboutNewReviewRequests(_ requests: ReviewRequests) {
+        defer { knownReviewRequestIDs = Set(requests.rows.map(\.id)) }
+        guard let known = knownReviewRequestIDs else { return }
+        for row in requests.rows where !known.contains(row.id) && !row.isDraft {
+            notificationPoster.postPullRequestNotification(
+                PullRequestNotification(kind: .reviewRequested(by: row.authorLogin), reference: row.reference,
+                                        pullRequestTitle: row.title, htmlURL: row.htmlURL))
+        }
     }
 
     private func runHookIfConfigured(for pr: PullRequestRow) {
@@ -578,7 +620,41 @@ final class PRMonitor: ObservableObject {
     }
 }
 
+/// Which pull request to select, and on which tab. No tab when it is on neither list, so it opens in its own window.
+struct PullRequestToShow: Equatable {
+    let reference: PullRequestReference
+    let tab: PullRequestTab?
+}
+
 extension PRMonitor {
+    func listWindowAppeared() {
+        listWindowCount += 1
+    }
+
+    func listWindowDisappeared() {
+        listWindowCount = max(0, listWindowCount - 1)
+    }
+
+    /// Asks the main window to show a pull request, switching to the tab that lists it.
+    /// Returns false when no main window is open to show it.
+    @discardableResult
+    func showPullRequest(_ reference: PullRequestReference) -> Bool {
+        guard listWindowCount > 0 else { return false }
+        let tab: PullRequestTab?
+        if prRows.contains(where: { $0.reference == reference }) {
+            tab = .open
+        } else if reviewRequests.rows.contains(where: { $0.reference == reference }) {
+            tab = .reviews
+        } else {
+            tab = nil
+        }
+        if let tab {
+            selectedTab = tab
+        }
+        pullRequestToShow = PullRequestToShow(reference: reference, tab: tab)
+        return true
+    }
+
     /// The method Merge and Enable auto-merge use: the one picked for the repository if it still allows it,
     /// otherwise the one GitHub suggests.
     func mergeMethod(for row: PullRequestRow) -> MergeMethod {

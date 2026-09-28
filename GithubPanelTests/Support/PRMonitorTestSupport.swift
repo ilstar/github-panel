@@ -187,6 +187,11 @@ final class FakeNotificationPoster: NotificationPosting {
     }
 
     private(set) var posts: [Post] = []
+    private(set) var reviewPosts: [PullRequestNotification] = []
+
+    func postPullRequestNotification(_ notification: PullRequestNotification) {
+        reviewPosts.append(notification)
+    }
 
     func postStatusNotification(state: CheckState,
                                 title: String,

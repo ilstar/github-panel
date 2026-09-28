@@ -54,7 +54,16 @@ struct ContentView: View {
         .background(KeyCommandMonitor(handler: handleKeyCommand))
         .focusedSceneValue(\.pullRequestList, listActions)
         .onAppear {
+            monitor.listWindowAppeared()
             monitor.start()
+        }
+        .onDisappear {
+            monitor.listWindowDisappeared()
+        }
+        .onChange(of: monitor.pullRequestToShow) { request in
+            guard let request else { return }
+            show(request)
+            monitor.pullRequestToShow = nil
         }
         .onReceive(minuteTicker) { tick in
             now = tick
@@ -744,6 +753,19 @@ struct ContentView: View {
         return PrimaryAction(title: state.title(mergeMethod: monitor.mergeMethod(for: pr)), isEnabled: state.isClickable) {
             actOnPullRequest(pr: pr)
         }
+    }
+
+    /// Selects the pull request a notification was about, or opens it in its own window when neither list has it.
+    private func show(_ request: PullRequestToShow) {
+        switch request.tab {
+        case .open:
+            selectedPRID = request.reference.id
+        case .reviews:
+            selectedReviewID = request.reference.id
+        case .history, nil:
+            openWindow(value: request.reference)
+        }
+        AppVisibility.show()
     }
 
     /// Row clicks show the PR on the right and hand the keyboard back to the list; ⌘-click also opens it on GitHub.
