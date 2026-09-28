@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="340" viewBox="0 0 480 340">
+  <!-- Ground -->
+  <ellipse cx="240" cy="300" rx="200" ry="9" fill="#3D4A5C" opacity="0.08"/>
+
+  <!-- Clouds -->
+  <g fill="#FFFFFF" stroke="#8C98AA" stroke-width="2.5" stroke-linejoin="round">
+    <path d="M118 108 h72 a13 13 0 0 0 -3 -25 a20 20 0 0 0 -35 -12 a15 15 0 0 0 -27 10 a13 13 0 0 0 -7 27 z"/>
+    <path d="M300 74 h84 a15 15 0 0 0 -4 -29 a23 23 0 0 0 -40 -13 a17 17 0 0 0 -31 12 a15 15 0 0 0 -9 30 z"/>
+  </g>
+
+  <!-- Check badge -->
+  <circle cx="72" cy="170" r="21" fill="#FFFFFF" stroke="#8C98AA" stroke-width="2.5"/>
+  <path d="M62 170 l7 7 l13 -14" fill="none" stroke="#8C98AA" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Code badge -->
+  <rect x="388" y="112" width="42" height="42" rx="9" fill="#FFFFFF" stroke="#8C98AA" stroke-width="2.5"/>
+  <path d="M404 124 l-6 9 l6 9 M414 124 l6 9 l-6 9" fill="none" stroke="#8C98AA" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Sparkles -->
+  <g fill="#B4BFCE">
+    <path d="M250 38 q2 10 12 12 q-10 2 -12 12 q-2 -10 -12 -12 q10 -2 12 -12 z"/>
+    <path d="M140 196 q1.5 7 8 8 q-6.5 1 -8 8 q-1.5 -7 -8 -8 q6.5 -1 8 -8 z"/>
+    <path d="M436 206 q1.5 7 8 8 q-6.5 1 -8 8 q-1.5 -7 -8 -8 q6.5 -1 8 -8 z"/>
+  </g>
+
+  <!-- Plant -->
+  <g stroke="#8C98AA" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M60 236 v34" fill="none"/>
+    <path d="M60 250 c-18 -2 -26 -14 -24 -26 c14 0 24 10 24 26 z" fill="#E3E8EF"/>
+    <path d="M60 244 c16 -4 22 -18 18 -30 c-14 2 -20 14 -18 30 z" fill="#E3E8EF"/>
+    <path d="M40 268 h40 l-5 30 h-30 z" fill="#FFFFFF"/>
+  </g>
+
+  <!-- Laptop -->
+  <g>
+    <path d="M292 290 l8 -86 a8 8 0 0 1 8 -7 h86 a6 6 0 0 1 6 7 l-8 86 z" fill="#4E5B6E" stroke="#3D4A5C" stroke-width="3" stroke-linejoin="round"/>
+    <rect x="272" y="288" width="142" height="11" rx="5.5" fill="#3D4A5C"/>
+    <g fill="none" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round">
+      <circle cx="330" cy="224" r="6"/>
+      <circle cx="326" cy="264" r="6"/>
+      <circle cx="366" cy="232" r="6"/>
+      <path d="M329.5 230 l-3 28"/>
+      <path d="M365 238 c-1 14 -30 12 -37 21"/>
+    </g>
+  </g>
+
+  <!-- Cat, seen from behind, looking at the laptop -->
+  <g fill="#3D4A5C" stroke="#3D4A5C" stroke-linejoin="round">
+    <path d="M156 292 c-40 4 -62 -22 -44 -36 c10 -7 22 0 18 10" fill="none" stroke-width="13" stroke-linecap="round"/>
+    <path d="M146 298 c-8 -52 18 -86 60 -86 c42 0 66 34 58 86 z" stroke-width="2"/>
+    <ellipse cx="274" cy="266" rx="15" ry="9" stroke-width="2"/>
+    <path d="M166 150 l4 -40 l30 26 z" stroke-width="8"/>
+    <path d="M208 136 l32 -26 l2 40 z" stroke-width="8"/>
+    <ellipse cx="204" cy="172" rx="52" ry="47" stroke-width="2"/>
+  </g>
+  <g stroke="#3D4A5C" stroke-width="2.5" stroke-linecap="round">
+    <path d="M252 170 l26 -8"/>
+    <path d="M253 180 l27 2"/>
+  </g>
+
+  <!-- Mug -->
+  <g stroke="#8C98AA" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M428 256 c-6 -8 6 -12 0 -20 M440 256 c-6 -8 6 -12 0 -20" fill="none" opacity="0.7"/>
+    <path d="M452 272 c14 0 14 18 0 18" fill="none"/>
+    <path d="M418 266 h36 v22 a10 10 0 0 1 -10 10 h-16 a10 10 0 0 1 -10 -10 z" fill="#FFFFFF"/>
+  </g>
+</svg>

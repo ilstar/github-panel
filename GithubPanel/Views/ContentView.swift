@@ -1,8 +1,35 @@
 import SwiftUI
 import AppKit
 
-enum EmptyPullRequestsBackground {
+/// The illustration centered in the sidebar panel when there are no pull requests.
+struct EmptyPullRequestsBackground: View {
     static let imageName = "NoPullRequestsBackground"
+    static let title = "No Pull Requests"
+    static let message = "You're all caught up!"
+    let isVisible: Bool
+
+    var body: some View {
+        // Drawn from an overlay so the illustration never sizes the panel it sits in.
+        Color.clear
+            .overlay {
+                if isVisible {
+                    VStack(spacing: 6) {
+                        Image(Self.imageName)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: 300)
+                            .accessibilityHidden(true)
+                        Text(Self.title)
+                            .font(.title3.weight(.semibold))
+                        Text(Self.message)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(24)
+                    .transition(.opacity)
+                }
+            }
+    }
 }
 
 struct ContentView: View {
@@ -99,17 +126,8 @@ struct ContentView: View {
     /// The list's floating panel. It sits in the window's background, so the rows draw over its gradient.
     private var sidebarPanel: some View {
         let shape = RoundedRectangle(cornerRadius: Theme.sidebarCornerRadius, style: .continuous)
-        return ZStack {
-            if showsEmptyPullRequestBackground {
-                Image(EmptyPullRequestsBackground.imageName)
-                    .resizable()
-                    .scaledToFill()
-                    .accessibilityHidden(true)
-                    .transition(.opacity)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .clipShape(shape)
+        return EmptyPullRequestsBackground(isVisible: showsEmptyPullRequestBackground)
+            .clipShape(shape)
         .glassSurface(.panel, in: shape)
     }
 
