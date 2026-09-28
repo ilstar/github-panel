@@ -9,6 +9,14 @@ final class ContentViewTests: XCTestCase {
         XCTAssertNotNil(NSImage(named: EmptyPullRequestsBackground.imageName))
     }
 
+    func testEmptyPullRequestsBackgroundKeepsToTheSidebarsSize() {
+        // The image is wider than the sidebar, and filling it must not widen the panel past its frame.
+        let controller = NSHostingController(rootView: EmptyPullRequestsBackground(isVisible: true))
+        let size = controller.sizeThatFits(in: CGSize(width: 300, height: 800))
+        XCTAssertEqual(size.width, 300, accuracy: 1)
+        XCTAssertEqual(size.height, 800, accuracy: 1)
+    }
+
     func testTabPickerListsTheTabsInOrder() {
         XCTAssertEqual(PullRequestTabPicker.segments.map(\.value), PullRequestTab.allCases)
         XCTAssertEqual(PullRequestTabPicker.segments.map(\.title), ["My PRs", "To Review", "History"])
