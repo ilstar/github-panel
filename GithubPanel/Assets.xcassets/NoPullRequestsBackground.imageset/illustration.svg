@@ -1,10 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="480" height="340" viewBox="0 0 480 340">
+  <defs>
+    <linearGradient id="fur" gradientUnits="userSpaceOnUse" x1="170" y1="80" x2="230" y2="300">
+      <stop offset="0" stop-color="#56657A"/>
+      <stop offset="1" stop-color="#3D4A5C"/>
+    </linearGradient>
+  </defs>
   <!-- Ground -->
   <ellipse cx="240" cy="300" rx="200" ry="9" fill="#3D4A5C" opacity="0.08"/>
 
   <!-- Clouds -->
   <g fill="#FFFFFF" stroke="#8C98AA" stroke-width="2.5" stroke-linejoin="round">
-    <path d="M118 108 h72 a13 13 0 0 0 -3 -25 a20 20 0 0 0 -35 -12 a15 15 0 0 0 -27 10 a13 13 0 0 0 -7 27 z"/>
+    <path d="M68 108 h72 a13 13 0 0 0 -3 -25 a20 20 0 0 0 -35 -12 a15 15 0 0 0 -27 10 a13 13 0 0 0 -7 27 z"/>
     <path d="M300 74 h84 a15 15 0 0 0 -4 -29 a23 23 0 0 0 -40 -13 a17 17 0 0 0 -31 12 a15 15 0 0 0 -9 30 z"/>
   </g>
 
@@ -19,7 +25,7 @@
   <!-- Sparkles -->
   <g fill="#B4BFCE">
     <path d="M250 38 q2 10 12 12 q-10 2 -12 12 q-2 -10 -12 -12 q10 -2 12 -12 z"/>
-    <path d="M140 196 q1.5 7 8 8 q-6.5 1 -8 8 q-1.5 -7 -8 -8 q6.5 -1 8 -8 z"/>
+    <path d="M120 196 q1.5 7 8 8 q-6.5 1 -8 8 q-1.5 -7 -8 -8 q6.5 -1 8 -8 z"/>
     <path d="M436 206 q1.5 7 8 8 q-6.5 1 -8 8 q-1.5 -7 -8 -8 q6.5 -1 8 -8 z"/>
   </g>
 
@@ -31,31 +37,35 @@
     <path d="M40 268 h40 l-5 30 h-30 z" fill="#FFFFFF"/>
   </g>
 
-  <!-- Laptop -->
+  <!-- Laptop, partly behind the cat -->
   <g>
-    <path d="M292 290 l8 -86 a8 8 0 0 1 8 -7 h86 a6 6 0 0 1 6 7 l-8 86 z" fill="#4E5B6E" stroke="#3D4A5C" stroke-width="3" stroke-linejoin="round"/>
-    <rect x="272" y="288" width="142" height="11" rx="5.5" fill="#3D4A5C"/>
+    <path d="M270 292 l10 -92 a8 8 0 0 1 8 -7 h88 a6 6 0 0 1 6 7 l-8 92 z" fill="#4E5B6E" stroke="#3D4A5C" stroke-width="3" stroke-linejoin="round"/>
+    <rect x="262" y="290" width="152" height="10" rx="5" fill="#3D4A5C"/>
     <g fill="none" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round">
-      <circle cx="330" cy="224" r="6"/>
-      <circle cx="326" cy="264" r="6"/>
-      <circle cx="366" cy="232" r="6"/>
-      <path d="M329.5 230 l-3 28"/>
-      <path d="M365 238 c-1 14 -30 12 -37 21"/>
+      <circle cx="326" cy="224" r="6.5"/>
+      <circle cx="322" cy="266" r="6.5"/>
+      <circle cx="362" cy="232" r="6.5"/>
+      <path d="M325.3 230.5 l-2.6 29"/>
+      <path d="M361 238.5 c-1 15 -30 13 -36 21.5"/>
     </g>
   </g>
 
-  <!-- Cat, seen from behind, looking at the laptop -->
-  <g fill="#3D4A5C" stroke="#3D4A5C" stroke-linejoin="round">
-    <path d="M156 292 c-40 4 -62 -22 -44 -36 c10 -7 22 0 18 10" fill="none" stroke-width="13" stroke-linecap="round"/>
-    <path d="M146 298 c-8 -52 18 -86 60 -86 c42 0 66 34 58 86 z" stroke-width="2"/>
-    <ellipse cx="274" cy="266" rx="15" ry="9" stroke-width="2"/>
-    <path d="M166 150 l4 -40 l30 26 z" stroke-width="8"/>
-    <path d="M208 136 l32 -26 l2 40 z" stroke-width="8"/>
-    <ellipse cx="204" cy="172" rx="52" ry="47" stroke-width="2"/>
+  <!-- Cat, seen from behind, reaching for the laptop -->
+  <g fill="url(#fur)">
+    <path d="M178 290 C142 298 106 292 104 264 C103 246 122 238 134 250" fill="none" stroke="url(#fur)" stroke-width="17" stroke-linecap="round"/>
+    <path d="M184 206 C164 228 156 262 164 298 L262 298 C268 274 262 240 244 208 Z"/>
+    <path d="M236 262 C254 254 282 258 298 268 C310 276 306 294 292 295 C274 296 256 297 240 297 Z"/>
+    <path d="M144 178 C142 158 147 140 154 128 C154 110 157 94 164 84 C167 79 174 79 178 83 L200 113 C204 112 208 112 212 112 C220 112 228 113 234 115 L256 94 C260 90 266 92 267 98 C270 112 271 128 270 142 C277 152 282 164 282 178 C280 210 252 226 212 226 C172 226 146 210 144 178 Z"/>
   </g>
-  <g stroke="#3D4A5C" stroke-width="2.5" stroke-linecap="round">
-    <path d="M252 170 l26 -8"/>
-    <path d="M253 180 l27 2"/>
+  <g fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-width="2">
+    <path d="M164 130 C172 118 190 112 206 112" opacity="0.7"/>
+    <path d="M186 224 C202 232 226 232 242 222" opacity="0.8"/>
+    <path d="M248 236 C254 244 258 252 260 260" opacity="0.8"/>
+    <path d="M110 276 C116 290 140 294 168 290" opacity="0.6"/>
+  </g>
+  <g stroke-linecap="round" stroke-width="2.2">
+    <path d="M272 182 l30 -6 M272 192 l28 7" stroke="#FFFFFF"/>
+    <path d="M148 184 l-28 -5 M149 193 l-26 5" stroke="#3D4A5C"/>
   </g>
 
   <!-- Mug -->
