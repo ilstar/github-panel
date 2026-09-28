@@ -32,7 +32,7 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
 
     func fetchOpenPRs(token: String) async throws -> OpenPullRequests {
         let rows = locked { pullRequests.values }.sorted { $0.updatedAt > $1.updatedAt }
-        return OpenPullRequests(login: user.login, rows: Array(rows.prefix(10)))
+        return OpenPullRequests(login: user.login, rows: rows)
     }
 
     func fetchClosedPRs(token: String, username: String, page: Int, perPage: Int) async throws -> PullRequestHistoryPage {

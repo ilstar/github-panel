@@ -293,7 +293,7 @@ final class PRMonitor: ObservableObject {
             lastReviewRequestsRefreshAt = dateProvider.now
         } catch {
             guard session == credentialSession else { return }
-            setReviewRequests(.empty)
+            // Keep the last list on screen; the error shows above it until a refresh succeeds.
             lastReviewRequestsError = error.localizedDescription
         }
         isReviewRequestsLoading = false
@@ -337,7 +337,7 @@ final class PRMonitor: ObservableObject {
                 guard session == credentialSession else { return }
                 scheduleNextTimerRefresh(after: error)
                 if requestRevision == refreshRevision {
-                    setPRRows([])
+                    // Keep the last list on screen; the error shows above it until a refresh succeeds.
                     lastError = error.localizedDescription
                 }
             }

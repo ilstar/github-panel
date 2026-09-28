@@ -55,7 +55,8 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertEqual(request.url?.path, "/graphql")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer token")
         let body = try transport.graphQLBody(at: 0)
-        XCTAssertTrue(body.query.contains("first: 10, states: [OPEN]"))
+        XCTAssertTrue(body.query.contains("first: 50, after: $after, states: [OPEN]"))
+        XCTAssertNil(body.variables["after"])
         XCTAssertTrue(body.query.contains("field: UPDATED_AT, direction: DESC"))
         XCTAssertTrue(body.query.contains("repository { nameWithOwner }"))
         XCTAssertTrue(body.query.contains("contexts(first: 1) { totalCount }"))
@@ -74,6 +75,32 @@ final class GitHubAPITests: XCTestCase {
 
         XCTAssertEqual(pr.status, .noChecks)
         XCTAssertTrue(pr.canMergeImmediately)
+    }
+
+    func testFetchOpenPRsFollowsPagesAndSkipsRepeatedPullRequests() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: openPRPage(numbers: [9, 8], hasNextPage: true, endCursor: "cursor-1"))
+        // 8 was updated between the two requests, so it comes back on the second page too.
+        transport.enqueue(json: openPRPage(numbers: [8, 5], hasNextPage: false, endCursor: nil))
+
+        let result = try await GitHubAPI(transport: transport).fetchOpenPRs(token: "token")
+
+        XCTAssertEqual(result.rows.map(\.number), [9, 8, 5])
+        XCTAssertEqual(transport.requests.count, 2)
+        XCTAssertNil(try transport.graphQLBody(at: 0).variables["after"])
+        XCTAssertEqual(try transport.graphQLBody(at: 1).variables["after"] as? String, "cursor-1")
+    }
+
+    func testFetchOpenPRsStopsAfterThePageLimit() async throws {
+        let transport = MockHTTPTransport()
+        for page in 1...(GitHubAPI.maxOpenPullRequestPages + 1) {
+            transport.enqueue(json: openPRPage(numbers: [page], hasNextPage: true, endCursor: "cursor-\(page)"))
+        }
+
+        let result = try await GitHubAPI(transport: transport).fetchOpenPRs(token: "token")
+
+        XCTAssertEqual(result.rows.count, GitHubAPI.maxOpenPullRequestPages)
+        XCTAssertEqual(transport.requests.count, GitHubAPI.maxOpenPullRequestPages)
     }
 
     func testFetchOpenPRsAllowsEmptyResults() async throws {
@@ -711,6 +738,25 @@ private extension URLRequest {
         guard let httpBody else { return nil }
         return try? JSONSerialization.jsonObject(with: httpBody) as? [String: Any]
     }
+}
+
+/// One page of open pull requests with just the fields every row needs.
+private func openPRPage(numbers: [Int], hasNextPage: Bool, endCursor: String?) -> String {
+    let nodes = numbers.map { number in
+        """
+        {"id":"PR_\(number)","title":"PR \(number)","number":\(number),"url":"https://github.com/acme/widgets/pull/\(number)",
+         "updatedAt":"2026-04-12T12:34:56Z","repository":{"nameWithOwner":"acme/widgets"},
+         "headRefOid":"sha\(number)","isDraft":false,"autoMergeRequest":null,
+         "viewerCanEnableAutoMerge":false,"viewerCanDisableAutoMerge":false,"isMergeQueueEnabled":false,
+         "isInMergeQueue":false,"mergeStateStatus":"CLEAN","statusCheckRollup":null}
+        """
+    }
+    let cursor = endCursor.map { "\"\($0)\"" } ?? "null"
+    return """
+    {"data":{"viewer":{"login":"octocat","pullRequests":{
+      "pageInfo":{"hasNextPage":\(hasNextPage),"endCursor":\(cursor)},
+      "nodes":[\(nodes.joined(separator: ","))]}}}}
+    """
 }
 
 private let openPRResponse = """

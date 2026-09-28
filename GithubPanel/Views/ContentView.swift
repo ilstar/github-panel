@@ -373,6 +373,10 @@ struct ContentView: View {
                                    message: "Pull requests waiting for a review from you or your teams will appear here.",
                                    tint: .green)
                 case .list:
+                    // A failed refresh keeps the last list, so say why it may be out of date.
+                    if let error = monitor.lastReviewRequestsError {
+                        errorNote(error, hint: nil)
+                    }
                     reviewRequestsList
                 }
             }

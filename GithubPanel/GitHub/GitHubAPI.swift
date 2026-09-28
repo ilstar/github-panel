@@ -11,12 +11,16 @@ final class GitHubAPI: GitHubAPIClient {
         return try await decode(GitHubUser.self, request: request)
     }
 
+    /// Open pull requests load in pages of 50, up to this many pages.
+    static let maxOpenPullRequestPages = 10
+
     func fetchOpenPRs(token: String) async throws -> OpenPullRequests {
         let query = """
-        query {
+        query($after: String) {
           viewer {
             login
-            pullRequests(first: 10, states: [OPEN], orderBy: {field: UPDATED_AT, direction: DESC}) {
+            pullRequests(first: 50, after: $after, states: [OPEN], orderBy: {field: UPDATED_AT, direction: DESC}) {
+              pageInfo { hasNextPage endCursor }
               nodes {
                 id
                 title
@@ -41,9 +45,23 @@ final class GitHubAPI: GitHubAPIClient {
           }
         }
         """
-        let response = try await graphQL(OpenPullRequestsResponse.self,
-                                         query: query, variables: [:], token: token)
-        let rows = response.viewer.pullRequests.nodes.map { pr in
+        var login = ""
+        var nodes: [PullRequestNode] = []
+        var cursor: String?
+        for _ in 0..<Self.maxOpenPullRequestPages {
+            let variables: [String: Any] = cursor.map { ["after": $0] } ?? [:]
+            let response = try await graphQL(OpenPullRequestsResponse.self,
+                                             query: query, variables: variables, token: token)
+            login = response.viewer.login
+            nodes += response.viewer.pullRequests.nodes
+            guard let pageInfo = response.viewer.pullRequests.pageInfo,
+                  pageInfo.hasNextPage,
+                  let next = pageInfo.endCursor else { break }
+            cursor = next
+        }
+        // A pull request updated between two pages can come back on both; keep its first, newer copy.
+        var seen: Set<String> = []
+        let rows = nodes.filter { seen.insert($0.id).inserted }.map { pr in
             PullRequestRow(id: "\(pr.repository.nameWithOwner)#\(pr.number)",
                            nodeID: pr.id,
                            title: pr.title,
@@ -62,7 +80,7 @@ final class GitHubAPI: GitHubAPIClient {
                            mergeStateStatus: pr.mergeStateStatus,
                            updatedAt: pr.updatedAt)
         }
-        return OpenPullRequests(login: response.viewer.login, rows: rows)
+        return OpenPullRequests(login: login, rows: rows)
     }
 
     func fetchClosedPRs(token: String, username: String, page: Int, perPage: Int) async throws -> PullRequestHistoryPage {
@@ -644,7 +662,13 @@ private struct OpenPullRequestsResponse: Decodable {
     }
 
     struct Connection: Decodable {
+        let pageInfo: PageInfo?
         let nodes: [PullRequestNode]
+    }
+
+    struct PageInfo: Decodable {
+        let hasNextPage: Bool
+        let endCursor: String?
     }
 }
 
