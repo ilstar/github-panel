@@ -11,19 +11,29 @@ final class GitHubAPI: GitHubAPIClient {
         return try await decode(GitHubUser.self, request: request)
     }
 
+    /// Open pull requests load in pages of 50, up to this many pages.
+    static let maxOpenPullRequestPages = 10
+
     func fetchOpenPRs(token: String) async throws -> OpenPullRequests {
         let query = """
-        query {
+        query($after: String) {
           viewer {
             login
-            pullRequests(first: 10, states: [OPEN], orderBy: {field: UPDATED_AT, direction: DESC}) {
+            pullRequests(first: 50, after: $after, states: [OPEN], orderBy: {field: UPDATED_AT, direction: DESC}) {
+              pageInfo { hasNextPage endCursor }
               nodes {
                 id
                 title
                 number
                 url
                 updatedAt
-                repository { nameWithOwner }
+                repository {
+                  nameWithOwner
+                  mergeCommitAllowed
+                  squashMergeAllowed
+                  rebaseMergeAllowed
+                  viewerDefaultMergeMethod
+                }
                 headRefOid
                 isDraft
                 autoMergeRequest { enabledAt }
@@ -36,14 +46,40 @@ final class GitHubAPI: GitHubAPIClient {
                   state
                   contexts(first: 1) { totalCount }
                 }
+                reviewDecision
+                latestOpinionatedReviews(first: 20) { nodes { state author { login } } }
+                reviewRequests(first: 20) {
+                  nodes {
+                    requestedReviewer {
+                      ... on User { login }
+                      ... on Bot { login }
+                      ... on Mannequin { login }
+                      ... on Team { combinedSlug }
+                    }
+                  }
+                }
               }
             }
           }
         }
         """
-        let response = try await graphQL(OpenPullRequestsResponse.self,
-                                         query: query, variables: [:], token: token)
-        let rows = response.viewer.pullRequests.nodes.map { pr in
+        var login = ""
+        var nodes: [PullRequestNode] = []
+        var cursor: String?
+        for _ in 0..<Self.maxOpenPullRequestPages {
+            let variables: [String: Any] = cursor.map { ["after": $0] } ?? [:]
+            let response = try await graphQL(OpenPullRequestsResponse.self,
+                                             query: query, variables: variables, token: token)
+            login = response.viewer.login
+            nodes += response.viewer.pullRequests.nodes
+            guard let pageInfo = response.viewer.pullRequests.pageInfo,
+                  pageInfo.hasNextPage,
+                  let next = pageInfo.endCursor else { break }
+            cursor = next
+        }
+        // A pull request updated between two pages can come back on both; keep its first, newer copy.
+        var seen: Set<String> = []
+        let rows = nodes.filter { seen.insert($0.id).inserted }.map { pr in
             PullRequestRow(id: "\(pr.repository.nameWithOwner)#\(pr.number)",
                            nodeID: pr.id,
                            title: pr.title,
@@ -60,9 +96,11 @@ final class GitHubAPI: GitHubAPIClient {
                            isMergeQueueEnabled: pr.isMergeQueueEnabled,
                            isInMergeQueue: pr.isInMergeQueue,
                            mergeStateStatus: pr.mergeStateStatus,
-                           updatedAt: pr.updatedAt)
+                           updatedAt: pr.updatedAt,
+                           reviewStatus: pr.reviewStatus,
+                           mergeMethods: pr.repository.mergeMethods)
         }
-        return OpenPullRequests(login: response.viewer.login, rows: rows)
+        return OpenPullRequests(login: login, rows: rows)
     }
 
     func fetchClosedPRs(token: String, username: String, page: Int, perPage: Int) async throws -> PullRequestHistoryPage {
@@ -92,6 +130,7 @@ final class GitHubAPI: GitHubAPIClient {
     func fetchReviewRequests(token: String) async throws -> ReviewRequests {
         let query = """
         query {
+          viewer { login }
           direct: search(query: "is:pr is:open archived:false user-review-requested:@me sort:updated-desc", type: ISSUE, first: 50) {
             nodes { ...ReviewRequestFields }
           }
@@ -109,11 +148,31 @@ final class GitHubAPI: GitHubAPIClient {
           isDraft
           repository { nameWithOwner }
           author { login }
+          additions
+          deletions
+          statusCheckRollup {
+            state
+            contexts(first: 1) { totalCount }
+          }
+          timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT], last: 20) {
+            nodes {
+              ... on ReviewRequestedEvent {
+                createdAt
+                requestedReviewer {
+                  __typename
+                  ... on User { login }
+                }
+              }
+            }
+          }
         }
         """
         let response = try await graphQL(ReviewRequestsResponse.self,
                                          query: query, variables: [:], token: token)
-        return ReviewRequests(direct: response.direct.rows, all: response.all.rows)
+        let login = response.viewer?.login
+        // A direct request's wait starts when I was asked; a team request's when a team was.
+        return ReviewRequests(direct: response.direct.rows { $0.typename == "User" && (login == nil || $0.login == login) },
+                              all: response.all.rows { $0.typename == "Team" })
     }
 
     func enqueuePullRequest(token: String, pullRequestID: String) async throws {
@@ -144,10 +203,10 @@ final class GitHubAPI: GitHubAPIClient {
         _ = try await graphQL(Response.self, query: query, variables: ["id": pullRequestID], token: token)
     }
 
-    func enableAutoMerge(token: String, pullRequestID: String) async throws {
+    func enableAutoMerge(token: String, pullRequestID: String, mergeMethod: MergeMethod) async throws {
         let query = """
-        mutation($id: ID!) {
-          enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: MERGE }) {
+        mutation($id: ID!, $method: PullRequestMergeMethod!) {
+          enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: $method }) {
             pullRequest { id }
           }
         }
@@ -155,7 +214,8 @@ final class GitHubAPI: GitHubAPIClient {
         struct Response: Decodable { let enablePullRequestAutoMerge: EnableResult? }
         struct EnableResult: Decodable { let pullRequest: PullRequestNode }
         struct PullRequestNode: Decodable { let id: String }
-        _ = try await graphQL(Response.self, query: query, variables: ["id": pullRequestID], token: token)
+        _ = try await graphQL(Response.self, query: query,
+                              variables: ["id": pullRequestID, "method": mergeMethod.rawValue], token: token)
     }
 
     func disableAutoMerge(token: String, pullRequestID: String) async throws {
@@ -172,13 +232,13 @@ final class GitHubAPI: GitHubAPIClient {
         _ = try await graphQL(Response.self, query: query, variables: ["id": pullRequestID], token: token)
     }
 
-    func mergePullRequest(token: String, repoFullName: String, number: Int) async throws -> Bool {
+    func mergePullRequest(token: String, repoFullName: String, number: Int, method: MergeMethod) async throws -> Bool {
         let parts = repoFullName.split(separator: "/", maxSplits: 1).map(String.init)
         guard parts.count == 2 else { throw URLError(.badURL) }
         var request = makeRequest(path: "/repos/\(parts[0])/\(parts[1])/pulls/\(number)/merge", token: token)
         request.httpMethod = "PUT"
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        request.httpBody = try JSONSerialization.data(withJSONObject: ["merge_method": "merge"])
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["merge_method": method.restValue])
 
         let (data, response) = try await transport.data(for: request)
         guard let http = response as? HTTPURLResponse else {
@@ -212,6 +272,7 @@ final class GitHubAPI: GitHubAPIClient {
         let viewed = viewer?.viewedFiles ?? []
         var detail = pull.detail(reference: reference)
         detail.canEdit = viewer?.canEdit ?? false
+        detail.isViewerAuthor = viewer?.isAuthor ?? false
         return PullRequestDetailContent(detail: detail,
                                         files: files.map { file in
                                             var file = file.file
@@ -325,9 +386,24 @@ final class GitHubAPI: GitHubAPIClient {
         _ = try await decode(Updated.self, request: request)
     }
 
+    /// Submits a review with its verdict in one step, so GitHub publishes it right away instead of keeping it pending.
+    func submitReview(token: String, reference: PullRequestReference, review: NewPullRequestReview) async throws {
+        let (owner, name) = try repoParts(reference.repoFullName)
+        var request = makeRequest(path: "/repos/\(owner)/\(name)/pulls/\(reference.number)/reviews", token: token)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var fields: [String: String] = ["event": review.event.rawValue, "commit_id": review.commitID]
+        if !review.body.isEmpty {
+            fields["body"] = review.body
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: fields)
+        struct Created: Decodable { let id: Int }
+        _ = try await decode(Created.self, request: request)
+    }
+
     /// Paths the viewer marked as viewed, and whether they may edit the pull request.
     /// GitHub reports files changed since they were viewed as `DISMISSED`, not `VIEWED`.
-    private func fetchViewerState(token: String, owner: String, name: String, number: Int) async throws -> (viewedFiles: Set<String>, canEdit: Bool) {
+    private func fetchViewerState(token: String, owner: String, name: String, number: Int) async throws -> (viewedFiles: Set<String>, canEdit: Bool, isAuthor: Bool) {
         let query = """
         query($owner: String!, $name: String!, $number: Int!) {
           repository(owner: $owner, name: $name) {
@@ -345,8 +421,9 @@ final class GitHubAPI: GitHubAPIClient {
                                          token: token)
         let pullRequest = response.repository?.pullRequest
         let nodes = pullRequest?.files?.nodes ?? []
-        let canEdit = pullRequest?.viewerDidAuthor == true && pullRequest?.viewerCanUpdate == true
-        return (Set(nodes.filter { $0.viewerViewedState == "VIEWED" }.map(\.path)), canEdit)
+        let isAuthor = pullRequest?.viewerDidAuthor == true
+        let canEdit = isAuthor && pullRequest?.viewerCanUpdate == true
+        return (Set(nodes.filter { $0.viewerViewedState == "VIEWED" }.map(\.path)), canEdit, isAuthor)
     }
 
     private func repoParts(_ repoFullName: String) throws -> (owner: String, name: String) {
@@ -644,7 +721,13 @@ private struct OpenPullRequestsResponse: Decodable {
     }
 
     struct Connection: Decodable {
+        let pageInfo: PageInfo?
         let nodes: [PullRequestNode]
+    }
+
+    struct PageInfo: Decodable {
+        let hasNextPage: Bool
+        let endCursor: String?
     }
 }
 
@@ -654,6 +737,19 @@ private struct PullRequestNode: Decodable {
 
     struct Repository: Decodable {
         let nameWithOwner: String
+        /// Only the My PRs query asks for these.
+        var mergeCommitAllowed: Bool?
+        var squashMergeAllowed: Bool?
+        var rebaseMergeAllowed: Bool?
+        var viewerDefaultMergeMethod: String?
+
+        var mergeMethods: RepositoryMergeMethods {
+            let allowed: [(MergeMethod, Bool?)] = [(.merge, mergeCommitAllowed),
+                                                   (.squash, squashMergeAllowed),
+                                                   (.rebase, rebaseMergeAllowed)]
+            return RepositoryMergeMethods(allowed: allowed.filter { $0.1 ?? ($0.0 == .merge) }.map { $0.0 },
+                                          suggested: viewerDefaultMergeMethod.flatMap(MergeMethod.init(rawValue:)) ?? .merge)
+        }
     }
 
     let id: String
@@ -669,25 +765,69 @@ private struct PullRequestNode: Decodable {
     let isInMergeQueue: Bool
     let mergeStateStatus: String
     let statusCheckRollup: StatusCheckRollup?
+    let reviewDecision: String?
+    let latestOpinionatedReviews: Connection<Review>?
+    let reviewRequests: Connection<ReviewRequest>?
+
+    struct Connection<Node: Decodable>: Decodable { let nodes: [Node] }
+    struct Login: Decodable { let login: String }
+    struct Review: Decodable {
+        let state: String
+        /// Missing when the reviewer's account was deleted.
+        let author: Login?
+    }
+    struct ReviewRequest: Decodable {
+        struct Reviewer: Decodable {
+            let login: String?
+            let combinedSlug: String?
+        }
+        let requestedReviewer: Reviewer?
+    }
+
+    var reviewStatus: PullRequestReviewStatus {
+        let reviews = latestOpinionatedReviews?.nodes ?? []
+        func reviewers(_ state: String) -> [String] {
+            reviews.filter { $0.state == state }.compactMap { $0.author?.login }
+        }
+        return PullRequestReviewStatus(
+            decision: reviewDecision.flatMap(ReviewDecision.init(rawValue:)),
+            approvedBy: reviewers("APPROVED"),
+            changesRequestedBy: reviewers("CHANGES_REQUESTED"),
+            waitingOn: (reviewRequests?.nodes ?? []).compactMap { request in
+                request.requestedReviewer.flatMap { $0.login ?? $0.combinedSlug }
+            })
+    }
 }
 
 private struct ReviewRequestsResponse: Decodable {
+    let viewer: Author?
     let direct: Search
     let all: Search
 
     struct Search: Decodable {
         let nodes: [Node]
 
-        var rows: [ReviewRequestRow] {
+        /// `isMyRequest` picks the review-requested events that count as asking me.
+        func rows(isMyRequest: (Reviewer) -> Bool) -> [ReviewRequestRow] {
             nodes.map { pr in
-                ReviewRequestRow(id: "\(pr.repository.nameWithOwner)#\(pr.number)",
-                                 title: pr.title,
-                                 number: pr.number,
-                                 repoFullName: pr.repository.nameWithOwner,
-                                 htmlURL: pr.url,
-                                 authorLogin: pr.author?.login,
-                                 isDraft: pr.isDraft,
-                                 updatedAt: pr.updatedAt)
+                let requests = (pr.timelineItems?.nodes ?? []).filter { event in
+                    event.requestedReviewer.map(isMyRequest) ?? false
+                }
+                return ReviewRequestRow(id: "\(pr.repository.nameWithOwner)#\(pr.number)",
+                                        title: pr.title,
+                                        number: pr.number,
+                                        repoFullName: pr.repository.nameWithOwner,
+                                        htmlURL: pr.url,
+                                        authorLogin: pr.author?.login,
+                                        isDraft: pr.isDraft,
+                                        updatedAt: pr.updatedAt,
+                                        checkState: pr.statusCheckRollup.map {
+                                            CheckState(githubStatus: $0.state,
+                                                       hasCheckContexts: $0.contexts.map { $0.totalCount > 0 })
+                                        },
+                                        additions: pr.additions,
+                                        deletions: pr.deletions,
+                                        requestedAt: requests.compactMap(\.createdAt).max())
             }
         }
     }
@@ -700,6 +840,29 @@ private struct ReviewRequestsResponse: Decodable {
         let isDraft: Bool
         let repository: PullRequestNode.Repository
         let author: Author?
+        let additions: Int?
+        let deletions: Int?
+        let statusCheckRollup: StatusCheckRollup?
+        let timelineItems: Timeline?
+    }
+
+    struct Timeline: Decodable {
+        let nodes: [Event]
+    }
+
+    struct Event: Decodable {
+        let createdAt: Date?
+        let requestedReviewer: Reviewer?
+    }
+
+    struct Reviewer: Decodable {
+        let typename: String
+        let login: String?
+
+        enum CodingKeys: String, CodingKey {
+            case typename = "__typename"
+            case login
+        }
     }
 
     struct Author: Decodable {

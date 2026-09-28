@@ -31,16 +31,17 @@ final class PRMonitorReviewRequestsTests: XCTestCase {
         XCTAssertNil(monitor.lastReviewRequestsRefreshAt)
     }
 
-    func testErrorClearsRowsAndStoresSeparateError() async {
+    func testErrorKeepsLastRowsAndStoresSeparateError() async {
         let api = FakeGitHubAPI()
         api.reviewRequestsHandler = { _ in throw TestError(message: "reviews offline") }
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
-        monitor.reviewRequests = ReviewRequests(fromMe: [reviewRequestRow(number: 1)], fromMyTeams: [])
+        let requests = ReviewRequests(fromMe: [reviewRequestRow(number: 1)], fromMyTeams: [])
+        monitor.reviewRequests = requests
 
         await monitor.refreshReviewRequests()
 
         XCTAssertFalse(monitor.isReviewRequestsLoading)
-        XCTAssertEqual(monitor.reviewRequests, .empty)
+        XCTAssertEqual(monitor.reviewRequests, requests)
         XCTAssertEqual(monitor.lastReviewRequestsError, "reviews offline")
         XCTAssertNil(monitor.lastError)
         XCTAssertNil(monitor.lastHistoryError)

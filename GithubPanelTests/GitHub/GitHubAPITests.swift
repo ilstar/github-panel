@@ -41,7 +41,12 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertTrue(pr.isMergeQueueEnabled)
         XCTAssertFalse(pr.isInMergeQueue)
         XCTAssertEqual(pr.mergeStateStatus, "CLEAN")
+        XCTAssertEqual(pr.reviewStatus, PullRequestReviewStatus(decision: .changesRequested,
+                                                                approvedBy: ["hubot"],
+                                                                changesRequestedBy: ["monalisa"],
+                                                                waitingOn: ["octocat", "acme/web"]))
         let second = result.rows[1]
+        XCTAssertEqual(second.reviewStatus, .none)
         XCTAssertEqual(second.status, .success) // Preserve existing missing-rollup behavior.
         XCTAssertTrue(second.isDraft)
         XCTAssertFalse(second.isAutoMergeEnabled)
@@ -55,10 +60,14 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertEqual(request.url?.path, "/graphql")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer token")
         let body = try transport.graphQLBody(at: 0)
-        XCTAssertTrue(body.query.contains("first: 10, states: [OPEN]"))
+        XCTAssertTrue(body.query.contains("first: 50, after: $after, states: [OPEN]"))
+        XCTAssertNil(body.variables["after"])
         XCTAssertTrue(body.query.contains("field: UPDATED_AT, direction: DESC"))
-        XCTAssertTrue(body.query.contains("repository { nameWithOwner }"))
+        XCTAssertTrue(body.query.contains("nameWithOwner"))
         XCTAssertTrue(body.query.contains("contexts(first: 1) { totalCount }"))
+        XCTAssertTrue(body.query.contains("reviewDecision"))
+        XCTAssertTrue(body.query.contains("latestOpinionatedReviews(first: 20)"))
+        XCTAssertTrue(body.query.contains("... on Team { combinedSlug }"))
     }
 
     func testExpectedRollupWithNoContextsIsDecodedAsNoChecks() async throws {
@@ -74,6 +83,32 @@ final class GitHubAPITests: XCTestCase {
 
         XCTAssertEqual(pr.status, .noChecks)
         XCTAssertTrue(pr.canMergeImmediately)
+    }
+
+    func testFetchOpenPRsFollowsPagesAndSkipsRepeatedPullRequests() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: openPRPage(numbers: [9, 8], hasNextPage: true, endCursor: "cursor-1"))
+        // 8 was updated between the two requests, so it comes back on the second page too.
+        transport.enqueue(json: openPRPage(numbers: [8, 5], hasNextPage: false, endCursor: nil))
+
+        let result = try await GitHubAPI(transport: transport).fetchOpenPRs(token: "token")
+
+        XCTAssertEqual(result.rows.map(\.number), [9, 8, 5])
+        XCTAssertEqual(transport.requests.count, 2)
+        XCTAssertNil(try transport.graphQLBody(at: 0).variables["after"])
+        XCTAssertEqual(try transport.graphQLBody(at: 1).variables["after"] as? String, "cursor-1")
+    }
+
+    func testFetchOpenPRsStopsAfterThePageLimit() async throws {
+        let transport = MockHTTPTransport()
+        for page in 1...(GitHubAPI.maxOpenPullRequestPages + 1) {
+            transport.enqueue(json: openPRPage(numbers: [page], hasNextPage: true, endCursor: "cursor-\(page)"))
+        }
+
+        let result = try await GitHubAPI(transport: transport).fetchOpenPRs(token: "token")
+
+        XCTAssertEqual(result.rows.count, GitHubAPI.maxOpenPullRequestPages)
+        XCTAssertEqual(transport.requests.count, GitHubAPI.maxOpenPullRequestPages)
     }
 
     func testFetchOpenPRsAllowsEmptyResults() async throws {
@@ -176,6 +211,50 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertTrue(body.query.contains("is:pr is:open archived:false"))
     }
 
+    func testFetchReviewRequestsDecodesChecksSizeAndWhenIWasAsked() async throws {
+        let transport = MockHTTPTransport()
+        let asked = """
+        "timelineItems":{"nodes":[
+          {"createdAt":"2026-04-01T10:00:00Z","requestedReviewer":{"__typename":"User","login":"fred"}},
+          {"createdAt":"2026-04-02T10:00:00Z","requestedReviewer":{"__typename":"User","login":"hubot"}},
+          {"createdAt":"2026-04-03T10:00:00Z","requestedReviewer":{"__typename":"Team"}},
+          {"createdAt":"2026-04-04T10:00:00Z","requestedReviewer":{"__typename":"User","login":"fred"}},
+          {"createdAt":"2026-04-05T10:00:00Z","requestedReviewer":null}
+        ]}
+        """
+        let direct = """
+        {"id":"PR_a","title":"Direct","number":4,"url":"https://github.com/acme/widgets/pull/4",
+         "updatedAt":"2026-04-12T12:34:56Z","isDraft":false,
+         "repository":{"nameWithOwner":"acme/widgets"},"author":{"login":"octocat"},
+         "additions":120,"deletions":30,"statusCheckRollup":{"state":"FAILURE"},\(asked)}
+        """
+        let team = """
+        {"id":"PR_b","title":"Team","number":9,"url":"https://github.com/acme/gears/pull/9",
+         "updatedAt":"2026-04-13T12:34:56Z","isDraft":false,
+         "repository":{"nameWithOwner":"acme/gears"},"author":{"login":"hubot"},
+         "additions":1,"deletions":0,"statusCheckRollup":null,\(asked)}
+        """
+        transport.enqueue(json: """
+        {"data":{"viewer":{"login":"fred"},"direct":{"nodes":[\(direct)]},"all":{"nodes":[\(team),\(direct)]}}}
+        """)
+
+        let requests = try await GitHubAPI(transport: transport).fetchReviewRequests(token: "token")
+
+        let date = ISO8601DateFormatter()
+        let mine = try XCTUnwrap(requests.fromMe.first)
+        XCTAssertEqual(mine.checkState, .failure)
+        XCTAssertEqual(mine.additions, 120)
+        XCTAssertEqual(mine.deletions, 30)
+        // The latest request to me, not to someone else or a team.
+        XCTAssertEqual(mine.requestedAt, date.date(from: "2026-04-04T10:00:00Z"))
+        let teams = try XCTUnwrap(requests.fromMyTeams.first)
+        XCTAssertNil(teams.checkState)
+        XCTAssertEqual(teams.requestedAt, date.date(from: "2026-04-03T10:00:00Z"))
+        let body = try transport.graphQLBody(at: 0)
+        XCTAssertTrue(body.query.contains("viewer { login }"))
+        XCTAssertTrue(body.query.contains("timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT], last: 20)"))
+    }
+
     func testGraphQLErrorsAreSurfaced() async throws {
         let transport = MockHTTPTransport()
         transport.enqueue(json: #"{"data":null,"errors":[{"message":"Nope"},{"message":"Still nope"}]}"#)
@@ -224,7 +303,7 @@ final class GitHubAPITests: XCTestCase {
         let successTransport = MockHTTPTransport()
         successTransport.enqueue(json: #"{"merged":true}"#)
         let successAPI = GitHubAPI(transport: successTransport)
-        let successMerged = try await successAPI.mergePullRequest(token: "token", repoFullName: "acme/widgets", number: 7)
+        let successMerged = try await successAPI.mergePullRequest(token: "token", repoFullName: "acme/widgets", number: 7, method: .merge)
         XCTAssertTrue(successMerged)
         let successRequest = try XCTUnwrap(successTransport.requests.first)
         XCTAssertEqual(successRequest.httpMethod, "PUT")
@@ -235,19 +314,50 @@ final class GitHubAPITests: XCTestCase {
         let fallbackTransport = MockHTTPTransport()
         fallbackTransport.enqueue(json: #"{"not_merged_field":true}"#)
         let fallbackAPI = GitHubAPI(transport: fallbackTransport)
-        let fallbackMerged = try await fallbackAPI.mergePullRequest(token: "token", repoFullName: "acme/widgets", number: 7)
+        let fallbackMerged = try await fallbackAPI.mergePullRequest(token: "token", repoFullName: "acme/widgets", number: 7, method: .merge)
         XCTAssertTrue(fallbackMerged)
 
         let failureTransport = MockHTTPTransport()
         failureTransport.enqueue(json: #"{"message":"Cannot merge"}"#, statusCode: 405)
         let failureAPI = GitHubAPI(transport: failureTransport)
         do {
-            _ = try await failureAPI.mergePullRequest(token: "token", repoFullName: "acme/widgets", number: 7)
+            _ = try await failureAPI.mergePullRequest(token: "token", repoFullName: "acme/widgets", number: 7, method: .merge)
             XCTFail("Expected GitHubAPIError")
         } catch let error as GitHubAPIError {
             XCTAssertEqual(error.statusCode, 405)
             XCTAssertEqual(error.message, #"{"message":"Cannot merge"}"#)
         }
+    }
+
+    func testMergePullRequestSendsTheChosenMethod() async throws {
+        for method in MergeMethod.allCases {
+            let transport = MockHTTPTransport()
+            transport.enqueue(json: #"{"merged":true}"#)
+
+            _ = try await GitHubAPI(transport: transport).mergePullRequest(token: "token", repoFullName: "acme/widgets",
+                                                                             number: 7, method: method)
+
+            XCTAssertEqual(transport.requests.first?.jsonBody?["merge_method"] as? String, method.restValue)
+        }
+        XCTAssertEqual(MergeMethod.allCases.map(\.restValue), ["merge", "squash", "rebase"])
+    }
+
+    func testFetchOpenPRsDecodesTheRepositoryMergeMethods() async throws {
+        let response = openPRResponse.replacingOccurrences(
+            of: #""updatedAt":"2026-04-12T12:34:56Z","repository":{"nameWithOwner":"acme/widgets"}"#,
+            with: #""updatedAt":"2026-04-12T12:34:56Z","repository":{"nameWithOwner":"acme/widgets","mergeCommitAllowed":false,"squashMergeAllowed":true,"rebaseMergeAllowed":true,"viewerDefaultMergeMethod":"REBASE"}"#)
+        XCTAssertNotEqual(response, openPRResponse)
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: response)
+
+        let rows = try await GitHubAPI(transport: transport).fetchOpenPRs(token: "token").rows
+
+        XCTAssertEqual(rows[0].mergeMethods, RepositoryMergeMethods(allowed: [.squash, .rebase], suggested: .rebase))
+        // Without the settings, only merge commits are assumed, as before.
+        XCTAssertEqual(rows[1].mergeMethods, RepositoryMergeMethods(allowed: [.merge], suggested: .merge))
+        let body = try transport.graphQLBody(at: 0)
+        XCTAssertTrue(body.query.contains("squashMergeAllowed"))
+        XCTAssertTrue(body.query.contains("viewerDefaultMergeMethod"))
     }
 
     func testFetchPullRequestDetailDecodesPullAndFiles() async throws {
@@ -340,6 +450,7 @@ final class GitHubAPITests: XCTestCase {
                 .fetchPullRequestDetail(token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7))
 
             XCTAssertEqual(content.detail.canEdit, testCase.canEdit, testCase.json)
+            XCTAssertEqual(content.detail.isViewerAuthor, testCase.json.contains(#""viewerDidAuthor":true"#), testCase.json)
         }
     }
 
@@ -533,6 +644,43 @@ final class GitHubAPITests: XCTestCase {
         }
     }
 
+    func testSubmitReviewPostsTheVerdictAgainstTheLoadedCommit() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: #"{"id":80}"#)
+        transport.enqueue(json: #"{"id":81}"#)
+        let api = GitHubAPI(transport: transport)
+        let reference = PullRequestReference(repoFullName: "acme/widgets", number: 7)
+
+        try await api.submitReview(token: "token", reference: reference,
+                                   review: NewPullRequestReview(event: .requestChanges, body: "Please add tests.", commitID: "abc123"))
+        try await api.submitReview(token: "token", reference: reference,
+                                   review: NewPullRequestReview(event: .approve, body: "", commitID: "abc123"))
+
+        let changes = transport.requests[0]
+        XCTAssertEqual(changes.httpMethod, "POST")
+        XCTAssertEqual(changes.url?.path, "/repos/acme/widgets/pulls/7/reviews")
+        XCTAssertEqual(changes.jsonBody?["event"] as? String, "REQUEST_CHANGES")
+        XCTAssertEqual(changes.jsonBody?["body"] as? String, "Please add tests.")
+        XCTAssertEqual(changes.jsonBody?["commit_id"] as? String, "abc123")
+        // A blank approval sends no body at all.
+        XCTAssertEqual(transport.requests[1].jsonBody?["event"] as? String, "APPROVE")
+        XCTAssertNil(transport.requests[1].jsonBody?["body"])
+    }
+
+    func testSubmitReviewSurfacesGitHubsRefusal() async {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: #"{"message":"Unprocessable Entity"}"#, statusCode: 422)
+
+        do {
+            try await GitHubAPI(transport: transport).submitReview(
+                token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7),
+                review: NewPullRequestReview(event: .approve, body: "", commitID: "abc123"))
+            XCTFail("Expected an error")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, "GitHub API error (422): Unprocessable Entity")
+        }
+    }
+
     func testGraphQLMutationPayloads() async throws {
         let enqueueTransport = MockHTTPTransport()
         enqueueTransport.enqueue(json: #"{"data":{"enqueuePullRequest":{"mergeQueueEntry":{"id":"entry"}}}}"#)
@@ -550,10 +698,11 @@ final class GitHubAPITests: XCTestCase {
 
         let enableTransport = MockHTTPTransport()
         enableTransport.enqueue(json: #"{"data":{"enablePullRequestAutoMerge":{"pullRequest":{"id":"PR_node"}}}}"#)
-        try await GitHubAPI(transport: enableTransport).enableAutoMerge(token: "token", pullRequestID: "PR_node")
+        try await GitHubAPI(transport: enableTransport).enableAutoMerge(token: "token", pullRequestID: "PR_node", mergeMethod: .squash)
         body = try enableTransport.graphQLBody(at: 0)
         XCTAssertTrue(body.query.contains("enablePullRequestAutoMerge"))
-        XCTAssertTrue(body.query.contains("mergeMethod: MERGE"))
+        XCTAssertTrue(body.query.contains("mergeMethod: $method"))
+        XCTAssertEqual(body.variables["method"] as? String, "SQUASH")
 
         let disableTransport = MockHTTPTransport()
         disableTransport.enqueue(json: #"{"data":{"disablePullRequestAutoMerge":{"pullRequest":{"id":"PR_node"}}}}"#)
@@ -713,13 +862,42 @@ private extension URLRequest {
     }
 }
 
+/// One page of open pull requests with just the fields every row needs.
+private func openPRPage(numbers: [Int], hasNextPage: Bool, endCursor: String?) -> String {
+    let nodes = numbers.map { number in
+        """
+        {"id":"PR_\(number)","title":"PR \(number)","number":\(number),"url":"https://github.com/acme/widgets/pull/\(number)",
+         "updatedAt":"2026-04-12T12:34:56Z","repository":{"nameWithOwner":"acme/widgets"},
+         "headRefOid":"sha\(number)","isDraft":false,"autoMergeRequest":null,
+         "viewerCanEnableAutoMerge":false,"viewerCanDisableAutoMerge":false,"isMergeQueueEnabled":false,
+         "isInMergeQueue":false,"mergeStateStatus":"CLEAN","statusCheckRollup":null}
+        """
+    }
+    let cursor = endCursor.map { "\"\($0)\"" } ?? "null"
+    return """
+    {"data":{"viewer":{"login":"octocat","pullRequests":{
+      "pageInfo":{"hasNextPage":\(hasNextPage),"endCursor":\(cursor)},
+      "nodes":[\(nodes.joined(separator: ","))]}}}}
+    """
+}
+
 private let openPRResponse = """
 {"data":{"viewer":{"login":"octocat","pullRequests":{"nodes":[
   {"id":"PR_node","title":"Add tests","number":7,"url":"https://github.com/acme/widgets/pull/7",
    "updatedAt":"2026-04-12T12:34:56Z","repository":{"nameWithOwner":"acme/widgets"},
    "headRefOid":"abc123","isDraft":false,"autoMergeRequest":{"enabledAt":"2026-04-12T12:00:00Z"},
    "viewerCanEnableAutoMerge":false,"viewerCanDisableAutoMerge":true,"isMergeQueueEnabled":true,
-   "isInMergeQueue":false,"mergeStateStatus":"CLEAN","statusCheckRollup":{"state":"PENDING"}},
+   "isInMergeQueue":false,"mergeStateStatus":"CLEAN","statusCheckRollup":{"state":"PENDING"},
+   "reviewDecision":"CHANGES_REQUESTED",
+   "latestOpinionatedReviews":{"nodes":[
+     {"state":"APPROVED","author":{"login":"hubot"}},
+     {"state":"CHANGES_REQUESTED","author":{"login":"monalisa"}},
+     {"state":"DISMISSED","author":{"login":"ghost-reviewer"}},
+     {"state":"APPROVED","author":null}]},
+   "reviewRequests":{"nodes":[
+     {"requestedReviewer":{"login":"octocat"}},
+     {"requestedReviewer":{"combinedSlug":"acme/web"}},
+     {"requestedReviewer":null}]}},
   {"id":"PR_other","title":"Draft","number":3,"url":"https://github.com/acme/widgets/pull/3",
    "updatedAt":"2026-04-11T12:34:56Z","repository":{"nameWithOwner":"acme/widgets"},
    "headRefOid":"def456","isDraft":true,"autoMergeRequest":null,

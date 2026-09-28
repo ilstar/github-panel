@@ -12,6 +12,7 @@ struct PullRequestDetailView: View {
     @StateObject private var viewModel: PullRequestDetailViewModel
     @State private var selectedTab: PullRequestDetailTab = .conversation
     @State private var isEditingTitle = false
+    @State private var isReviewing = false
     /// Set in the main window, where the toolbar sits in the title bar strip.
     @Environment(\.titleBarHeight) private var titleBarHeight
     /// Goes up by one each time the comment box should take focus.
@@ -28,7 +29,11 @@ struct PullRequestDetailView: View {
                                          segments: tabSegments(fileCount: content.files.count),
                                          htmlURL: content.detail.htmlURL,
                                          isLoading: viewModel.isLoading,
-                                         onRefresh: reload)
+                                         onRefresh: reload,
+                                         isReviewing: $isReviewing,
+                                         onSubmitReview: viewModel.canReview ? { event, body in
+                                             try await viewModel.submitReview(event, body: body)
+                                         } : nil)
                     .padding(.leading, 28)
                     .padding(.trailing, 20)
                     .frame(height: max(titleBarHeight ?? 0, 54))
@@ -44,6 +49,14 @@ struct PullRequestDetailView: View {
                     errorText(error)
                         .padding(.horizontal, 32)
                         .padding(.bottom, 8)
+                }
+
+                if let review = viewModel.submittedReview {
+                    Label(review.confirmation, systemImage: "checkmark.circle.fill")
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(Theme.green)
+                        .padding(.horizontal, 32)
+                        .padding(.bottom, 10)
                 }
 
                 Rectangle()
@@ -127,18 +140,23 @@ struct PullRequestDetailView: View {
                                         showPreviousTab: { selectedTab = selectedTab.previous },
                                         showNextTab: { selectedTab = selectedTab.next },
                                         addComment: addComment,
-                                        editTitle: detail.canEdit ? { isEditingTitle = true } : nil)
+                                        editTitle: detail.canEdit ? { isEditingTitle = true } : nil,
+                                        review: viewModel.canReview ? { isReviewing = true } : nil)
     }
 }
 
 /// The row over the pull request: the Conversation / Files changed switcher on the left and the
-/// Reload and Open on GitHub buttons in glass capsules on the right. Edit title sits by the title instead.
+/// Reload, Review and Open on GitHub buttons in glass capsules on the right. Edit title sits by the title instead.
 struct PullRequestDetailToolbar: View {
     @Binding var selectedTab: PullRequestDetailTab
     let segments: [GlassSegmentedControl<PullRequestDetailTab>.Segment]
     let htmlURL: URL
     let isLoading: Bool
     let onRefresh: () -> Void
+    /// Whether the review form is open over the Review button.
+    @Binding var isReviewing: Bool
+    /// Submits a review. Nil when you cannot review this pull request, such as your own.
+    var onSubmitReview: ((PullRequestReviewEvent, String) async throws -> Void)?
 
     var body: some View {
         HStack(spacing: 10) {
@@ -157,6 +175,32 @@ struct PullRequestDetailToolbar: View {
             .padding(.horizontal, 3)
             .frame(height: 34)
             .glassSurface(.control, in: Capsule())
+
+            if let onSubmitReview {
+                Button {
+                    isReviewing.toggle()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "checkmark.bubble")
+                            .font(.system(size: 12, weight: .semibold))
+                        Text("Review")
+                    }
+                    .font(.system(size: 13, weight: .medium))
+                    .padding(.horizontal, 14)
+                    .frame(height: 34)
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .glassSurface(.control, in: Capsule())
+                .help("Approve, comment, or request changes (\(AppShortcut.reviewChanges.symbols))")
+                .popover(isPresented: $isReviewing, arrowEdge: .bottom) {
+                    ReviewComposer(onCancel: { isReviewing = false },
+                                   onSubmit: { event, body in
+                                       try await onSubmitReview(event, body)
+                                       isReviewing = false
+                                   })
+                }
+            }
 
             Button {
                 NSWorkspace.shared.open(htmlURL)

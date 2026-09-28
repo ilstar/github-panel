@@ -224,7 +224,7 @@ final class PRMonitorRefreshTests: XCTestCase {
         XCTAssertEqual(publications.count, 3)
     }
 
-    func testRefreshErrorClearsRowsAndStoresError() async {
+    func testRefreshErrorKeepsLastRowsAndStoresError() async {
         let api = FakeGitHubAPI()
         api.error = TestError(message: "boom")
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
@@ -233,8 +233,22 @@ final class PRMonitorRefreshTests: XCTestCase {
         await monitor.refreshNow()
 
         XCTAssertFalse(monitor.isLoading)
-        XCTAssertTrue(monitor.prRows.isEmpty)
+        XCTAssertEqual(monitor.prRows.map(\.number), [1])
         XCTAssertEqual(monitor.lastError, "boom")
+    }
+
+    func testRefreshAfterAnErrorClearsTheError() async {
+        let api = FakeGitHubAPI()
+        api.error = TestError(message: "boom")
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+        await monitor.refreshNow()
+
+        api.error = nil
+        api.rows = [row(number: 2, status: .success)]
+        await monitor.refreshNow()
+
+        XCTAssertNil(monitor.lastError)
+        XCTAssertEqual(monitor.prRows.map(\.number), [2])
     }
 
     func testRefreshWithoutTokenDoesNothing() async {

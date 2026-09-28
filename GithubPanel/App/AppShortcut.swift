@@ -15,6 +15,7 @@ enum AppShortcut: CaseIterable {
     case primaryAction
     case editTitle
     case addComment
+    case reviewChanges
     case previousDetailTab
     case nextDetailTab
 
@@ -42,6 +43,7 @@ enum AppShortcut: CaseIterable {
         case .primaryAction: return KeyboardShortcut("m", modifiers: [.shift, .command])
         case .editTitle: return KeyboardShortcut("e", modifiers: [.option, .command])
         case .addComment: return KeyboardShortcut("n", modifiers: [.option, .command])
+        case .reviewChanges: return KeyboardShortcut("r", modifiers: [.option, .command])
         // ⇧⌘[ and ⇧⌘]. Menus match the typed character, and Shift turns [ into {, so the menu needs {.
         case .previousDetailTab: return KeyboardShortcut("{", modifiers: .command)
         case .nextDetailTab: return KeyboardShortcut("}", modifiers: .command)
@@ -73,6 +75,7 @@ enum AppShortcut: CaseIterable {
         case .primaryAction: return "Merge, mark ready, or toggle auto-merge (same as the row's button)"
         case .editTitle: return "Edit the title"
         case .addComment: return "Write a comment"
+        case .reviewChanges: return "Approve, comment, or request changes"
         case .previousDetailTab: return "Previous tab (Conversation / Files changed)"
         case .nextDetailTab: return "Next tab (Conversation / Files changed)"
         case .filterFiles: return "Filter files"
@@ -168,6 +171,7 @@ enum ShortcutHelp {
             Entry(.primaryAction),
             Entry(.editTitle),
             Entry(.addComment),
+            Entry(.reviewChanges),
             Entry(.previousDetailTab),
             Entry(.nextDetailTab),
         ]),

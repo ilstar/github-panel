@@ -8,14 +8,24 @@ code, comment, and merge without opening a browser.
 
 
 ## Features
-- **Your pull requests in one place:** *My PRs* lists the open pull requests you
-  wrote, *To Review* groups the ones waiting on your review by who asked, and
+- **Your pull requests in one place:** *My PRs* lists every open pull request you
+  wrote, with a tag for its review state (approved, changes requested, awaiting
+  review). *To Review* groups the ones waiting on your review by who asked, and
+  shows each one's checks, size, and how long ago your review was requested.
   *History* shows what you recently merged or closed.
 - **Check status and notifications:** checks refresh every 60 seconds by default
   (you can change this in Settings). A macOS notification appears when checks
-  move from pending to success or failure. Click it to open the pull request.
+  move from pending to success or failure, when someone approves or requests
+  changes on your pull request, and when someone asks for your review. Click it
+  to show the pull request in the app. If a refresh fails, the last list stays
+  on screen with the error above it.
 - **Merge from the list:** each row has the next action it needs, such as Merge,
-  Mark ready, enable or disable auto-merge, or add to the merge queue.
+  Mark ready, enable or disable auto-merge, or add to the merge queue. Merges use
+  the repository's merge method (merge commit, squash, or rebase); pick another
+  from the row's context menu. When a pull request can't merge, the button says
+  why, such as a merge conflict or a missing approval.
+- **Review others' pull requests:** the Review button (⌥⌘R) approves, comments,
+  or requests changes on a pull request someone else wrote.
 - **Pull request details:** select a pull request to see it on the right. The
   *Conversation* tab shows its Markdown description and comments. The *Files
   changed* tab shows the diff, with a file tree, a filter, viewed-file tracking,

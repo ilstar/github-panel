@@ -64,6 +64,12 @@ struct ReviewRequestRow: Identifiable, Equatable {
     let authorLogin: String?
     let isDraft: Bool
     let updatedAt: Date
+    /// Nil when GitHub reports no check status for the head commit.
+    var checkState: CheckState?
+    var additions: Int?
+    var deletions: Int?
+    /// When my review, or my team's, was last requested. Nil when GitHub does not say.
+    var requestedAt: Date?
 
     var reference: PullRequestReference {
         PullRequestReference(repoFullName: repoFullName, number: number)

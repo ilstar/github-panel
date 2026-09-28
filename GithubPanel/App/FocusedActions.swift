@@ -32,6 +32,8 @@ struct PullRequestDetailActions {
     let addComment: () -> Void
     /// Nil when you cannot edit the pull request.
     let editTitle: (() -> Void)?
+    /// Opens the review form. Nil when you cannot review the pull request, such as your own.
+    let review: (() -> Void)?
 }
 
 /// What the Files changed tab offers the menus.

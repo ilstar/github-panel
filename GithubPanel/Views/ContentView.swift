@@ -14,6 +14,9 @@ struct ContentView: View {
     @State private var selectedPRID: String?
     @State private var selectedReviewID: String?
     @State private var selectedHistoryID: String?
+    /// The rows last seen on My PRs and To Review, to pick the row that takes a removed one's place.
+    @State private var openRowIDs: [String] = []
+    @State private var reviewRowIDs: [String] = []
     @State private var mergeInFlight: Set<String> = []
     @State private var pageScroller = PageScroller()
     @AppStorage(ListPaneLayout.widthDefaultsKey) private var listPaneWidth: Double = ListPaneLayout.defaultWidth
@@ -51,7 +54,16 @@ struct ContentView: View {
         .background(KeyCommandMonitor(handler: handleKeyCommand))
         .focusedSceneValue(\.pullRequestList, listActions)
         .onAppear {
+            monitor.listWindowAppeared()
             monitor.start()
+        }
+        .onDisappear {
+            monitor.listWindowDisappeared()
+        }
+        .onChange(of: monitor.pullRequestToShow) { request in
+            guard let request else { return }
+            show(request)
+            monitor.pullRequestToShow = nil
         }
         .onReceive(minuteTicker) { tick in
             now = tick
@@ -310,6 +322,7 @@ struct ContentView: View {
                                 relativeFormatter: relativeFormatter,
                                 now: now,
                                 isMerging: mergeInFlight.contains(pr.id),
+                                mergeMethod: monitor.mergeMethod(for: pr),
                                 onAction: {
                                     actOnPullRequest(pr: pr)
                                 }
@@ -321,6 +334,7 @@ struct ContentView: View {
                             }
                             .contextMenu {
                                 pullRequestContextMenu(pr.reference, htmlURL: pr.htmlURL)
+                                mergeMethodMenu(for: pr)
                             }
                         }
                     }
@@ -329,14 +343,14 @@ struct ContentView: View {
             }
             .scrollIndicators(.hidden)
             .onAppear {
+                openRowIDs = monitor.prRows.map(\.id)
                 if selectedPRID == nil {
                     selectedPRID = monitor.prRows.first?.id
                 }
             }
             .onChange(of: monitor.prRows.map { $0.id }) { newIDs in
-                if selectedPRID == nil || !newIDs.contains(selectedPRID ?? "") {
-                    selectedPRID = newIDs.first
-                }
+                selectedPRID = ListNavigation.selection(after: selectedPRID, oldIDs: openRowIDs, newIDs: newIDs)
+                openRowIDs = newIDs
             }
             .onChange(of: selectedPRID) { id in
                 scrollToSelection(id, with: proxy)
@@ -373,19 +387,23 @@ struct ContentView: View {
                                    message: "Pull requests waiting for a review from you or your teams will appear here.",
                                    tint: .green)
                 case .list:
+                    // A failed refresh keeps the last list, so say why it may be out of date.
+                    if let error = monitor.lastReviewRequestsError {
+                        errorNote(error, hint: nil)
+                    }
                     reviewRequestsList
                 }
             }
         }
         .onAppear {
+            reviewRowIDs = monitor.reviewRequests.rows.map(\.id)
             if selectedReviewID == nil {
                 selectedReviewID = monitor.reviewRequests.rows.first?.id
             }
         }
         .onChange(of: monitor.reviewRequests.rows.map { $0.id }) { newIDs in
-            if selectedReviewID == nil || !newIDs.contains(selectedReviewID ?? "") {
-                selectedReviewID = newIDs.first
-            }
+            selectedReviewID = ListNavigation.selection(after: selectedReviewID, oldIDs: reviewRowIDs, newIDs: newIDs)
+            reviewRowIDs = newIDs
         }
     }
 
@@ -732,9 +750,22 @@ struct ContentView: View {
         guard monitor.selectedTab == .open,
               let pr = monitor.prRows.first(where: { $0.id == selectedPRID }) else { return nil }
         let state = MergeButtonState.resolve(for: pr, isWorking: mergeInFlight.contains(pr.id))
-        return PrimaryAction(title: state.title, isEnabled: state.isClickable) {
+        return PrimaryAction(title: state.title(mergeMethod: monitor.mergeMethod(for: pr)), isEnabled: state.isClickable) {
             actOnPullRequest(pr: pr)
         }
+    }
+
+    /// Selects the pull request a notification was about, or opens it in its own window when neither list has it.
+    private func show(_ request: PullRequestToShow) {
+        switch request.tab {
+        case .open:
+            selectedPRID = request.reference.id
+        case .reviews:
+            selectedReviewID = request.reference.id
+        case .history, nil:
+            openWindow(value: request.reference)
+        }
+        AppVisibility.show()
     }
 
     /// Row clicks show the PR on the right and hand the keyboard back to the list; ⌘-click also opens it on GitHub.
@@ -742,6 +773,20 @@ struct ContentView: View {
         NSApp.keyWindow?.endTyping()
         if NSEvent.modifierFlags.contains(.command) {
             NSWorkspace.shared.open(htmlURL)
+        }
+    }
+
+    /// Picks how Merge and Enable auto-merge merge this repository's pull requests. Checked items come from the picker.
+    @ViewBuilder
+    private func mergeMethodMenu(for pr: PullRequestRow) -> some View {
+        if pr.mergeMethods.allowed.count > 1 {
+            Divider()
+            Picker("Merge Method", selection: Binding(get: { monitor.mergeMethod(for: pr) },
+                                                      set: { monitor.chooseMergeMethod($0, for: pr.repoFullName) })) {
+                ForEach(pr.mergeMethods.allowed) { method in
+                    Text(method.title).tag(method)
+                }
+            }
         }
     }
 

@@ -7,7 +7,7 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
     private let user = GitHubUser(login: "mock-user")
     private var pullRequests: [String: PullRequestRow]
     private let history: [PullRequestHistoryRow]
-    private let reviewRequests: ReviewRequests
+    private var reviewRequests: ReviewRequests
     /// Viewed file paths, keyed by pull request node ID.
     private var viewedFiles: [String: Set<String>] = [:]
     /// Comments, keyed by pull request reference ID. Filled with fixtures on first read.
@@ -32,7 +32,7 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
 
     func fetchOpenPRs(token: String) async throws -> OpenPullRequests {
         let rows = locked { pullRequests.values }.sorted { $0.updatedAt > $1.updatedAt }
-        return OpenPullRequests(login: user.login, rows: Array(rows.prefix(10)))
+        return OpenPullRequests(login: user.login, rows: rows)
     }
 
     func fetchClosedPRs(token: String, username: String, page: Int, perPage: Int) async throws -> PullRequestHistoryPage {
@@ -47,7 +47,15 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
     }
 
     func fetchReviewRequests(token: String) async throws -> ReviewRequests {
-        reviewRequests
+        locked { reviewRequests }
+    }
+
+    /// Like GitHub, a review answers the request, so the pull request leaves To Review.
+    func submitReview(token: String, reference: PullRequestReference, review: NewPullRequestReview) async throws {
+        locked {
+            reviewRequests = ReviewRequests(fromMe: reviewRequests.fromMe.filter { $0.id != reference.id },
+                                            fromMyTeams: reviewRequests.fromMyTeams.filter { $0.id != reference.id })
+        }
     }
 
     func enqueuePullRequest(token: String, pullRequestID: String) async throws {
@@ -62,7 +70,7 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
         }
     }
 
-    func enableAutoMerge(token: String, pullRequestID: String) async throws {
+    func enableAutoMerge(token: String, pullRequestID: String, mergeMethod: MergeMethod) async throws {
         updatePullRequest(with: pullRequestID) { pr in
             pr.copy(isAutoMergeEnabled: true, canEnableAutoMerge: false, canDisableAutoMerge: true)
         }
@@ -74,7 +82,7 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
         }
     }
 
-    func mergePullRequest(token: String, repoFullName: String, number: Int) async throws -> Bool {
+    func mergePullRequest(token: String, repoFullName: String, number: Int, method: MergeMethod) async throws -> Bool {
         locked { _ = pullRequests.removeValue(forKey: "\(repoFullName)#\(number)") }
         return true
     }
@@ -111,6 +119,7 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
                                        changedFiles: Self.detailFiles.count,
                                        commits: 3,
                                        canEdit: isOwn,
+                                       isViewerAuthor: isOwn,
                                        updatedAt: pullRequests[reference.id]?.updatedAt)
         let viewed = viewedFiles[nodeID] ?? []
         let files = Self.detailFiles.map { file in
@@ -320,11 +329,13 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
         [
             pullRequest(number: 101,
                         title: "Ready: merge button",
-                        status: .success),
+                        status: .success,
+                        reviewStatus: PullRequestReviewStatus(decision: .approved, approvedBy: ["octocat", "hubot"])),
             pullRequest(number: 102,
                         title: "Pending: enable auto-merge",
                         status: .pending,
-                        canEnableAutoMerge: true),
+                        canEnableAutoMerge: true,
+                        reviewStatus: PullRequestReviewStatus(decision: .reviewRequired, waitingOn: ["hubot", "mock/web-team"])),
             pullRequest(number: 103,
                         title: "Pending: disable auto-merge",
                         status: .pending,
@@ -348,10 +359,13 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
             pullRequest(number: 107,
                         title: "Checks errored",
                         status: .error,
-                        mergeStateStatus: "BLOCKED"),
+                        mergeStateStatus: "BLOCKED",
+                        reviewStatus: PullRequestReviewStatus(decision: .changesRequested, approvedBy: ["hubot"],
+                                                              changesRequestedBy: ["monalisa"])),
             pullRequest(number: 108,
                         title: "Waiting: auto-merge unavailable",
-                        status: .pending),
+                        status: .pending,
+                        reviewStatus: PullRequestReviewStatus(decision: .reviewRequired)),
             pullRequest(number: 109,
                         title: "Draft: success but not mergeable",
                         status: .success,
@@ -362,7 +376,17 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
             pullRequest(number: 111,
                         title: "Ready: no checks, add to queue",
                         status: .noChecks,
-                        isMergeQueueEnabled: true)
+                        isMergeQueueEnabled: true),
+            pullRequest(number: 112,
+                        title: "Blocked: merge conflict",
+                        status: .pending,
+                        canEnableAutoMerge: true,
+                        mergeStateStatus: "DIRTY"),
+            pullRequest(number: 113,
+                        title: "Blocked: needs an approval",
+                        status: .success,
+                        mergeStateStatus: "BLOCKED",
+                        reviewStatus: PullRequestReviewStatus(decision: .reviewRequired, waitingOn: ["octocat"]))
         ]
     }
 
@@ -383,7 +407,8 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
     }
 
     private static func makeReviewRequests(now: Date) -> ReviewRequests {
-        func request(number: Int, title: String, author: String, isDraft: Bool = false) -> ReviewRequestRow {
+        func request(number: Int, title: String, author: String, isDraft: Bool = false,
+                     checkState: CheckState?, additions: Int, deletions: Int, hoursWaiting: Double) -> ReviewRequestRow {
             ReviewRequestRow(id: "mock/github-panel#\(number)",
                              title: title,
                              number: number,
@@ -391,14 +416,22 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
                              htmlURL: URL(string: "https://github.com/mock/github-panel/pull/\(number)")!,
                              authorLogin: author,
                              isDraft: isDraft,
-                             updatedAt: now.addingTimeInterval(TimeInterval(-(number - 300) * 3_600)))
+                             updatedAt: now.addingTimeInterval(TimeInterval(-(number - 300) * 3_600)),
+                             checkState: checkState,
+                             additions: additions,
+                             deletions: deletions,
+                             requestedAt: now.addingTimeInterval(-hoursWaiting * 3_600))
         }
         return ReviewRequests(fromMe: [
-            request(number: 301, title: "Review: tidy the settings window", author: "octocat"),
-            request(number: 302, title: "Review: faster diff parsing", author: "hubot")
+            request(number: 301, title: "Review: tidy the settings window", author: "octocat",
+                    checkState: .success, additions: 42, deletions: 18, hoursWaiting: 50),
+            request(number: 302, title: "Review: faster diff parsing", author: "hubot",
+                    checkState: .failure, additions: 380, deletions: 95, hoursWaiting: 5)
         ], fromMyTeams: [
-            request(number: 303, title: "Team review: rename the release task", author: "monalisa"),
-            request(number: 304, title: "Team review: draft icon refresh", author: "octocat", isDraft: true)
+            request(number: 303, title: "Team review: rename the release task", author: "monalisa",
+                    checkState: .pending, additions: 6, deletions: 6, hoursWaiting: 26),
+            request(number: 304, title: "Team review: draft icon refresh", author: "octocat", isDraft: true,
+                    checkState: nil, additions: 120, deletions: 0, hoursWaiting: 1)
         ])
     }
 
@@ -411,7 +444,8 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
                                     canDisableAutoMerge: Bool = false,
                                     isMergeQueueEnabled: Bool = false,
                                     isInMergeQueue: Bool = false,
-                                    mergeStateStatus: String = "CLEAN") -> PullRequestRow {
+                                    mergeStateStatus: String = "CLEAN",
+                                    reviewStatus: PullRequestReviewStatus = .none) -> PullRequestRow {
         PullRequestRow(id: "mock/github-panel#\(number)",
                         nodeID: "mock-node-\(number)",
                         title: title,
@@ -427,7 +461,10 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
                         isMergeQueueEnabled: isMergeQueueEnabled,
                         isInMergeQueue: isInMergeQueue,
                         mergeStateStatus: mergeStateStatus,
-                        updatedAt: Date(timeIntervalSince1970: 0))
+                        updatedAt: Date(timeIntervalSince1970: 0),
+                        reviewStatus: reviewStatus,
+                        // Like most team repositories: squash by default, merge commits allowed, rebase off.
+                        mergeMethods: RepositoryMergeMethods(allowed: [.merge, .squash], suggested: .squash))
     }
 }
 
@@ -455,7 +492,9 @@ private extension PullRequestRow {
                         isMergeQueueEnabled: isMergeQueueEnabled,
                         isInMergeQueue: isInMergeQueue ?? self.isInMergeQueue,
                         mergeStateStatus: mergeStateStatus ?? self.mergeStateStatus,
-                        updatedAt: updatedAt ?? self.updatedAt)
+                        updatedAt: updatedAt ?? self.updatedAt,
+                        reviewStatus: reviewStatus,
+                        mergeMethods: mergeMethods)
     }
 }
 #endif

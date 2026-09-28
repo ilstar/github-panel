@@ -135,7 +135,8 @@ final class PRMonitorActionTests: XCTestCase {
             (row(number: 8, status: .success, mergeQueue: true, inMergeQueue: true), .queued, nil),
             (row(number: 9, status: .pending), .waitingForChecks, nil),
             (row(number: 10, status: .unknown), .statusUnavailable, nil),
-            (row(number: 11, status: .success, mergeStateStatus: "BLOCKED"), .blocked, nil)
+            (row(number: 11, status: .success, mergeStateStatus: "BLOCKED"), .blocked(.branchRules), nil),
+            (row(number: 12, status: .pending, canEnableAutoMerge: true, mergeStateStatus: "DIRTY"), .blocked(.conflicts), nil)
         ]
 
         for (item, expectedState, expectedCall) in cases {
@@ -152,6 +153,55 @@ final class PRMonitorActionTests: XCTestCase {
             if !api.disableCalls.isEmpty { calls.append("disable") }
             XCTAssertEqual(calls, expectedCall.map { [$0] } ?? [], "PR \(item.number)")
         }
+    }
+
+    func testMergeUsesTheRepositorysSuggestedMethod() async {
+        let api = FakeGitHubAPI()
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+        let item = row(number: 1, status: .success,
+                       mergeMethods: RepositoryMergeMethods(allowed: [.merge, .squash], suggested: .squash))
+
+        await monitor.requestMerge(for: item)
+
+        XCTAssertEqual(api.mergePullRequestCalls.map(\.method), [.squash])
+    }
+
+    func testChosenMergeMethodIsRememberedPerRepository() async {
+        let api = FakeGitHubAPI()
+        let defaults = FakeDefaults()
+        let methods = RepositoryMergeMethods(allowed: [.merge, .squash, .rebase], suggested: .squash)
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"), defaults: defaults)
+        let item = row(number: 1, status: .success, mergeMethods: methods)
+
+        monitor.chooseMergeMethod(.rebase, for: "acme/widgets")
+        await monitor.requestMerge(for: item)
+
+        XCTAssertEqual(api.mergePullRequestCalls.map(\.method), [.rebase])
+        XCTAssertEqual(defaults.stringValues["GithubPanel.mergeMethod.acme/widgets"], "REBASE")
+        // A new monitor, like after a relaunch, reads the choice back.
+        let relaunched = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"), defaults: defaults)
+        XCTAssertEqual(relaunched.mergeMethod(for: item), .rebase)
+    }
+
+    func testChosenMergeMethodIsIgnoredWhenTheRepositoryNoLongerAllowsIt() {
+        let monitor = makeMonitor()
+        monitor.chooseMergeMethod(.rebase, for: "acme/widgets")
+
+        let item = row(number: 1, status: .success,
+                       mergeMethods: RepositoryMergeMethods(allowed: [.squash], suggested: .merge))
+
+        XCTAssertEqual(monitor.mergeMethod(for: item), .squash)
+    }
+
+    func testEnableAutoMergeUsesTheMergeMethod() async {
+        let api = FakeGitHubAPI()
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+        let item = row(number: 1, status: .pending, canEnableAutoMerge: true,
+                       mergeMethods: RepositoryMergeMethods(allowed: [.merge, .squash], suggested: .squash))
+
+        await monitor.requestMerge(for: item)
+
+        XCTAssertEqual(api.enableMergeMethods, [.squash])
     }
 
     func testMergeWithoutTokenDoesNothing() async {

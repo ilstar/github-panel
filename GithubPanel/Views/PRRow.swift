@@ -6,6 +6,8 @@ struct PRRow: View {
     let relativeFormatter: RelativeDateTimeFormatter
     let now: Date
     let isMerging: Bool
+    /// The method the Merge and Enable auto-merge buttons use.
+    var mergeMethod: MergeMethod = .merge
     let onAction: () -> Void
 
     @State private var isHovering = false
@@ -39,6 +41,10 @@ struct PRRow: View {
                         detail: "Updated \(relativeFormatter.localizedString(for: pr.updatedAt, relativeTo: now))") {
                 if pr.isDraft {
                     TagView(text: "DRAFT")
+                }
+                if let badge = pr.reviewStatus.badge {
+                    TagView(text: badge.title, color: badge.color)
+                        .help(pr.reviewStatus.helpText ?? "")
                 }
             }
         }
@@ -83,6 +89,7 @@ struct PRRow: View {
         }
         .buttonStyle(.plain)
         .fixedSize()
+        .help(mergeButtonHelp)
         .disabled(mergeButtonState == .working)
         .opacity(mergeButtonState == .working ? 0.75 : 1)
         .animation(.easeInOut(duration: 0.12), value: isMergeButtonHovering)
@@ -97,7 +104,14 @@ struct PRRow: View {
     }
 
     private var mergeButtonTitle: String {
-        mergeButtonState.title
+        mergeButtonState.title(mergeMethod: mergeMethod)
+    }
+
+    private var mergeButtonHelp: String {
+        if mergeButtonState == .enableAutoMerge {
+            return "Auto-merge will \(mergeMethod.title.lowercased()) once GitHub allows it."
+        }
+        return mergeButtonState.helpText ?? ""
     }
 
     private var mergeIconName: String {
@@ -155,19 +169,37 @@ struct PRRow: View {
     }
 
     private var statusIcon: some View {
-        Group {
-            switch pr.status {
-            case .success:
-                RowIcon(systemName: "checkmark.circle.fill", color: Theme.green)
-            case .noChecks:
-                RowIcon(systemName: "minus.circle.fill", color: .secondary)
-            case .failure, .error:
-                RowIcon(systemName: "xmark.circle.fill", color: Theme.red)
-            case .pending:
-                RowIcon(systemName: "clock.circle.fill", color: Theme.amber)
-            case .unknown:
-                RowIcon(systemName: "questionmark.circle.fill", color: .secondary)
-            }
+        RowIcon(systemName: pr.status.symbolName, color: pr.status.tint)
+    }
+}
+
+extension CheckState {
+    var symbolName: String {
+        switch self {
+        case .success: return "checkmark.circle.fill"
+        case .noChecks: return "minus.circle.fill"
+        case .failure, .error: return "xmark.circle.fill"
+        case .pending: return "clock.circle.fill"
+        case .unknown: return "questionmark.circle.fill"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .success: return Theme.green
+        case .noChecks, .unknown: return .secondary
+        case .failure, .error: return Theme.red
+        case .pending: return Theme.amber
+        }
+    }
+}
+
+extension ReviewBadge {
+    var color: Color {
+        switch self {
+        case .approved: return Theme.green
+        case .changesRequested: return Theme.red
+        case .awaitingReview, .needsReview: return Theme.amber
         }
     }
 }

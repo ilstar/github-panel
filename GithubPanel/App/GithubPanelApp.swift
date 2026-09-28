@@ -19,6 +19,9 @@ struct GithubPanelApp: App {
         if !ProcessInfo.processInfo.isRunningTests {
             AppAppearance.stored().apply()
             NotificationManager.shared.configure()
+            NotificationManager.shared.openPullRequest = { [monitor] reference in
+                monitor.showPullRequest(reference)
+            }
             KeyboardShortcuts.onKeyUp(for: .toggleApp) {
                 AppVisibility.toggle()
             }

@@ -47,6 +47,8 @@ struct PullRequestDetail: Equatable {
     let commits: Int
     /// Whether the viewer authored the pull request and GitHub lets them edit its title and description.
     var canEdit = false
+    /// Whether the viewer opened the pull request. GitHub does not let authors review their own.
+    var isViewerAuthor = false
     /// When GitHub last changed the pull request. Compared with the list's `updatedAt` to tell whether a cached copy is stale.
     var updatedAt: Date?
 }

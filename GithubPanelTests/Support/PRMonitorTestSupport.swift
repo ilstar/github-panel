@@ -39,8 +39,9 @@ final class FakeGitHubAPI: GitHubAPIClient {
     private(set) var enqueueCalls: [String] = []
     private(set) var markReadyCalls: [String] = []
     private(set) var enableCalls: [String] = []
+    private(set) var enableMergeMethods: [MergeMethod] = []
     private(set) var disableCalls: [String] = []
-    private(set) var mergePullRequestCalls: [(repoFullName: String, number: Int)] = []
+    private(set) var mergePullRequestCalls: [(repoFullName: String, number: Int, method: MergeMethod)] = []
     private(set) var detailCalls: [(token: String, reference: PullRequestReference)] = []
     var detailHandler: ((PullRequestReference) async throws -> PullRequestDetailContent)?
     private(set) var setFileViewedCalls: [(token: String, pullRequestID: String, path: String, viewed: Bool)] = []
@@ -49,6 +50,7 @@ final class FakeGitHubAPI: GitHubAPIClient {
     private(set) var commentsCalls: [(token: String, reference: PullRequestReference)] = []
     private(set) var postCommentCalls: [(token: String, reference: PullRequestReference, comment: NewPullRequestComment)] = []
     private(set) var editCalls: [(token: String, reference: PullRequestReference, title: String?, body: String?)] = []
+    private(set) var reviewCalls: [(token: String, reference: PullRequestReference, review: NewPullRequestReview)] = []
     var enableHandler: ((String) async -> Void)?
     var enqueueHandler: ((String) async -> Void)?
 
@@ -96,9 +98,10 @@ final class FakeGitHubAPI: GitHubAPIClient {
         markReadyCalls.append(pullRequestID)
     }
 
-    func enableAutoMerge(token: String, pullRequestID: String) async throws {
+    func enableAutoMerge(token: String, pullRequestID: String, mergeMethod: MergeMethod) async throws {
         if let error { throw error }
         enableCalls.append(pullRequestID)
+        enableMergeMethods.append(mergeMethod)
         await enableHandler?(pullRequestID)
     }
 
@@ -107,9 +110,9 @@ final class FakeGitHubAPI: GitHubAPIClient {
         disableCalls.append(pullRequestID)
     }
 
-    func mergePullRequest(token: String, repoFullName: String, number: Int) async throws -> Bool {
+    func mergePullRequest(token: String, repoFullName: String, number: Int, method: MergeMethod) async throws -> Bool {
         if let error { throw error }
-        mergePullRequestCalls.append((repoFullName, number))
+        mergePullRequestCalls.append((repoFullName, number, method))
         return mergeResult
     }
 
@@ -140,6 +143,11 @@ final class FakeGitHubAPI: GitHubAPIClient {
     func editPullRequest(token: String, reference: PullRequestReference, title: String?, body: String?) async throws {
         if let error { throw error }
         editCalls.append((token, reference, title, body))
+    }
+
+    func submitReview(token: String, reference: PullRequestReference, review: NewPullRequestReview) async throws {
+        if let error { throw error }
+        reviewCalls.append((token, reference, review))
     }
 }
 
@@ -179,6 +187,11 @@ final class FakeNotificationPoster: NotificationPosting {
     }
 
     private(set) var posts: [Post] = []
+    private(set) var reviewPosts: [PullRequestNotification] = []
+
+    func postPullRequestNotification(_ notification: PullRequestNotification) {
+        reviewPosts.append(notification)
+    }
 
     func postStatusNotification(state: CheckState,
                                 title: String,
@@ -363,7 +376,8 @@ func row(number: Int,
                  inMergeQueue: Bool = false,
                  isDraft: Bool = false,
                  mergeStateStatus: String = "CLEAN",
-                 updatedAt: Date? = nil) -> PullRequestRow {
+                 updatedAt: Date? = nil,
+                 mergeMethods: RepositoryMergeMethods = RepositoryMergeMethods()) -> PullRequestRow {
     PullRequestRow(id: "acme/widgets#\(number)",
                    nodeID: "node-\(number)",
                    title: "PR \(number)",
@@ -379,7 +393,8 @@ func row(number: Int,
                    isMergeQueueEnabled: mergeQueue,
                    isInMergeQueue: inMergeQueue,
                    mergeStateStatus: mergeStateStatus,
-                   updatedAt: updatedAt ?? Date(timeIntervalSince1970: TimeInterval(number)))
+                   updatedAt: updatedAt ?? Date(timeIntervalSince1970: TimeInterval(number)),
+                   mergeMethods: mergeMethods)
 }
 
 func reviewRequestRow(number: Int, author: String? = "octocat") -> ReviewRequestRow {

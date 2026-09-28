@@ -19,9 +19,15 @@ struct PRReviewRequestRow: View {
                         .lineLimit(1)
                         .help(pr.title)
 
-                    RowSubtitle(text: "\(pr.repoFullName)#\(String(pr.number))", detail: detailText) {
+                    RowSubtitle(text: Self.subtitleText(for: pr), detail: detailText, compactDetail: whenText) {
                         if pr.isDraft {
                             TagView(text: "DRAFT")
+                        }
+                        if let checkState = pr.checkState {
+                            Image(systemName: checkState.symbolName)
+                                .foregroundStyle(checkState.tint)
+                                .help(checkState.descriptionText)
+                                .accessibilityLabel(checkState.descriptionText)
                         }
                     }
                 }
@@ -51,15 +57,28 @@ struct PRReviewRequestRow: View {
         }
     }
 
+    /// "owner/repo#12 · +120 −30": where the pull request lives and how big it is.
+    static func subtitleText(for pr: ReviewRequestRow) -> String {
+        let place = "\(pr.repoFullName)#\(String(pr.number))"
+        guard let additions = pr.additions, let deletions = pr.deletions else { return place }
+        return "\(place) · +\(additions) −\(deletions)"
+    }
+
     private var detailText: String {
-        let updated = "updated \(relativeFormatter.localizedString(for: pr.updatedAt, relativeTo: now))"
-        guard let author = pr.authorLogin else { return updated.capitalizedFirstLetter }
-        return "by \(author) · \(updated)"
+        guard let author = pr.authorLogin else { return whenText }
+        return "by \(author) · \(whenText.lowercasedFirstLetter)"
+    }
+
+    /// How long the author has waited on me, or when the pull request last changed when GitHub does not say.
+    /// Kept when the row is too narrow for the author, who is on the avatar anyway.
+    private var whenText: String {
+        pr.requestedAt.map { "Requested \(relativeFormatter.localizedString(for: $0, relativeTo: now))" }
+            ?? "Updated \(relativeFormatter.localizedString(for: pr.updatedAt, relativeTo: now))"
     }
 }
 
 private extension String {
-    var capitalizedFirstLetter: String {
-        prefix(1).uppercased() + dropFirst()
+    var lowercasedFirstLetter: String {
+        prefix(1).lowercased() + dropFirst()
     }
 }

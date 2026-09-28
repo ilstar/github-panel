@@ -20,13 +20,15 @@ flowchart TD
     queueEnabled -- "No" --> merge["Button: Merge"]
     mergeable -- "No" --> autoOn{"Auto-merge already enabled?"}
     autoOn -- "Yes" --> disable["Button: Disable auto-merge"]
-    autoOn -- "No" --> autoAvailable{"Can enable auto-merge?"}
+    autoOn -- "No" --> conflict{"Merge conflict?"}
+    conflict -- "Yes" --> conflictButton["Button: Merge conflict"]
+    conflict -- "No" --> autoAvailable{"Can enable auto-merge?"}
     autoAvailable -- "Yes" --> enable["Button: Enable auto-merge"]
     autoAvailable -- "No" --> pending{"Checks pending?"}
     pending -- "Yes" --> waiting["Button: Waiting for checks"]
     pending -- "No" --> known{"Check status known?"}
     known -- "No" --> unavailable["Button: Status unavailable"]
-    known -- "Yes" --> blocked["Button: Not mergeable"]
+    known -- "Yes" --> blocked["Button: the reason it cannot merge"]
 ```
 
 ## Button States
@@ -40,11 +42,26 @@ flowchart TD
 | Checks pass or none are reported, merge state is `CLEAN` or `HAS_HOOKS`, and no queue is enabled | `Merge` | Merge the PR now. |
 | Checks pass or none are reported, merge state is `CLEAN` or `HAS_HOOKS`, and a queue is enabled | `Add to queue` | Add the PR to the merge queue. |
 | Auto-merge enabled | `Disable auto-merge` | Cancel the scheduled auto-merge. |
+| Merge state is `DIRTY` | `Merge conflict` | Resolve the conflicts first. Shown before the auto-merge and waiting states, since auto-merge cannot get past a conflict. |
 | Auto-merge can be enabled | `Enable auto-merge` | Merge automatically once GitHub considers the PR eligible. |
 | Checks are pending and no auto-merge action is available | `Waiting for checks` | Checks are still running, and auto-merge cannot be enabled here. |
 | Check status is unknown and no auto-merge action is available | `Status unavailable` | GitHub did not provide a usable check status. |
-| Otherwise not mergeable | `Not mergeable` | GitHub's merge state prevents a merge or queue action. |
+| Otherwise not mergeable | The reason (see below) | GitHub's merge state prevents a merge or queue action. |
 | Merged | No row | The PR is done and leaves the open list. |
+
+## Why a PR Cannot Merge
+
+A blocked button names the reason, and its tooltip says what to do. The reason comes from GitHub's `mergeStateStatus` and, for `BLOCKED`, the review verdict (`reviewDecision`).
+
+| Merge state | Review verdict | Button |
+| --- | --- | --- |
+| `DIRTY` | any | `Merge conflict` |
+| `BEHIND` | any | `Out of date` |
+| `BLOCKED` | `CHANGES_REQUESTED` | `Changes requested` |
+| `BLOCKED` | `REVIEW_REQUIRED` | `Needs approval` |
+| `BLOCKED` | `APPROVED` or none | `Blocked by rules` |
+| `UNKNOWN` | any | `Checking merge` |
+| anything else | any | `Not mergeable` |
 
 ## Product Notes
 
@@ -58,4 +75,4 @@ Draft PRs show `Mark ready` regardless of check status. After the mutation succe
 
 ## Implementation
 
-`MergeButtonState.resolve(for:isWorking:)` in `GithubPanel/Models/MergeButtonState.swift` is the single source of truth for this flow. The row's button label and `PRMonitor.requestMerge(for:)` both switch on its result, so the action performed always matches the label shown.
+`MergeButtonState.resolve(for:isWorking:)` in `GithubPanel/Models/MergeButtonState.swift` is the single source of truth for this flow, and `MergeBlockReason` holds the reasons above. The row's button label and `PRMonitor.requestMerge(for:)` both switch on its result, so the action performed always matches the label shown.
