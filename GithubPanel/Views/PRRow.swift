@@ -40,6 +40,10 @@ struct PRRow: View {
                 if pr.isDraft {
                     TagView(text: "DRAFT")
                 }
+                if let badge = pr.reviewStatus.badge {
+                    TagView(text: badge.title, color: badge.color)
+                        .help(pr.reviewStatus.helpText ?? "")
+                }
             }
         }
     }
@@ -168,6 +172,16 @@ struct PRRow: View {
             case .unknown:
                 RowIcon(systemName: "questionmark.circle.fill", color: .secondary)
             }
+        }
+    }
+}
+
+extension ReviewBadge {
+    var color: Color {
+        switch self {
+        case .approved: return Theme.green
+        case .changesRequested: return Theme.red
+        case .awaitingReview, .needsReview: return Theme.amber
         }
     }
 }

@@ -41,7 +41,12 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertTrue(pr.isMergeQueueEnabled)
         XCTAssertFalse(pr.isInMergeQueue)
         XCTAssertEqual(pr.mergeStateStatus, "CLEAN")
+        XCTAssertEqual(pr.reviewStatus, PullRequestReviewStatus(decision: .changesRequested,
+                                                                approvedBy: ["hubot"],
+                                                                changesRequestedBy: ["monalisa"],
+                                                                waitingOn: ["octocat", "acme/web"]))
         let second = result.rows[1]
+        XCTAssertEqual(second.reviewStatus, .none)
         XCTAssertEqual(second.status, .success) // Preserve existing missing-rollup behavior.
         XCTAssertTrue(second.isDraft)
         XCTAssertFalse(second.isAutoMergeEnabled)
@@ -60,6 +65,9 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertTrue(body.query.contains("field: UPDATED_AT, direction: DESC"))
         XCTAssertTrue(body.query.contains("repository { nameWithOwner }"))
         XCTAssertTrue(body.query.contains("contexts(first: 1) { totalCount }"))
+        XCTAssertTrue(body.query.contains("reviewDecision"))
+        XCTAssertTrue(body.query.contains("latestOpinionatedReviews(first: 20)"))
+        XCTAssertTrue(body.query.contains("... on Team { combinedSlug }"))
     }
 
     func testExpectedRollupWithNoContextsIsDecodedAsNoChecks() async throws {
@@ -765,7 +773,17 @@ private let openPRResponse = """
    "updatedAt":"2026-04-12T12:34:56Z","repository":{"nameWithOwner":"acme/widgets"},
    "headRefOid":"abc123","isDraft":false,"autoMergeRequest":{"enabledAt":"2026-04-12T12:00:00Z"},
    "viewerCanEnableAutoMerge":false,"viewerCanDisableAutoMerge":true,"isMergeQueueEnabled":true,
-   "isInMergeQueue":false,"mergeStateStatus":"CLEAN","statusCheckRollup":{"state":"PENDING"}},
+   "isInMergeQueue":false,"mergeStateStatus":"CLEAN","statusCheckRollup":{"state":"PENDING"},
+   "reviewDecision":"CHANGES_REQUESTED",
+   "latestOpinionatedReviews":{"nodes":[
+     {"state":"APPROVED","author":{"login":"hubot"}},
+     {"state":"CHANGES_REQUESTED","author":{"login":"monalisa"}},
+     {"state":"DISMISSED","author":{"login":"ghost-reviewer"}},
+     {"state":"APPROVED","author":null}]},
+   "reviewRequests":{"nodes":[
+     {"requestedReviewer":{"login":"octocat"}},
+     {"requestedReviewer":{"combinedSlug":"acme/web"}},
+     {"requestedReviewer":null}]}},
   {"id":"PR_other","title":"Draft","number":3,"url":"https://github.com/acme/widgets/pull/3",
    "updatedAt":"2026-04-11T12:34:56Z","repository":{"nameWithOwner":"acme/widgets"},
    "headRefOid":"def456","isDraft":true,"autoMergeRequest":null,

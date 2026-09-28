@@ -40,6 +40,18 @@ final class GitHubAPI: GitHubAPIClient {
                   state
                   contexts(first: 1) { totalCount }
                 }
+                reviewDecision
+                latestOpinionatedReviews(first: 20) { nodes { state author { login } } }
+                reviewRequests(first: 20) {
+                  nodes {
+                    requestedReviewer {
+                      ... on User { login }
+                      ... on Bot { login }
+                      ... on Mannequin { login }
+                      ... on Team { combinedSlug }
+                    }
+                  }
+                }
               }
             }
           }
@@ -78,7 +90,8 @@ final class GitHubAPI: GitHubAPIClient {
                            isMergeQueueEnabled: pr.isMergeQueueEnabled,
                            isInMergeQueue: pr.isInMergeQueue,
                            mergeStateStatus: pr.mergeStateStatus,
-                           updatedAt: pr.updatedAt)
+                           updatedAt: pr.updatedAt,
+                           reviewStatus: pr.reviewStatus)
         }
         return OpenPullRequests(login: login, rows: rows)
     }
@@ -693,6 +706,38 @@ private struct PullRequestNode: Decodable {
     let isInMergeQueue: Bool
     let mergeStateStatus: String
     let statusCheckRollup: StatusCheckRollup?
+    let reviewDecision: String?
+    let latestOpinionatedReviews: Connection<Review>?
+    let reviewRequests: Connection<ReviewRequest>?
+
+    struct Connection<Node: Decodable>: Decodable { let nodes: [Node] }
+    struct Login: Decodable { let login: String }
+    struct Review: Decodable {
+        let state: String
+        /// Missing when the reviewer's account was deleted.
+        let author: Login?
+    }
+    struct ReviewRequest: Decodable {
+        struct Reviewer: Decodable {
+            let login: String?
+            let combinedSlug: String?
+        }
+        let requestedReviewer: Reviewer?
+    }
+
+    var reviewStatus: PullRequestReviewStatus {
+        let reviews = latestOpinionatedReviews?.nodes ?? []
+        func reviewers(_ state: String) -> [String] {
+            reviews.filter { $0.state == state }.compactMap { $0.author?.login }
+        }
+        return PullRequestReviewStatus(
+            decision: reviewDecision.flatMap(ReviewDecision.init(rawValue:)),
+            approvedBy: reviewers("APPROVED"),
+            changesRequestedBy: reviewers("CHANGES_REQUESTED"),
+            waitingOn: (reviewRequests?.nodes ?? []).compactMap { request in
+                request.requestedReviewer.flatMap { $0.login ?? $0.combinedSlug }
+            })
+    }
 }
 
 private struct ReviewRequestsResponse: Decodable {
