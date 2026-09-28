@@ -74,6 +74,9 @@ struct TagView: View {
         Text(text)
             .font(.system(size: 9.5, weight: .bold))
             .tracking(0.4)
+            // A tag stays on one line; the row's other text truncates to make room.
+            .lineLimit(1)
+            .fixedSize()
             .padding(.horizontal, 6)
             .padding(.vertical, 1.5)
             .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(color.opacity(0.14)))
@@ -113,23 +116,28 @@ extension View {
 struct RowSubtitle<Leading: View>: View {
     let text: String
     let detail: String
+    /// A shorter detail for when the full one does not fit. Nil drops the detail instead.
+    var compactDetail: String?
     @ViewBuilder var leading: () -> Leading
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
-            line(showsDetail: true)
-            line(showsDetail: false)
+            line(detail: detail)
+            if let compactDetail {
+                line(detail: compactDetail)
+            }
+            line(detail: nil)
         }
         .font(.caption)
     }
 
-    private func line(showsDetail: Bool) -> some View {
+    private func line(detail: String?) -> some View {
         HStack(spacing: 6) {
             leading()
             Text(text)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-            if showsDetail {
+            if let detail {
                 Text(detail)
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)

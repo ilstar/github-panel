@@ -7,7 +7,8 @@ struct ReviewComposer: View {
     /// Submits the review. Throws to keep the draft and show the error.
     let onSubmit: (PullRequestReviewEvent, String) async throws -> Void
 
-    @State private var event: PullRequestReviewEvent = .approve
+    /// Starts on Comment, like GitHub, so an approval is always a deliberate choice.
+    @State private var event: PullRequestReviewEvent = .comment
     @State private var text = ""
     @State private var isSubmitting = false
     @State private var errorMessage: String?

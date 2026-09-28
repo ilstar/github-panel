@@ -376,7 +376,17 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
             pullRequest(number: 111,
                         title: "Ready: no checks, add to queue",
                         status: .noChecks,
-                        isMergeQueueEnabled: true)
+                        isMergeQueueEnabled: true),
+            pullRequest(number: 112,
+                        title: "Blocked: merge conflict",
+                        status: .pending,
+                        canEnableAutoMerge: true,
+                        mergeStateStatus: "DIRTY"),
+            pullRequest(number: 113,
+                        title: "Blocked: needs an approval",
+                        status: .success,
+                        mergeStateStatus: "BLOCKED",
+                        reviewStatus: PullRequestReviewStatus(decision: .reviewRequired, waitingOn: ["octocat"]))
         ]
     }
 

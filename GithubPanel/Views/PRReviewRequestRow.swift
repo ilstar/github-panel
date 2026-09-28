@@ -19,7 +19,7 @@ struct PRReviewRequestRow: View {
                         .lineLimit(1)
                         .help(pr.title)
 
-                    RowSubtitle(text: Self.subtitleText(for: pr), detail: detailText) {
+                    RowSubtitle(text: Self.subtitleText(for: pr), detail: detailText, compactDetail: whenText) {
                         if pr.isDraft {
                             TagView(text: "DRAFT")
                         }
@@ -64,17 +64,21 @@ struct PRReviewRequestRow: View {
         return "\(place) · +\(additions) −\(deletions)"
     }
 
-    /// How long the author has waited on me, or when the pull request last changed when GitHub does not say.
     private var detailText: String {
-        let when = pr.requestedAt.map { "requested \(relativeFormatter.localizedString(for: $0, relativeTo: now))" }
-            ?? "updated \(relativeFormatter.localizedString(for: pr.updatedAt, relativeTo: now))"
-        guard let author = pr.authorLogin else { return when.capitalizedFirstLetter }
-        return "by \(author) · \(when)"
+        guard let author = pr.authorLogin else { return whenText }
+        return "by \(author) · \(whenText.lowercasedFirstLetter)"
+    }
+
+    /// How long the author has waited on me, or when the pull request last changed when GitHub does not say.
+    /// Kept when the row is too narrow for the author, who is on the avatar anyway.
+    private var whenText: String {
+        pr.requestedAt.map { "Requested \(relativeFormatter.localizedString(for: $0, relativeTo: now))" }
+            ?? "Updated \(relativeFormatter.localizedString(for: pr.updatedAt, relativeTo: now))"
     }
 }
 
 private extension String {
-    var capitalizedFirstLetter: String {
-        prefix(1).uppercased() + dropFirst()
+    var lowercasedFirstLetter: String {
+        prefix(1).lowercased() + dropFirst()
     }
 }
