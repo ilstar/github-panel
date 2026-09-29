@@ -207,6 +207,16 @@ final class FakeNotificationPoster: NotificationPosting {
 }
 
 final class FakeDefaults: DefaultsStoring {
+    var boolValues: [String: Bool] = [:]
+
+    func object(forKey defaultName: String) -> Any? {
+        boolValues[defaultName]
+    }
+
+    func set(_ value: Bool, forKey defaultName: String) {
+        boolValues[defaultName] = value
+    }
+
     var values: [String: Double] = [:]
     var stringValues: [String: String] = [:]
 

@@ -1,6 +1,8 @@
 import Foundation
 
 protocol DefaultsStoring {
+    func object(forKey defaultName: String) -> Any?
+    func set(_ value: Bool, forKey defaultName: String)
     func double(forKey defaultName: String) -> Double
     func string(forKey defaultName: String) -> String?
     func set(_ value: Double, forKey defaultName: String)

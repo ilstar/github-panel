@@ -11,6 +11,7 @@ struct SettingsView: View {
         Form {
             tokenSection
             appearanceSection
+            notificationsSection
             refreshSection
             hooksSection
             shortcutSection
@@ -68,6 +69,20 @@ struct SettingsView: View {
             }
         } header: {
             Text("Appearance")
+        }
+    }
+
+    private var notificationsSection: some View {
+        Section {
+            Toggle("Check results", isOn: $monitor.notifyCheckResults)
+            Toggle("Approvals on my pull requests", isOn: $monitor.notifyApprovals)
+            Toggle("Changes requested on my pull requests", isOn: $monitor.notifyChangesRequested)
+            Toggle("Review requests from me", isOn: $monitor.notifyReviewsFromMe)
+            Toggle("Review requests from my teams", isOn: $monitor.notifyReviewsFromMyTeams)
+        } header: {
+            Text("Notifications")
+        } footer: {
+            Text("Choose which events send macOS notifications. Check results are sent when pending checks finish. Requests sent directly to you use the personal setting, even if your team is also requested.")
         }
     }
 

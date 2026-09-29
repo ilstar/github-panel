@@ -45,6 +45,22 @@ final class PRMonitor: ObservableObject {
         }
     }
 
+    @Published var notifyCheckResults: Bool {
+        didSet { defaults.set(notifyCheckResults, forKey: DefaultsKeys.notifyCheckResults) }
+    }
+    @Published var notifyApprovals: Bool {
+        didSet { defaults.set(notifyApprovals, forKey: DefaultsKeys.notifyApprovals) }
+    }
+    @Published var notifyChangesRequested: Bool {
+        didSet { defaults.set(notifyChangesRequested, forKey: DefaultsKeys.notifyChangesRequested) }
+    }
+    @Published var notifyReviewsFromMe: Bool {
+        didSet { defaults.set(notifyReviewsFromMe, forKey: DefaultsKeys.notifyReviewsFromMe) }
+    }
+    @Published var notifyReviewsFromMyTeams: Bool {
+        didSet { defaults.set(notifyReviewsFromMyTeams, forKey: DefaultsKeys.notifyReviewsFromMyTeams) }
+    }
+
     /// Merge methods picked from a row's menu, keyed by repository. Also saved to defaults.
     @Published private var mergeMethodChoices: [String: MergeMethod] = [:]
 
@@ -68,7 +84,7 @@ final class PRMonitor: ObservableObject {
     private var lastStates: [String: CheckState] = [:]
     private var lastReviewStatuses: [String: PullRequestReviewStatus] = [:]
     /// Review requests seen since the token was set. Nil until the first load, so the first list posts nothing.
-    private var knownReviewRequestIDs: Set<String>?
+    private var knownReviewRequestIDs: [ReviewRequestGroup: Set<String>]?
     /// Main windows showing the list. A clicked notification opens GitHub while there are none.
     private var listWindowCount = 0
     private var nextTimerRefreshAt: Date?
@@ -97,6 +113,11 @@ final class PRMonitor: ObservableObject {
         self.dateProvider = dateProvider
         self.hookRunner = hookRunner
         self.isUsingMockData = isUsingMockData
+        notifyCheckResults = defaults.object(forKey: DefaultsKeys.notifyCheckResults) as? Bool ?? true
+        notifyApprovals = defaults.object(forKey: DefaultsKeys.notifyApprovals) as? Bool ?? true
+        notifyChangesRequested = defaults.object(forKey: DefaultsKeys.notifyChangesRequested) as? Bool ?? true
+        notifyReviewsFromMe = defaults.object(forKey: DefaultsKeys.notifyReviewsFromMe) as? Bool ?? true
+        notifyReviewsFromMyTeams = defaults.object(forKey: DefaultsKeys.notifyReviewsFromMyTeams) as? Bool ?? true
         let stored = defaults.double(forKey: DefaultsKeys.refreshInterval)
         if stored == 0 {
             refreshInterval = 60
@@ -458,11 +479,13 @@ final class PRMonitor: ObservableObject {
             if let previous = lastStates[pr.id],
                previous == .pending,
                pr.status != .pending {
-                notificationPoster.postStatusNotification(state: pr.status,
-                                                          title: pr.title,
-                                                          repoFullName: pr.repoFullName,
-                                                          number: pr.number,
-                                                          htmlURL: pr.htmlURL)
+                if notifyCheckResults {
+                    notificationPoster.postStatusNotification(state: pr.status,
+                                                              title: pr.title,
+                                                              repoFullName: pr.repoFullName,
+                                                              number: pr.number,
+                                                              htmlURL: pr.htmlURL)
+                }
                 runHookIfConfigured(for: pr)
             }
             lastStates[pr.id] = pr.status
@@ -481,12 +504,12 @@ final class PRMonitor: ObservableObject {
     private func notifyAboutNewReviews(on pr: PullRequestRow, previous: PullRequestReviewStatus) {
         let approvers = pr.reviewStatus.approvedBy.filter { !previous.approvedBy.contains($0) }
         let requesters = pr.reviewStatus.changesRequestedBy.filter { !previous.changesRequestedBy.contains($0) }
-        if !approvers.isEmpty {
+        if notifyApprovals && !approvers.isEmpty {
             notificationPoster.postPullRequestNotification(
                 PullRequestNotification(kind: .approved(by: approvers), reference: pr.reference,
                                         pullRequestTitle: pr.title, htmlURL: pr.htmlURL))
         }
-        if !requesters.isEmpty {
+        if notifyChangesRequested && !requesters.isEmpty {
             notificationPoster.postPullRequestNotification(
                 PullRequestNotification(kind: .changesRequested(by: requesters), reference: pr.reference,
                                         pullRequestTitle: pr.title, htmlURL: pr.htmlURL))
@@ -495,12 +518,22 @@ final class PRMonitor: ObservableObject {
 
     /// Posts a notification for each ready pull request that asks for my review since the last refresh.
     private func notifyAboutNewReviewRequests(_ requests: ReviewRequests) {
-        defer { knownReviewRequestIDs = Set(requests.rows.map(\.id)) }
+        defer {
+            knownReviewRequestIDs = Dictionary(uniqueKeysWithValues: ReviewRequestGroup.allCases.map {
+                ($0, Set(requests.rows(in: $0).map(\.id)))
+            })
+        }
         guard let known = knownReviewRequestIDs else { return }
-        for row in requests.rows where !known.contains(row.id) && !row.isDraft {
-            notificationPoster.postPullRequestNotification(
-                PullRequestNotification(kind: .reviewRequested(by: row.authorLogin), reference: row.reference,
-                                        pullRequestTitle: row.title, htmlURL: row.htmlURL))
+        var posted: Set<String> = []
+        for group in ReviewRequestGroup.allCases {
+            let enabled = group == .fromMe ? notifyReviewsFromMe : notifyReviewsFromMyTeams
+            guard enabled else { continue }
+            for row in requests.rows(in: group)
+                where !(known[group] ?? []).contains(row.id) && !row.isDraft && posted.insert(row.id).inserted {
+                notificationPoster.postPullRequestNotification(
+                    PullRequestNotification(kind: .reviewRequested(by: row.authorLogin), reference: row.reference,
+                                            pullRequestTitle: row.title, htmlURL: row.htmlURL))
+            }
         }
     }
 
@@ -676,6 +709,12 @@ struct MissingTokenError: LocalizedError {
 }
 
 private enum DefaultsKeys {
+    static let notifyCheckResults = "GithubPanel.notifications.notifyCheckResults"
+    static let notifyApprovals = "GithubPanel.notifications.notifyApprovals"
+    static let notifyChangesRequested = "GithubPanel.notifications.notifyChangesRequested"
+    static let notifyReviewsFromMe = "GithubPanel.notifications.notifyReviewsFromMe"
+    static let notifyReviewsFromMyTeams = "GithubPanel.notifications.notifyReviewsFromMyTeams"
+
     static let refreshInterval = "GithubPanel.refreshInterval"
     static let allSucceededHookScript = "GithubPanel.hooks.allSucceededScript"
     static let anyFailuresHookScript = "GithubPanel.hooks.anyFailuresScript"
