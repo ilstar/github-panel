@@ -6,6 +6,8 @@ enum MarkdownBlock: Equatable {
     case heading(level: Int, text: String)
     case paragraph(String)
     case listItem(marker: String, indent: Int, text: String)
+    /// A task list item like `- [x] Done`. `index` counts the description's task items from zero.
+    case task(index: Int, checked: Bool, indent: Int, text: String)
     case quote(String)
     case code(language: String?, text: String)
     case table(header: [String], alignments: [MarkdownTableAlignment], rows: [[String]])
@@ -19,10 +21,39 @@ enum MarkdownTableAlignment: Equatable {
 /// A small line-based Markdown parser that covers what PR descriptions usually use.
 enum MarkdownBlocks {
     static func parse(_ markdown: String) -> [MarkdownBlock] {
+        parseBlocks(strippingHTMLComments(markdown).text).blocks
+    }
+
+    /// The Markdown with one task item checked or unchecked, like clicking its box on GitHub.
+    /// Only the character between the brackets changes. Nil when there is no such task item.
+    static func settingTask(_ index: Int, checked: Bool, in markdown: String) -> String? {
+        let stripped = strippingHTMLComments(markdown)
+        let boxes = parseBlocks(stripped.text).taskBoxes
+        guard boxes.indices.contains(index) else { return nil }
+        // Find the box in the original text by walking the pieces the comments were cut from.
+        var offset = stripped.text.utf8.distance(from: stripped.text.startIndex, to: boxes[index])
+        for piece in stripped.pieces {
+            let count = piece.utf8.count
+            guard offset >= count else {
+                let box = markdown.utf8.index(piece.startIndex, offsetBy: offset)
+                guard " xX".contains(markdown[box]) else { return nil }
+                if (markdown[box] != " ") == checked { return markdown }
+                var result = markdown
+                result.replaceSubrange(box...box, with: checked ? "x" : " ")
+                return result
+            }
+            offset -= count
+        }
+        return nil
+    }
+
+    /// The blocks, and where each task item's box character sits in `text`.
+    private static func parseBlocks(_ text: String) -> (blocks: [MarkdownBlock], taskBoxes: [String.Index]) {
         var blocks: [MarkdownBlock] = []
         var paragraph: [String] = []
         var quote: [String] = []
         var code: (language: String?, lines: [String])?
+        var taskBoxes: [String.Index] = []
 
         func flushParagraph() {
             guard !paragraph.isEmpty else { return }
@@ -36,8 +67,8 @@ enum MarkdownBlocks {
             quote = []
         }
 
-        let normalized = stripHTMLComments(markdown).replacingOccurrences(of: "\r\n", with: "\n")
-        let lines = normalized.components(separatedBy: "\n")
+        // Lines stay slices of `text` so task boxes can be traced back to it.
+        let lines = text.split(omittingEmptySubsequences: false) { $0 == "\n" || $0 == "\r\n" }
         var index = 0
         while index < lines.count {
             let line = lines[index]
@@ -49,7 +80,7 @@ enum MarkdownBlocks {
                     blocks.append(.code(language: open.language, text: open.lines.joined(separator: "\n")))
                     code = nil
                 } else {
-                    open.lines.append(line)
+                    open.lines.append(String(line))
                     code = open
                 }
                 continue
@@ -76,7 +107,7 @@ enum MarkdownBlocks {
                 flushParagraph()
                 blocks.append(heading)
             } else if index < lines.count, let header = tableCells(trimmed),
-                      let alignments = tableAlignments(lines[index]), alignments.count == header.count {
+                      let alignments = tableAlignments(String(lines[index])), alignments.count == header.count {
                 flushParagraph()
                 index += 1
                 var rows: [[String]] = []
@@ -92,7 +123,13 @@ enum MarkdownBlocks {
                 blocks.append(.rule)
             } else if let item = listItem(line) {
                 flushParagraph()
-                blocks.append(item)
+                if let task = taskItem(item.content) {
+                    blocks.append(.task(index: taskBoxes.count, checked: task.checked, indent: item.indent, text: task.text))
+                    taskBoxes.append(task.box)
+                } else {
+                    blocks.append(.listItem(marker: item.marker, indent: item.indent,
+                                            text: item.content.trimmingCharacters(in: .whitespaces)))
+                }
             } else {
                 paragraph.append(trimmed)
             }
@@ -103,20 +140,23 @@ enum MarkdownBlocks {
         if let open = code {
             blocks.append(.code(language: open.language, text: open.lines.joined(separator: "\n")))
         }
-        return blocks
+        return (blocks, taskBoxes)
     }
 
-    static func stripHTMLComments(_ text: String) -> String {
-        var result = ""
+    /// The text without HTML comments, and the pieces of the original text it was joined from.
+    private static func strippingHTMLComments(_ text: String) -> (text: String, pieces: [Substring]) {
+        var pieces: [Substring] = []
         var rest = Substring(text)
         while let start = rest.range(of: "<!--") {
-            result += rest[..<start.lowerBound]
+            pieces.append(rest[..<start.lowerBound])
             guard let end = rest[start.upperBound...].range(of: "-->") else {
-                return result
+                rest = rest[rest.endIndex...]
+                break
             }
             rest = rest[end.upperBound...]
         }
-        return result + rest
+        pieces.append(rest)
+        return (pieces.joined(), pieces)
     }
 
     private static func heading(_ line: String) -> MarkdownBlock? {
@@ -177,21 +217,35 @@ enum MarkdownBlocks {
         return alignments
     }
 
-    private static func listItem(_ line: String) -> MarkdownBlock? {
+    /// A list item's marker, nesting level, and the text after the marker.
+    private static func listItem(_ line: Substring) -> (marker: String, indent: Int, content: Substring)? {
         let leading = line.prefix { $0 == " " || $0 == "\t" }
         let indent = leading.reduce(0) { $0 + ($1 == "\t" ? 4 : 1) } / 2
         let rest = line.dropFirst(leading.count)
 
         if let first = rest.first, "-*+".contains(first), rest.dropFirst().first == " " {
-            return .listItem(marker: "•", indent: indent, text: rest.dropFirst(2).trimmingCharacters(in: .whitespaces))
+            return ("•", indent, rest.dropFirst(2))
         }
 
         let digits = rest.prefix { $0.isNumber }
         let afterDigits = rest.dropFirst(digits.count)
         if !digits.isEmpty, digits.count <= 9, afterDigits.first == "." || afterDigits.first == ")",
            afterDigits.dropFirst().first == " " {
-            return .listItem(marker: "\(digits).", indent: indent, text: afterDigits.dropFirst(2).trimmingCharacters(in: .whitespaces))
+            return ("\(digits).", indent, afterDigits.dropFirst(2))
         }
         return nil
+    }
+
+    /// The box of a task item like `[ ] To do` or `[x] Done`, found at the start of a list item's text.
+    private static func taskItem(_ content: Substring) -> (checked: Bool, box: String.Index, text: String)? {
+        let rest = content.drop { $0 == " " }
+        guard rest.first == "[" else { return nil }
+        let box = rest.index(after: rest.startIndex)
+        guard box < rest.endIndex, " xX".contains(rest[box]) else { return nil }
+        let close = rest.index(after: box)
+        guard close < rest.endIndex, rest[close] == "]" else { return nil }
+        let text = rest[rest.index(after: close)...]
+        guard text.isEmpty || text.first == " " || text.first == "\t" else { return nil }
+        return (rest[box] != " ", box, text.trimmingCharacters(in: .whitespaces))
     }
 }

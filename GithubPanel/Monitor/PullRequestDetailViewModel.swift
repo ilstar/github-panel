@@ -46,6 +46,8 @@ final class PullRequestDetailViewModel: ObservableObject {
     private let cache: PullRequestDetailCache?
     /// Presentations built so far, keyed by filename and whether whitespace changes are hidden.
     private var presentations: [PresentationKey: DiffPresentation] = [:]
+    /// The last task box save, so quick clicks reach GitHub in order and the last one wins.
+    private var taskSave: Task<Void, Error>?
 
     private struct PresentationKey: Hashable {
         let filename: String
@@ -177,6 +179,35 @@ final class PullRequestDetailViewModel: ObservableObject {
         var detail = current.detail
         detail.title = title ?? detail.title
         detail.body = body ?? detail.body
+        content = PullRequestDetailContent(detail: detail, files: current.files)
+        cacheContent()
+    }
+
+    /// Checks or unchecks a task item in the description, like clicking its box on GitHub.
+    /// Shows the change right away and puts the old description back if GitHub refuses it.
+    func setTask(_ index: Int, checked: Bool) async {
+        guard let old = content?.detail.body, content?.detail.canEdit == true,
+              let body = MarkdownBlocks.settingTask(index, checked: checked, in: old), body != old else { return }
+        setBody(body)
+        let previous = taskSave
+        let save = Task { [sendEdit, reference] in
+            _ = await previous?.result
+            try await sendEdit(reference, nil, body)
+        }
+        taskSave = save
+        do {
+            try await save.value
+        } catch {
+            // A later click already changed the description again; leave that one showing.
+            if content?.detail.body == body { setBody(old) }
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func setBody(_ body: String) {
+        guard let current = content else { return }
+        var detail = current.detail
+        detail.body = body
         content = PullRequestDetailContent(detail: detail, files: current.files)
         cacheContent()
     }

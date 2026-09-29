@@ -90,4 +90,54 @@ final class MarkdownBlocksTests: XCTestCase {
     func testDelimiterRowMustMatchHeaderColumnCount() {
         XCTAssertEqual(MarkdownBlocks.parse("| a | b |\n| --- |"), [.paragraph("| a | b |\n| --- |")])
     }
+
+    func testParsesTaskListItems() {
+        let markdown = """
+        - [ ] Write tests
+          - [x] Nested **done**
+        * [X] Capital X
+        1. [ ] Numbered
+        - [ ]
+        - [x]no space
+        - [] not a task
+        """
+
+        XCTAssertEqual(MarkdownBlocks.parse(markdown), [
+            .task(index: 0, checked: false, indent: 0, text: "Write tests"),
+            .task(index: 1, checked: true, indent: 1, text: "Nested **done**"),
+            .task(index: 2, checked: true, indent: 0, text: "Capital X"),
+            .task(index: 3, checked: false, indent: 0, text: "Numbered"),
+            .task(index: 4, checked: false, indent: 0, text: ""),
+            .listItem(marker: "•", indent: 0, text: "[x]no space"),
+            .listItem(marker: "•", indent: 0, text: "[] not a task")
+        ])
+    }
+
+    func testSettingTaskChangesOnlyThatBox() {
+        let markdown = "## Todo\r\n- [ ] one\r\n- [x] two\r\n* [X] three"
+
+        XCTAssertEqual(MarkdownBlocks.settingTask(0, checked: true, in: markdown),
+                       "## Todo\r\n- [x] one\r\n- [x] two\r\n* [X] three")
+        XCTAssertEqual(MarkdownBlocks.settingTask(2, checked: false, in: markdown),
+                       "## Todo\r\n- [ ] one\r\n- [x] two\r\n* [ ] three")
+        XCTAssertEqual(MarkdownBlocks.settingTask(1, checked: true, in: markdown), markdown)
+        XCTAssertNil(MarkdownBlocks.settingTask(3, checked: true, in: markdown))
+    }
+
+    func testSettingTaskSkipsBoxesInCodeAndHTMLComments() {
+        let markdown = """
+        <!-- - [ ] template hint -->
+        ```
+        - [ ] in code
+        ```
+        Intro <!--
+        - [ ] hidden
+        --> ✅ - [ ] after comment
+        - [ ] real
+        """
+
+        XCTAssertEqual(MarkdownBlocks.parse(markdown).last, .task(index: 0, checked: false, indent: 0, text: "real"))
+        XCTAssertEqual(MarkdownBlocks.settingTask(0, checked: true, in: markdown),
+                       markdown.replacingOccurrences(of: "- [ ] real", with: "- [x] real"))
+    }
 }
