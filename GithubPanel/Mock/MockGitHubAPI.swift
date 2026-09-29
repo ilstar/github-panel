@@ -16,6 +16,8 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
     /// Edited titles and descriptions, keyed by pull request reference ID.
     private var editedTitles: [String: String] = [:]
     private var editedBodies: [String: String] = [:]
+    /// Node IDs of pull requests whose branch was updated, so they no longer offer Update branch.
+    private var updatedBranches: Set<String> = []
 
     init(now: Date = Date(), isEmpty: Bool = false) {
         let rows = isEmpty ? [] : Self.makePullRequests().map {
@@ -120,6 +122,7 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
                                        commits: 3,
                                        canEdit: isOwn,
                                        isViewerAuthor: isOwn,
+                                       canUpdateBranch: isOwn && !updatedBranches.contains(nodeID),
                                        updatedAt: pullRequests[reference.id]?.updatedAt)
         let viewed = viewedFiles[nodeID] ?? []
         let files = Self.detailFiles.map { file in
@@ -310,6 +313,10 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
                 pullRequests[reference.id] = row.copy(title: title)
             }
         }
+    }
+
+    func updatePullRequestBranch(token: String, pullRequestID: String, expectedHeadSHA: String) async throws {
+        locked { _ = updatedBranches.insert(pullRequestID) }
     }
 
     private func updatePullRequest(with nodeID: String, transform: (PullRequestRow) -> PullRequestRow) {

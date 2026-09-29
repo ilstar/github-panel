@@ -16,6 +16,7 @@ protocol GitHubAPIClient {
     func postPullRequestComment(token: String, reference: PullRequestReference, comment: NewPullRequestComment) async throws
     func editPullRequest(token: String, reference: PullRequestReference, title: String?, body: String?) async throws
     func submitReview(token: String, reference: PullRequestReference, review: NewPullRequestReview) async throws
+    func updatePullRequestBranch(token: String, pullRequestID: String, expectedHeadSHA: String) async throws
 }
 
 protocol HTTPTransport {

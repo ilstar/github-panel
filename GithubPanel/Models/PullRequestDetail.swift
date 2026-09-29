@@ -49,6 +49,9 @@ struct PullRequestDetail: Equatable {
     var canEdit = false
     /// Whether the viewer opened the pull request. GitHub does not let authors review their own.
     var isViewerAuthor = false
+    /// Whether GitHub offers Update branch: the branch is behind its base, the viewer may update it,
+    /// and the repository suggests updating branches or its rules require it.
+    var canUpdateBranch = false
     /// When GitHub last changed the pull request. Compared with the list's `updatedAt` to tell whether a cached copy is stale.
     var updatedAt: Date?
 }
