@@ -673,6 +673,90 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertEqual(body.variables["number"] as? Int, 7)
     }
 
+    func testFetchPullRequestCommentsMarksDraftsInTheViewersPendingReview() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: pendingCommentsResponse)
+
+        let comments = try await GitHubAPI(transport: transport)
+            .fetchPullRequestComments(token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7))
+
+        XCTAssertEqual(comments.pendingReviewID, "PRR_1")
+        XCTAssertEqual(comments.threads.first?.comments.map(\.isPending), [false, true])
+        XCTAssertEqual(comments.pendingCommentCount, 1)
+        let body = try transport.graphQLBody(at: 0)
+        XCTAssertTrue(body.query.contains("reviews(states: PENDING, first: 1)"))
+        XCTAssertTrue(body.query.contains("... on PullRequestReviewComment { databaseId url state }"))
+    }
+
+    func testCommentsWithoutAPendingReviewHaveNoPendingReviewID() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: commentsResponse)
+
+        let comments = try await GitHubAPI(transport: transport)
+            .fetchPullRequestComments(token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7))
+
+        XCTAssertNil(comments.pendingReviewID)
+        XCTAssertEqual(comments.pendingCommentCount, 0)
+    }
+
+    func testPendingReviewMutations() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: #"{"data":{"addPullRequestReview":{"pullRequestReview":{"id":"PRR_1"}}}}"#)
+        transport.enqueue(json: #"{"data":{"addPullRequestReviewThread":{"thread":{"id":"RT_9"}}}}"#)
+        transport.enqueue(json: #"{"data":{"addPullRequestReviewThreadReply":{"comment":{"id":"RC_9"}}}}"#)
+        transport.enqueue(json: #"{"data":{"submitPullRequestReview":{"pullRequestReview":{"id":"PRR_1"}}}}"#)
+        transport.enqueue(json: #"{"data":{"submitPullRequestReview":{"pullRequestReview":{"id":"PRR_1"}}}}"#)
+        transport.enqueue(json: #"{"data":{"deletePullRequestReview":{"pullRequestReview":{"id":"PRR_1"}}}}"#)
+        let api = GitHubAPI(transport: transport)
+        let anchor = DiffCommentAnchor(path: "Sources/New.swift", line: 4, side: .left)
+
+        let reviewID = try await api.startPendingReview(token: "token", pullRequestID: "PR_node", commitID: "abc123")
+        try await api.addPendingReviewComment(token: "token", reviewID: reviewID, comment: .thread(body: "Why?", anchor: anchor))
+        try await api.addPendingReviewComment(token: "token", reviewID: reviewID, comment: .reply(body: "Agreed", threadID: "RT_1"))
+        try await api.submitPendingReview(token: "token", reviewID: reviewID, event: .requestChanges, body: "See comments")
+        try await api.submitPendingReview(token: "token", reviewID: reviewID, event: .comment, body: "")
+        try await api.deletePendingReview(token: "token", reviewID: reviewID)
+
+        XCTAssertEqual(reviewID, "PRR_1")
+        let start = try transport.graphQLBody(at: 0)
+        XCTAssertTrue(start.query.contains("addPullRequestReview(input: { pullRequestId: $id, commitOID: $commit })"))
+        XCTAssertFalse(start.query.contains("event"), "A review without a verdict stays pending")
+        XCTAssertEqual(start.variables["id"] as? String, "PR_node")
+        XCTAssertEqual(start.variables["commit"] as? String, "abc123")
+        let thread = try transport.graphQLBody(at: 1)
+        XCTAssertTrue(thread.query.contains("addPullRequestReviewThread(input: { pullRequestReviewId: $review"))
+        XCTAssertEqual(thread.variables["review"] as? String, "PRR_1")
+        XCTAssertEqual(thread.variables["path"] as? String, "Sources/New.swift")
+        XCTAssertEqual(thread.variables["line"] as? Int, 4)
+        XCTAssertEqual(thread.variables["side"] as? String, "LEFT")
+        XCTAssertEqual(thread.variables["body"] as? String, "Why?")
+        let reply = try transport.graphQLBody(at: 2)
+        XCTAssertTrue(reply.query.contains("addPullRequestReviewThreadReply(input: { pullRequestReviewId: $review, pullRequestReviewThreadId: $thread"))
+        XCTAssertEqual(reply.variables["thread"] as? String, "RT_1")
+        XCTAssertEqual(reply.variables["body"] as? String, "Agreed")
+        let submit = try transport.graphQLBody(at: 3)
+        XCTAssertTrue(submit.query.contains("submitPullRequestReview(input: { pullRequestReviewId: $review, event: $event, body: $body })"))
+        XCTAssertEqual(submit.variables["event"] as? String, "REQUEST_CHANGES")
+        XCTAssertEqual(submit.variables["body"] as? String, "See comments")
+        // A blank message is left out, so GitHub publishes the drafts alone.
+        XCTAssertNil(try transport.graphQLBody(at: 4).variables["body"])
+        let delete = try transport.graphQLBody(at: 5)
+        XCTAssertTrue(delete.query.contains("deletePullRequestReview(input: { pullRequestReviewId: $review })"))
+        XCTAssertEqual(delete.variables["review"] as? String, "PRR_1")
+    }
+
+    func testPendingReviewSurfacesGraphQLErrors() async {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: #"{"errors":[{"message":"User can only have one pending review per pull request"}]}"#)
+
+        do {
+            _ = try await GitHubAPI(transport: transport).startPendingReview(token: "token", pullRequestID: "PR_node", commitID: "abc123")
+            XCTFail("Expected an error")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, "User can only have one pending review per pull request")
+        }
+    }
+
     func testFetchPullRequestCommentsFailsWhenPullRequestIsMissing() async {
         let transport = MockHTTPTransport()
         transport.enqueue(json: #"{"data":{"repository":{"pullRequest":null}}}"#)
@@ -864,6 +948,31 @@ private let commentsResponse = """
               ] } },
             { "id": "RT_2", "path": "Sources/New.swift", "line": null, "startLine": null, "diffSide": "RIGHT",
               "isResolved": false, "isOutdated": true, "comments": { "nodes": [] } }
+          ]
+        }
+      }
+    }
+  }
+}
+"""
+
+private let pendingCommentsResponse = """
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "comments": { "nodes": [] },
+        "reviews": { "nodes": [ { "id": "PRR_1", "viewerDidAuthor": true } ] },
+        "reviewThreads": {
+          "nodes": [
+            { "id": "RT_1", "path": "Sources/New.swift", "line": 3, "startLine": null, "diffSide": "RIGHT",
+              "isResolved": false, "isOutdated": false,
+              "comments": { "nodes": [
+                { "id": "RC_1", "databaseId": 21, "body": "Why?", "createdAt": "2026-04-10T08:00:00Z",
+                  "author": { "login": "hubot" }, "state": "SUBMITTED" },
+                { "id": "RC_2", "databaseId": 22, "body": "Draft", "createdAt": "2026-04-10T08:00:00Z",
+                  "author": { "login": "octocat" }, "state": "PENDING" }
+              ] } }
           ]
         }
       }

@@ -37,6 +37,10 @@ struct PullRequestDetailView: View {
                                          isReviewing: $isReviewing,
                                          onSubmitReview: viewModel.canReview ? { event, body in
                                              try await viewModel.submitReview(event, body: body)
+                                         } : nil,
+                                         pendingCommentCount: viewModel.pendingCommentCount,
+                                         onDiscardReview: viewModel.isReviewPending ? {
+                                             try await viewModel.discardPendingReview()
                                          } : nil)
                     .padding(.leading, 28)
                     .padding(.trailing, 20)
@@ -167,6 +171,10 @@ struct PullRequestDetailToolbar: View {
     @Binding var isReviewing: Bool
     /// Submits a review. Nil when you cannot review this pull request, such as your own.
     var onSubmitReview: ((PullRequestReviewEvent, String) async throws -> Void)?
+    /// Draft comments in the pending review, shown on the Review button.
+    var pendingCommentCount = 0
+    /// Discards the pending review. Nil when no review is pending.
+    var onDiscardReview: (() async throws -> Void)?
 
     var body: some View {
         HStack(spacing: 10) {
@@ -211,7 +219,16 @@ struct PullRequestDetailToolbar: View {
                     HStack(spacing: 6) {
                         Image(systemName: "checkmark.bubble")
                             .font(.system(size: 12, weight: .semibold))
-                        Text("Review")
+                        Text(onDiscardReview == nil ? "Review" : "Finish review")
+                        if pendingCommentCount > 0 {
+                            Text("\(pendingCommentCount)")
+                                .font(.system(size: 11, weight: .semibold))
+                                .monospacedDigit()
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 1)
+                                .background(Capsule().fill(Color.accentColor.opacity(0.2)))
+                                .accessibilityLabel(ReviewComposer.pendingSummary(pendingCommentCount))
+                        }
                     }
                     .font(.system(size: 13, weight: .medium))
                     .padding(.horizontal, 14)
@@ -222,10 +239,17 @@ struct PullRequestDetailToolbar: View {
                 .glassSurface(.control, in: Capsule())
                 .help("Approve, comment, or request changes (\(AppShortcut.reviewChanges.symbols))")
                 .popover(isPresented: $isReviewing, arrowEdge: .bottom) {
-                    ReviewComposer(onCancel: { isReviewing = false },
+                    ReviewComposer(pendingCommentCount: pendingCommentCount,
+                                   onCancel: { isReviewing = false },
                                    onSubmit: { event, body in
                                        try await onSubmitReview(event, body)
                                        isReviewing = false
+                                   },
+                                   onDiscard: onDiscardReview.map { discard in
+                                       {
+                                           try await discard()
+                                           isReviewing = false
+                                       }
                                    })
                 }
             }

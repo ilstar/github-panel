@@ -16,6 +16,14 @@ final class PullRequestDetailViewModel: ObservableObject {
     typealias SubmitReview = (NewPullRequestReview, PullRequestReference) async throws -> Void
     /// Merges the base branch into the head branch: the pull request's node ID and the head commit it expects.
     typealias UpdateBranch = (String, String) async throws -> Void
+    /// Starts a pending review: the pull request's node ID and the head commit. Returns the review's node ID.
+    typealias StartPendingReview = (String, String) async throws -> String
+    /// Adds a draft comment to the pending review with the given node ID.
+    typealias AddPendingComment = (PendingReviewComment, String) async throws -> Void
+    /// Submits the pending review with the given node ID, its verdict, and its message.
+    typealias SubmitPendingReview = (String, PullRequestReviewEvent, String) async throws -> Void
+    /// Discards the pending review with the given node ID.
+    typealias DeletePendingReview = (String) async throws -> Void
 
     let reference: PullRequestReference
     /// The last loaded content. Kept when a reload fails so the window does not go blank.
@@ -43,6 +51,12 @@ final class PullRequestDetailViewModel: ObservableObject {
     private let sendEdit: Edit
     private let sendReview: SubmitReview
     private let sendUpdateBranch: UpdateBranch
+    private let sendStartPendingReview: StartPendingReview
+    private let sendPendingComment: AddPendingComment
+    private let sendSubmitPendingReview: SubmitPendingReview
+    private let sendDeletePendingReview: DeletePendingReview
+    /// The pending review started here, until the comments reload with it. Keeps a failed reload from starting a second one.
+    private var startedReviewID: String?
     private let cache: PullRequestDetailCache?
     /// Presentations built so far, keyed by filename and whether whitespace changes are hidden.
     private var presentations: [PresentationKey: DiffPresentation] = [:]
@@ -63,6 +77,10 @@ final class PullRequestDetailViewModel: ObservableObject {
          edit: @escaping Edit = { _, _, _ in },
          submitReview: @escaping SubmitReview = { _, _ in },
          updateBranch: @escaping UpdateBranch = { _, _ in },
+         startPendingReview: @escaping StartPendingReview = { _, _ in "" },
+         addPendingComment: @escaping AddPendingComment = { _, _ in },
+         submitPendingReview: @escaping SubmitPendingReview = { _, _, _ in },
+         deletePendingReview: @escaping DeletePendingReview = { _ in },
          cache: PullRequestDetailCache? = nil) {
         self.reference = reference
         self.fetch = fetch
@@ -73,6 +91,10 @@ final class PullRequestDetailViewModel: ObservableObject {
         self.sendEdit = edit
         self.sendReview = submitReview
         self.sendUpdateBranch = updateBranch
+        self.sendStartPendingReview = startPendingReview
+        self.sendPendingComment = addPendingComment
+        self.sendSubmitPendingReview = submitPendingReview
+        self.sendDeletePendingReview = deletePendingReview
         self.cache = cache
         if let cached = cache?.entry(for: reference) {
             apply(cached.content)
@@ -104,6 +126,18 @@ final class PullRequestDetailViewModel: ObservableObject {
                   },
                   updateBranch: { [monitor] pullRequestID, headSHA in
                       try await monitor.updatePullRequestBranch(pullRequestID: pullRequestID, expectedHeadSHA: headSHA)
+                  },
+                  startPendingReview: { [monitor] pullRequestID, commitID in
+                      try await monitor.startPendingReview(pullRequestID: pullRequestID, commitID: commitID)
+                  },
+                  addPendingComment: { [monitor] comment, reviewID in
+                      try await monitor.addPendingReviewComment(comment, reviewID: reviewID)
+                  },
+                  submitPendingReview: { [monitor] reviewID, event, body in
+                      try await monitor.submitPendingReview(reviewID: reviewID, event: event, body: body)
+                  },
+                  deletePendingReview: { [monitor] reviewID in
+                      try await monitor.deletePendingReview(reviewID: reviewID)
                   },
                   cache: monitor.detailCache)
     }
@@ -144,6 +178,7 @@ final class PullRequestDetailViewModel: ObservableObject {
     private func apply(_ loaded: PullRequestComments) {
         threadIndexes = Dictionary(grouping: loaded.threads, by: \.path).mapValues(ReviewThreadIndex.init)
         comments = loaded
+        startedReviewID = nil
     }
 
     /// Saves the shown content, with the current viewed marks, to the shared cache.
@@ -218,13 +253,67 @@ final class PullRequestDetailViewModel: ObservableObject {
         return !detail.isViewerAuthor && (detail.state == .open || detail.state == .draft)
     }
 
-    /// Submits a review of the head commit that was loaded. Throws when GitHub refuses it, so the form can keep the draft.
+    /// The viewer's pending review, whose draft comments wait to be submitted with a verdict.
+    var pendingReviewID: String? {
+        startedReviewID ?? comments?.pendingReviewID
+    }
+
+    /// Draft comments waiting in the pending review.
+    var pendingCommentCount: Int {
+        comments?.pendingCommentCount ?? 0
+    }
+
+    /// Submits a review of the head commit that was loaded, publishing any draft comments with it.
+    /// Throws when GitHub refuses it, so the form can keep the draft.
     func submitReview(_ event: PullRequestReviewEvent, body: String) async throws {
         guard canReview, let commitID = content?.detail.headSHA else { return }
         let body = body.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !event.requiresBody || !body.isEmpty else { return }
-        try await sendReview(NewPullRequestReview(event: event, body: body, commitID: commitID), reference)
-        submittedReview = event
+        guard ReviewComposer.canSubmit(event, text: body, pendingCommentCount: pendingCommentCount) else { return }
+        if let reviewID = pendingReviewID {
+            try await sendSubmitPendingReview(reviewID, event, body)
+            submittedReview = event
+            await reloadCommentsAfterReviewChange()
+        } else {
+            try await sendReview(NewPullRequestReview(event: event, body: body, commitID: commitID), reference)
+            submittedReview = event
+        }
+    }
+
+    /// Discards the pending review and its draft comments. Throws when GitHub refuses, so the form can show the error.
+    func discardPendingReview() async throws {
+        guard let reviewID = pendingReviewID else { return }
+        try await sendDeletePendingReview(reviewID)
+        await reloadCommentsAfterReviewChange()
+    }
+
+    /// Adds a draft comment to the pending review, starting one on the loaded head commit if there is none yet.
+    /// Throws when GitHub refuses, so the composer can keep the draft.
+    func addToReview(_ comment: PendingReviewComment) async throws {
+        guard canReview, let detail = content?.detail else { return }
+        let reviewID: String
+        if let pendingReviewID {
+            reviewID = pendingReviewID
+        } else {
+            reviewID = try await sendStartPendingReview(detail.nodeID, detail.headSHA)
+            startedReviewID = reviewID
+        }
+        try await sendPendingComment(comment, reviewID)
+        do {
+            try await reloadComments()
+        } catch {
+            // The draft was saved; only the refresh failed.
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Reloads the comments once the pending review is gone, so its drafts show as published or disappear.
+    private func reloadCommentsAfterReviewChange() async {
+        startedReviewID = nil
+        do {
+            try await reloadComments()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     /// Merges the base branch into the pull request's branch, then reloads to show the new head commit.
@@ -252,13 +341,28 @@ final class PullRequestDetailViewModel: ObservableObject {
         cacheContent()
     }
 
+    /// Whether new comments on the diff join the pending review instead of posting right away, like on GitHub once a review is started.
+    var isReviewPending: Bool {
+        canReview && pendingReviewID != nil
+    }
+
     /// Posts a new review thread on a diff line, against the head commit that was loaded.
+    /// Joins the pending review instead when one is started.
     func postInlineComment(_ body: String, at anchor: DiffCommentAnchor) async throws {
+        if isReviewPending {
+            try await addToReview(.thread(body: body, anchor: anchor))
+            return
+        }
         guard let commitID = content?.detail.headSHA else { return }
         try await post(.inline(body: body, commitID: commitID, anchor: anchor))
     }
 
+    /// Replies to a thread, as a draft in the pending review when one is started.
     func reply(_ body: String, to thread: ReviewThread) async throws {
+        if isReviewPending {
+            try await addToReview(.reply(body: body, threadID: thread.id))
+            return
+        }
         guard let first = thread.comments.first else { return }
         try await post(.reply(body: body, commentID: first.databaseID))
     }
