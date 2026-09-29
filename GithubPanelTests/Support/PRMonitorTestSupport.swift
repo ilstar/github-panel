@@ -53,6 +53,10 @@ final class FakeGitHubAPI: GitHubAPIClient {
     private(set) var editCalls: [(token: String, reference: PullRequestReference, title: String?, body: String?)] = []
     private(set) var reviewCalls: [(token: String, reference: PullRequestReference, review: NewPullRequestReview)] = []
     private(set) var updateBranchCalls: [(token: String, pullRequestID: String, expectedHeadSHA: String)] = []
+    private(set) var startPendingReviewCalls: [(token: String, pullRequestID: String, commitID: String)] = []
+    private(set) var pendingCommentCalls: [(token: String, reviewID: String, comment: PendingReviewComment)] = []
+    private(set) var submitPendingReviewCalls: [(token: String, reviewID: String, event: PullRequestReviewEvent, body: String)] = []
+    private(set) var deletePendingReviewCalls: [(token: String, reviewID: String)] = []
     var enableHandler: ((String) async -> Void)?
     var enqueueHandler: ((String) async -> Void)?
 
@@ -160,6 +164,27 @@ final class FakeGitHubAPI: GitHubAPIClient {
     func updatePullRequestBranch(token: String, pullRequestID: String, expectedHeadSHA: String) async throws {
         if let error { throw error }
         updateBranchCalls.append((token, pullRequestID, expectedHeadSHA))
+    }
+
+    func startPendingReview(token: String, pullRequestID: String, commitID: String) async throws -> String {
+        if let error { throw error }
+        startPendingReviewCalls.append((token, pullRequestID, commitID))
+        return "PRR_pending"
+    }
+
+    func addPendingReviewComment(token: String, reviewID: String, comment: PendingReviewComment) async throws {
+        if let error { throw error }
+        pendingCommentCalls.append((token, reviewID, comment))
+    }
+
+    func submitPendingReview(token: String, reviewID: String, event: PullRequestReviewEvent, body: String) async throws {
+        if let error { throw error }
+        submitPendingReviewCalls.append((token, reviewID, event, body))
+    }
+
+    func deletePendingReview(token: String, reviewID: String) async throws {
+        if let error { throw error }
+        deletePendingReviewCalls.append((token, reviewID))
     }
 }
 

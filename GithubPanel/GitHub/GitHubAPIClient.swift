@@ -17,6 +17,11 @@ protocol GitHubAPIClient {
     func setReviewThreadResolved(token: String, threadID: String, resolved: Bool) async throws
     func editPullRequest(token: String, reference: PullRequestReference, title: String?, body: String?) async throws
     func submitReview(token: String, reference: PullRequestReference, review: NewPullRequestReview) async throws
+    /// Starts a pending review on the given commit and returns its node ID.
+    func startPendingReview(token: String, pullRequestID: String, commitID: String) async throws -> String
+    func addPendingReviewComment(token: String, reviewID: String, comment: PendingReviewComment) async throws
+    func submitPendingReview(token: String, reviewID: String, event: PullRequestReviewEvent, body: String) async throws
+    func deletePendingReview(token: String, reviewID: String) async throws
     func updatePullRequestBranch(token: String, pullRequestID: String, expectedHeadSHA: String) async throws
 }
 

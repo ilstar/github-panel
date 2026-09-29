@@ -114,6 +114,42 @@ final class MockGitHubAPICommentTests: XCTestCase {
         XCTAssertEqual(after.threads.first?.comments.count, replyTarget.comments.count + 1)
     }
 
+    func testMockPendingReviewHoldsDraftsUntilSubmitted() async throws {
+        let api = MockGitHubAPI()
+        let before = try await api.fetchPullRequestComments(token: "token", reference: reference)
+        let anchor = DiffCommentAnchor(path: "Sources/WidgetView.swift", line: 3, side: .right)
+        let replyTarget = try XCTUnwrap(before.threads.first)
+
+        let reviewID = try await api.startPendingReview(token: "token", pullRequestID: "mock-detail-\(reference.id)", commitID: "sha")
+        try await api.addPendingReviewComment(token: "token", reviewID: reviewID, comment: .thread(body: "Draft", anchor: anchor))
+        try await api.addPendingReviewComment(token: "token", reviewID: reviewID, comment: .reply(body: "Draft reply", threadID: replyTarget.id))
+        let pending = try await api.fetchPullRequestComments(token: "token", reference: reference)
+        try await api.submitPendingReview(token: "token", reviewID: reviewID, event: .comment, body: "")
+        let submitted = try await api.fetchPullRequestComments(token: "token", reference: reference)
+
+        XCTAssertEqual(pending.pendingReviewID, reviewID)
+        XCTAssertEqual(pending.pendingCommentCount, 2)
+        XCTAssertEqual(pending.threads.last?.anchor, anchor)
+        XCTAssertEqual(pending.threads.last?.isPending, true)
+        XCTAssertNil(submitted.pendingReviewID)
+        XCTAssertEqual(submitted.pendingCommentCount, 0)
+        XCTAssertEqual(submitted.threads.last?.comments.map(\.body), ["Draft"])
+        XCTAssertEqual(submitted.threads.first?.comments.last?.body, "Draft reply")
+    }
+
+    func testMockDiscardedReviewDropsItsDrafts() async throws {
+        let api = MockGitHubAPI()
+        let before = try await api.fetchPullRequestComments(token: "token", reference: reference)
+        let anchor = DiffCommentAnchor(path: "Sources/WidgetView.swift", line: 3, side: .right)
+
+        let reviewID = try await api.startPendingReview(token: "token", pullRequestID: "mock-detail-\(reference.id)", commitID: "sha")
+        try await api.addPendingReviewComment(token: "token", reviewID: reviewID, comment: .thread(body: "Draft", anchor: anchor))
+        try await api.deletePendingReview(token: "token", reviewID: reviewID)
+        let after = try await api.fetchPullRequestComments(token: "token", reference: reference)
+
+        XCTAssertEqual(after, before)
+    }
+
     func testMockHandlesConcurrentPreloading() async throws {
         let api = MockGitHubAPI()
         let references = (1...200).map { PullRequestReference(repoFullName: "mock/concurrent", number: $0) }

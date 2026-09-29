@@ -10,6 +10,8 @@ struct PullRequestComment: Identifiable, Equatable {
     let body: String
     let createdAt: Date
     let htmlURL: URL?
+    /// Whether the comment is a draft in the viewer's pending review, which only the viewer can see until it is submitted.
+    var isPending = false
 }
 
 /// Which side of the diff a review comment sits on: `left` is the old file, `right` is the new file.
@@ -73,14 +75,32 @@ struct ReviewThread: Identifiable, Equatable {
     var anchor: DiffCommentAnchor? {
         line.map { DiffCommentAnchor(path: path, line: $0, side: side) }
     }
+
+    /// A thread started in the viewer's pending review. GitHub cannot resolve it until the review is submitted.
+    var isPending: Bool {
+        !comments.isEmpty && comments.allSatisfy(\.isPending)
+    }
 }
 
 /// The comments on one pull request: general comments on the Conversation tab and review threads on the diff.
 struct PullRequestComments: Equatable {
     let comments: [PullRequestComment]
     let threads: [ReviewThread]
+    /// The node ID of the viewer's pending review, whose draft comments wait to be submitted with a verdict.
+    let pendingReviewID: String?
+
+    init(comments: [PullRequestComment], threads: [ReviewThread], pendingReviewID: String? = nil) {
+        self.comments = comments
+        self.threads = threads
+        self.pendingReviewID = pendingReviewID
+    }
 
     static let empty = PullRequestComments(comments: [], threads: [])
+
+    /// Draft comments in the viewer's pending review.
+    var pendingCommentCount: Int {
+        threads.reduce(0) { $0 + $1.comments.filter(\.isPending).count }
+    }
 }
 
 /// A comment to post.
@@ -91,6 +111,20 @@ enum NewPullRequestComment: Equatable {
     case inline(body: String, commitID: String, anchor: DiffCommentAnchor)
     /// A reply to a review thread, addressed by the REST ID of the thread's first comment.
     case reply(body: String, commentID: Int)
+}
+
+/// A draft comment for the viewer's pending review. GitHub publishes it only when the review is submitted.
+enum PendingReviewComment: Equatable {
+    /// A new review thread on one diff line.
+    case thread(body: String, anchor: DiffCommentAnchor)
+    /// A reply to a review thread, addressed by the thread's node ID.
+    case reply(body: String, threadID: String)
+
+    var body: String {
+        switch self {
+        case let .thread(body, _), let .reply(body, _): return body
+        }
+    }
 }
 
 /// One file's review threads, grouped by the diff line they sit on.

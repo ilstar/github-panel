@@ -316,6 +316,7 @@ final class GitHubAPI: GitHubAPIClient {
           repository(owner: $owner, name: $name) {
             pullRequest(number: $number) {
               comments(first: 100) { nodes { ...CommentFields } }
+              reviews(states: PENDING, first: 1) { nodes { id viewerDidAuthor } }
               reviewThreads(first: 100) {
                 nodes {
                   id path line startLine diffSide isResolved isOutdated
@@ -332,7 +333,7 @@ final class GitHubAPI: GitHubAPIClient {
           createdAt
           author { login }
           ... on IssueComment { databaseId url }
-          ... on PullRequestReviewComment { databaseId url }
+          ... on PullRequestReviewComment { databaseId url state }
         }
         """
         let response = try await graphQL(CommentsResponse.self,
@@ -353,7 +354,9 @@ final class GitHubAPI: GitHubAPIClient {
                              isResolved: thread.isResolved,
                              isOutdated: thread.isOutdated,
                              comments: thread.comments.nodes.map(\.comment))
-            }
+            },
+            // GitHub shows a pending review only to its author, but check in case that changes.
+            pendingReviewID: pullRequest.reviews?.nodes.first { $0.viewerDidAuthor }?.id
         )
     }
 
@@ -413,6 +416,86 @@ final class GitHubAPI: GitHubAPIClient {
         request.httpBody = try JSONSerialization.data(withJSONObject: fields)
         struct Created: Decodable { let id: Int }
         _ = try await decode(Created.self, request: request)
+    }
+
+    /// Starts a pending review, which holds draft comments until it is submitted with a verdict.
+    func startPendingReview(token: String, pullRequestID: String, commitID: String) async throws -> String {
+        let query = """
+        mutation($id: ID!, $commit: GitObjectID!) {
+          addPullRequestReview(input: { pullRequestId: $id, commitOID: $commit }) {
+            pullRequestReview { id }
+          }
+        }
+        """
+        struct Response: Decodable {
+            struct Payload: Decodable { let pullRequestReview: Review }
+            struct Review: Decodable { let id: String }
+            let addPullRequestReview: Payload
+        }
+        let response = try await graphQL(Response.self, query: query, variables: ["id": pullRequestID, "commit": commitID], token: token)
+        return response.addPullRequestReview.pullRequestReview.id
+    }
+
+    /// Adds a draft comment to a pending review. The pull request's author is not notified until the review is submitted.
+    func addPendingReviewComment(token: String, reviewID: String, comment: PendingReviewComment) async throws {
+        let query: String
+        var variables: [String: Any] = ["review": reviewID]
+        switch comment {
+        case let .thread(body, anchor):
+            query = """
+            mutation($review: ID!, $path: String!, $line: Int!, $side: DiffSide!, $body: String!) {
+              addPullRequestReviewThread(input: { pullRequestReviewId: $review, path: $path, line: $line, side: $side, body: $body }) {
+                thread { id }
+              }
+            }
+            """
+            variables["path"] = anchor.path
+            variables["line"] = anchor.line
+            variables["side"] = anchor.side.rawValue
+            variables["body"] = body
+        case let .reply(body, threadID):
+            query = """
+            mutation($review: ID!, $thread: ID!, $body: String!) {
+              addPullRequestReviewThreadReply(input: { pullRequestReviewId: $review, pullRequestReviewThreadId: $thread, body: $body }) {
+                comment { id }
+              }
+            }
+            """
+            variables["thread"] = threadID
+            variables["body"] = body
+        }
+        struct Response: Decodable {}
+        _ = try await graphQL(Response.self, query: query, variables: variables, token: token)
+    }
+
+    /// Publishes a pending review and all its draft comments with a verdict.
+    func submitPendingReview(token: String, reviewID: String, event: PullRequestReviewEvent, body: String) async throws {
+        let query = """
+        mutation($review: ID!, $event: PullRequestReviewEvent!, $body: String) {
+          submitPullRequestReview(input: { pullRequestReviewId: $review, event: $event, body: $body }) {
+            pullRequestReview { id }
+          }
+        }
+        """
+        var variables: [String: Any] = ["review": reviewID, "event": event.rawValue]
+        if !body.isEmpty {
+            variables["body"] = body
+        }
+        struct Response: Decodable {}
+        _ = try await graphQL(Response.self, query: query, variables: variables, token: token)
+    }
+
+    /// Discards a pending review and its draft comments.
+    func deletePendingReview(token: String, reviewID: String) async throws {
+        let query = """
+        mutation($review: ID!) {
+          deletePullRequestReview(input: { pullRequestReviewId: $review }) {
+            pullRequestReview { id }
+          }
+        }
+        """
+        struct Response: Decodable {}
+        _ = try await graphQL(Response.self, query: query, variables: ["review": reviewID], token: token)
     }
 
     /// Merges the base branch into the pull request's branch, like GitHub's Update branch button.
@@ -715,6 +798,12 @@ private struct CommentsResponse: Decodable {
     struct PullRequest: Decodable {
         let comments: Connection<Comment>
         let reviewThreads: Connection<Thread>
+        /// The viewer's pending review, if any.
+        let reviews: Connection<Review>?
+    }
+    struct Review: Decodable {
+        let id: String
+        let viewerDidAuthor: Bool
     }
     struct Connection<Node: Decodable>: Decodable { let nodes: [Node] }
     struct Thread: Decodable {
@@ -737,6 +826,8 @@ private struct CommentsResponse: Decodable {
         let url: URL?
         /// Missing when the author's account was deleted.
         let author: Author?
+        /// `PENDING` for a draft in the viewer's pending review. Only review comments have it.
+        let state: String?
 
         var comment: PullRequestComment {
             PullRequestComment(id: id,
@@ -744,7 +835,8 @@ private struct CommentsResponse: Decodable {
                                authorLogin: author?.login ?? "ghost",
                                body: body,
                                createdAt: createdAt,
-                               htmlURL: url)
+                               htmlURL: url,
+                               isPending: state == "PENDING")
         }
     }
 

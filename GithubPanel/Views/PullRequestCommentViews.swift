@@ -11,6 +11,10 @@ struct PullRequestCommentView: View {
                 AvatarView(login: comment.authorLogin)
                 Text(comment.authorLogin)
                     .font(.callout.weight(.semibold))
+                if comment.isPending {
+                    ThreadBadge(text: "Pending")
+                        .help("A draft in your pending review. Only you can see it until you submit the review.")
+                }
                 Text("commented \(comment.createdAt.formatted(.relative(presentation: .named)))")
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -51,6 +55,9 @@ struct CommentComposer: View {
     var focusRequest = 0
     /// Posts the trimmed text. Throws to keep the draft and show the error.
     let onSubmit: (String) async throws -> Void
+    /// A plain button beside the main one that posts the text another way, such as Add single comment next to Start a review.
+    var secondaryTitle: String?
+    var onSecondarySubmit: ((String) async throws -> Void)?
 
     @State private var text = ""
     @State private var isPosting = false
@@ -161,6 +168,10 @@ struct CommentComposer: View {
                     Button("Cancel", action: onCancel)
                         .disabled(isPosting)
                 }
+                if let secondaryTitle, let onSecondarySubmit {
+                    Button(secondaryTitle) { submit(with: onSecondarySubmit) }
+                        .disabled(Self.trimmed(text).isEmpty || isPosting)
+                }
                 submitButton
             }
         }
@@ -168,7 +179,7 @@ struct CommentComposer: View {
 
     @ViewBuilder
     private var submitButton: some View {
-        let button = Button(submitTitle, action: submit)
+        let button = Button(submitTitle) { submit(with: onSubmit) }
             .buttonStyle(.borderedProminent)
             .disabled(Self.trimmed(text).isEmpty || isPosting)
             .help("\(submitTitle) (⌘Return)")
@@ -180,14 +191,14 @@ struct CommentComposer: View {
         }
     }
 
-    private func submit() {
+    private func submit(with action: @escaping (String) async throws -> Void) {
         let body = Self.trimmed(text)
         guard !body.isEmpty, !isPosting else { return }
         isPosting = true
         errorMessage = nil
         Task {
             do {
-                try await onSubmit(body)
+                try await action(body)
                 text = ""
             } catch {
                 errorMessage = error.localizedDescription
@@ -205,6 +216,8 @@ struct CommentComposer: View {
 /// Resolved threads start folded, like on GitHub.
 struct ReviewThreadView: View {
     let thread: ReviewThread
+    /// Whether a reply joins the viewer's pending review instead of posting right away.
+    var isReviewPending = false
     let onReply: (String) async throws -> Void
     /// Resolves (true) or unresolves (false) the thread. Throws to show the error.
     let onSetResolved: (Bool) async throws -> Void
@@ -215,9 +228,11 @@ struct ReviewThreadView: View {
     @State private var resolveError: String?
 
     init(thread: ReviewThread,
+         isReviewPending: Bool = false,
          onReply: @escaping (String) async throws -> Void,
          onSetResolved: @escaping (Bool) async throws -> Void = { _ in }) {
         self.thread = thread
+        self.isReviewPending = isReviewPending
         self.onReply = onReply
         self.onSetResolved = onSetResolved
         _isExpanded = State(initialValue: !thread.isResolved)
@@ -236,7 +251,7 @@ struct ReviewThreadView: View {
                 Group {
                     if isReplying {
                         CommentComposer(placeholder: "Reply…",
-                                        submitTitle: "Reply",
+                                        submitTitle: isReviewPending ? "Add review comment" : "Reply",
                                         onCancel: { isReplying = false },
                                         onSubmit: { body in
                                             try await onReply(body)
@@ -260,7 +275,10 @@ struct ReviewThreadView: View {
                                         .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
-                                resolveButton
+                                // GitHub cannot resolve a thread that is still a draft.
+                                if !thread.isPending {
+                                    resolveButton
+                                }
                             }
                             if let resolveError {
                                 Text(resolveError)

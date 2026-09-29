@@ -619,6 +619,28 @@ final class PRMonitor: ObservableObject {
         await refreshReviewRequests()
     }
 
+    func startPendingReview(pullRequestID: String, commitID: String) async throws -> String {
+        guard let token = loadSessionToken() else { throw MissingTokenError() }
+        return try await api.startPendingReview(token: token, pullRequestID: pullRequestID, commitID: commitID)
+    }
+
+    func addPendingReviewComment(_ comment: PendingReviewComment, reviewID: String) async throws {
+        guard let token = loadSessionToken() else { throw MissingTokenError() }
+        try await api.addPendingReviewComment(token: token, reviewID: reviewID, comment: comment)
+    }
+
+    /// Publishes the pending review with its verdict, then refreshes To Review like `submitReview`.
+    func submitPendingReview(reviewID: String, event: PullRequestReviewEvent, body: String) async throws {
+        guard let token = loadSessionToken() else { throw MissingTokenError() }
+        try await api.submitPendingReview(token: token, reviewID: reviewID, event: event, body: body)
+        await refreshReviewRequests()
+    }
+
+    func deletePendingReview(reviewID: String) async throws {
+        guard let token = loadSessionToken() else { throw MissingTokenError() }
+        try await api.deletePendingReview(token: token, reviewID: reviewID)
+    }
+
     func requestMarkReady(for row: PullRequestRow) async {
         guard row.isDraft, let token = loadSessionToken() else { return }
         let session = credentialSession

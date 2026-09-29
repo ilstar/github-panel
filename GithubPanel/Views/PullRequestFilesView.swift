@@ -422,13 +422,7 @@ struct PullRequestFilesView: View {
                 threadView(thread)
             }
             if let composing {
-                CommentComposer(placeholder: Self.composerPlaceholder(composing),
-                                submitTitle: "Comment",
-                                onCancel: { composingAnchor = nil },
-                                onSubmit: { body in
-                                    try await viewModel.postInlineComment(body, at: composing)
-                                    composingAnchor = nil
-                                })
+                newCommentComposer(at: composing)
                 .padding(12)
                 .background(Color(nsColor: .textBackgroundColor))
                 .overlay(
@@ -441,6 +435,50 @@ struct PullRequestFilesView: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.secondary.opacity(0.05))
+    }
+
+    /// Once a review is started, new comments join it. Before that, a reviewer picks between
+    /// starting a review, which keeps the comment as a draft, and posting a single comment right away, like on GitHub.
+    @ViewBuilder
+    private func newCommentComposer(at anchor: DiffCommentAnchor) -> some View {
+        let mode = Self.newCommentMode(canReview: viewModel.canReview, isReviewPending: viewModel.isReviewPending)
+        switch mode {
+        case .startReview:
+            CommentComposer(placeholder: Self.composerPlaceholder(anchor),
+                            submitTitle: "Start a review",
+                            onCancel: { composingAnchor = nil },
+                            onSubmit: { body in
+                                try await viewModel.addToReview(.thread(body: body, anchor: anchor))
+                                composingAnchor = nil
+                            },
+                            secondaryTitle: "Add single comment",
+                            onSecondarySubmit: { body in
+                                try await viewModel.postInlineComment(body, at: anchor)
+                                composingAnchor = nil
+                            })
+        case .addToReview, .single:
+            CommentComposer(placeholder: Self.composerPlaceholder(anchor),
+                            submitTitle: mode == .addToReview ? "Add review comment" : "Comment",
+                            onCancel: { composingAnchor = nil },
+                            onSubmit: { body in
+                                try await viewModel.postInlineComment(body, at: anchor)
+                                composingAnchor = nil
+                            })
+        }
+    }
+
+    enum NewCommentMode: Equatable {
+        /// Offers Start a review and Add single comment.
+        case startReview
+        /// A review is pending, so the comment joins it.
+        case addToReview
+        /// The viewer cannot review, such as on their own pull request, so the comment posts right away.
+        case single
+    }
+
+    static func newCommentMode(canReview: Bool, isReviewPending: Bool) -> NewCommentMode {
+        guard canReview else { return .single }
+        return isReviewPending ? .addToReview : .startReview
     }
 
     /// Threads with no line in the diff to sit under, such as outdated ones.
@@ -462,6 +500,7 @@ struct PullRequestFilesView: View {
 
     private func threadView(_ thread: ReviewThread) -> some View {
         ReviewThreadView(thread: thread,
+                         isReviewPending: viewModel.isReviewPending,
                          onReply: { body in try await viewModel.reply(body, to: thread) },
                          onSetResolved: { resolved in try await viewModel.setResolved(resolved, thread: thread) })
     }
