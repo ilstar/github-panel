@@ -538,6 +538,51 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.content?.detail.title, "Old")
     }
 
+    func testSetTaskSavesTheDescriptionWithThatBoxChanged() async {
+        var edits: [(String?, String?)] = []
+        let cache = PullRequestDetailCache()
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+                                                   fetch: { [self] _ in detailContent(title: "Title", body: "- [ ] a\n- [ ] b", canEdit: true) },
+                                                   edit: { _, title, body in edits.append((title, body)) },
+                                                   cache: cache)
+        await viewModel.load()
+
+        await viewModel.setTask(1, checked: true)
+        await viewModel.setTask(1, checked: true)
+
+        XCTAssertEqual(edits.map(\.0), [nil])
+        XCTAssertEqual(edits.map(\.1), ["- [ ] a\n- [x] b"])
+        XCTAssertEqual(viewModel.content?.detail.body, "- [ ] a\n- [x] b")
+        XCTAssertEqual(cache.entry(for: reference)?.content.detail.body, "- [ ] a\n- [x] b")
+    }
+
+    func testSetTaskSkipsPullRequestsTheViewerCannotEdit() async {
+        var edits = 0
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+                                                   fetch: { [self] _ in detailContent(title: "Theirs", body: "- [ ] a") },
+                                                   edit: { _, _, _ in edits += 1 })
+        await viewModel.load()
+
+        await viewModel.setTask(0, checked: true)
+
+        XCTAssertEqual(edits, 0)
+        XCTAssertEqual(viewModel.content?.detail.body, "- [ ] a")
+    }
+
+    func testFailedSetTaskPutsTheBoxBackAndShowsTheError() async {
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+                                                   fetch: { [self] _ in detailContent(title: "Title", body: "- [x] a", canEdit: true) },
+                                                   edit: { _, _, _ in
+                                                       throw GitHubAPIError(message: "Forbidden", documentationURL: nil, statusCode: 403)
+                                                   })
+        await viewModel.load()
+
+        await viewModel.setTask(0, checked: false)
+
+        XCTAssertEqual(viewModel.content?.detail.body, "- [x] a")
+        XCTAssertEqual(viewModel.errorMessage, "GitHub API error (403): Forbidden")
+    }
+
     func testMonitorEditsWithSessionTokenAndRefreshesTheList() async throws {
         let api = FakeGitHubAPI()
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))

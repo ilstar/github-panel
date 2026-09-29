@@ -74,7 +74,10 @@ struct PullRequestDetailView: View {
                                                 comments: viewModel.comments?.comments,
                                                 commentFocusRequest: commentFocusRequest,
                                                 onComment: { body in try await viewModel.post(.general(body: body)) },
-                                                onSaveBody: { body in try await viewModel.edit(body: body) })
+                                                onSaveBody: { body in try await viewModel.edit(body: body) },
+                                                onSetTask: { index, checked in
+                                                    Task { await viewModel.setTask(index, checked: checked) }
+                                                })
                 case .files:
                     PullRequestFilesView(viewModel: viewModel,
                                          files: content.files,
@@ -670,6 +673,8 @@ struct PullRequestConversationView: View {
     let onComment: (String) async throws -> Void
     /// Saves a new description. Throws to keep the draft and show the error.
     let onSaveBody: (String) async throws -> Void
+    /// Checks or unchecks a task item in the description: its index and the new state.
+    var onSetTask: (Int, Bool) -> Void = { _, _ in }
 
     @State private var isEditingBody = false
 
@@ -709,7 +714,7 @@ struct PullRequestConversationView: View {
                                 .italic()
                                 .foregroundStyle(.secondary)
                         } else {
-                            MarkdownView(markdown: detail.body)
+                            MarkdownView(markdown: detail.body, onSetTask: detail.canEdit ? onSetTask : nil)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -758,6 +763,8 @@ struct PullRequestConversationView: View {
 
 struct MarkdownView: View {
     let markdown: String
+    /// Checks or unchecks a task item: its index and the new state. Nil shows the boxes disabled, as GitHub does for readers.
+    var onSetTask: ((Int, Bool) -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -786,6 +793,15 @@ struct MarkdownView: View {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(marker)
                     .foregroundStyle(.secondary)
+                Text(Self.inline(text))
+            }
+            .padding(.leading, CGFloat(indent) * 18)
+        case let .task(index, checked, indent, text):
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Toggle("", isOn: Binding(get: { checked }, set: { onSetTask?(index, $0) }))
+                    .toggleStyle(.checkbox)
+                    .labelsHidden()
+                    .disabled(onSetTask == nil)
                 Text(Self.inline(text))
             }
             .padding(.leading, CGFloat(indent) * 18)

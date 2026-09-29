@@ -239,6 +239,12 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
     1. Added parser tests.
     2. See [the plan](https://github.com/mock/github-panel) for more.
 
+    ## Checklist
+
+    - [x] Tests pass
+    - [ ] Screenshots attached
+      - [ ] Dark mode
+
     ```swift
     let lines = DiffParser.parse(patch)
     ```
