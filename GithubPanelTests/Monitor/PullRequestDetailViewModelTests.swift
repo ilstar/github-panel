@@ -587,6 +587,88 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         XCTAssertTrue(api.postCommentCalls.isEmpty)
     }
 
+    func testUpdateBranchSendsHeadCommitThenReloads() async {
+        var fetchCount = 0
+        var updates: [(pullRequestID: String, headSHA: String)] = []
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+                                                   fetch: { [self] _ in
+                                                       fetchCount += 1
+                                                       // GitHub stops offering the button once the branch is up to date.
+                                                       return detailContent(title: "Title", canUpdateBranch: fetchCount == 1)
+                                                   },
+                                                   updateBranch: { pullRequestID, headSHA in
+                                                       updates.append((pullRequestID, headSHA))
+                                                   })
+        await viewModel.load()
+        XCTAssertEqual(viewModel.content?.detail.canUpdateBranch, true)
+
+        await viewModel.updateBranch()
+
+        XCTAssertEqual(updates.map(\.pullRequestID), ["PR_node"])
+        XCTAssertEqual(updates.map(\.headSHA), ["abc123"])
+        XCTAssertEqual(fetchCount, 2)
+        XCTAssertEqual(viewModel.content?.detail.canUpdateBranch, false)
+        XCTAssertFalse(viewModel.isUpdatingBranch)
+        XCTAssertNil(viewModel.errorMessage)
+    }
+
+    func testUpdateBranchSkipsWhenGitHubDoesNotOfferIt() async {
+        var updateCount = 0
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+                                                   fetch: { [self] _ in detailContent(title: "Title", canUpdateBranch: false) },
+                                                   updateBranch: { _, _ in updateCount += 1 })
+        await viewModel.load()
+
+        await viewModel.updateBranch()
+
+        XCTAssertEqual(updateCount, 0)
+    }
+
+    func testFailedUpdateBranchShowsErrorAndKeepsTheButton() async {
+        var fetchCount = 0
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+                                                   fetch: { [self] _ in
+                                                       fetchCount += 1
+                                                       return detailContent(title: "Title", canUpdateBranch: true)
+                                                   },
+                                                   updateBranch: { _, _ in
+                                                       throw GitHubAPIError(message: "Merge conflict", documentationURL: nil)
+                                                   })
+        await viewModel.load()
+
+        await viewModel.updateBranch()
+
+        XCTAssertEqual(viewModel.errorMessage, "GitHub API error: Merge conflict")
+        XCTAssertEqual(viewModel.content?.detail.canUpdateBranch, true)
+        XCTAssertFalse(viewModel.isUpdatingBranch)
+        XCTAssertEqual(fetchCount, 1)
+    }
+
+    func testMonitorUpdatesBranchWithSessionTokenAndRefreshesTheList() async throws {
+        let api = FakeGitHubAPI()
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+
+        try await monitor.updatePullRequestBranch(pullRequestID: "PR_node", expectedHeadSHA: "abc123")
+
+        XCTAssertEqual(api.updateBranchCalls.map(\.token), ["token"])
+        XCTAssertEqual(api.updateBranchCalls.map(\.pullRequestID), ["PR_node"])
+        XCTAssertEqual(api.updateBranchCalls.map(\.expectedHeadSHA), ["abc123"])
+        XCTAssertEqual(api.fetchOpenPRTokens, ["token"])
+    }
+
+    func testMonitorUpdateBranchWithoutTokenFails() async {
+        let api = FakeGitHubAPI()
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: nil))
+
+        do {
+            try await monitor.updatePullRequestBranch(pullRequestID: "PR_node", expectedHeadSHA: "abc123")
+            XCTFail("Expected an error")
+        } catch {
+            XCTAssertTrue(error is MissingTokenError)
+        }
+        XCTAssertTrue(api.updateBranchCalls.isEmpty)
+    }
+
     func testMonitorFetchWithoutTokenFails() async {
         let api = FakeGitHubAPI()
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: nil))
@@ -615,7 +697,8 @@ final class PullRequestDetailViewModelTests: XCTestCase {
                         additions: 1, deletions: 1, patch: patch, isViewed: isViewed)
     }
 
-    private func detailContent(title: String, body: String = "", files: [PullRequestFile] = [], canEdit: Bool = false) -> PullRequestDetailContent {
+    private func detailContent(title: String, body: String = "", files: [PullRequestFile] = [], canEdit: Bool = false,
+                               canUpdateBranch: Bool = false) -> PullRequestDetailContent {
         PullRequestDetailContent(
             detail: PullRequestDetail(reference: reference,
                                       nodeID: "PR_node",
@@ -632,7 +715,8 @@ final class PullRequestDetailViewModelTests: XCTestCase {
                                       deletions: 0,
                                       changedFiles: 0,
                                       commits: 1,
-                                      canEdit: canEdit),
+                                      canEdit: canEdit,
+                                      canUpdateBranch: canUpdateBranch),
             files: files
         )
     }

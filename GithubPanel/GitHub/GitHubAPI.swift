@@ -273,6 +273,7 @@ final class GitHubAPI: GitHubAPIClient {
         var detail = pull.detail(reference: reference)
         detail.canEdit = viewer?.canEdit ?? false
         detail.isViewerAuthor = viewer?.isAuthor ?? false
+        detail.canUpdateBranch = (detail.state == .open || detail.state == .draft) && viewer?.canUpdateBranch == true
         return PullRequestDetailContent(detail: detail,
                                         files: files.map { file in
                                             var file = file.file
@@ -414,15 +415,34 @@ final class GitHubAPI: GitHubAPIClient {
         _ = try await decode(Created.self, request: request)
     }
 
-    /// Paths the viewer marked as viewed, and whether they may edit the pull request.
+    /// Merges the base branch into the pull request's branch, like GitHub's Update branch button.
+    /// GitHub refuses when the branch moved past `expectedHeadSHA`, so a push made meanwhile is not merged over blindly.
+    func updatePullRequestBranch(token: String, pullRequestID: String, expectedHeadSHA: String) async throws {
+        let query = """
+        mutation($id: ID!, $head: GitObjectID!) {
+          updatePullRequestBranch(input: { pullRequestId: $id, expectedHeadOid: $head, updateMethod: MERGE }) {
+            pullRequest { id }
+          }
+        }
+        """
+        struct Response: Decodable {}
+        _ = try await graphQL(Response.self, query: query, variables: ["id": pullRequestID, "head": expectedHeadSHA], token: token)
+    }
+
+    /// Paths the viewer marked as viewed, whether they may edit the pull request, and whether GitHub offers Update branch.
     /// GitHub reports files changed since they were viewed as `DISMISSED`, not `VIEWED`.
-    private func fetchViewerState(token: String, owner: String, name: String, number: Int) async throws -> (viewedFiles: Set<String>, canEdit: Bool, isAuthor: Bool) {
+    /// `viewerCanUpdateBranch` is false when the branch is up to date. GitHub shows the button only when the repository
+    /// suggests updating branches, or when its rules require an up-to-date branch, which makes the merge state `BEHIND`.
+    private func fetchViewerState(token: String, owner: String, name: String, number: Int) async throws -> (viewedFiles: Set<String>, canEdit: Bool, isAuthor: Bool, canUpdateBranch: Bool) {
         let query = """
         query($owner: String!, $name: String!, $number: Int!) {
           repository(owner: $owner, name: $name) {
             pullRequest(number: $number) {
               viewerDidAuthor
               viewerCanUpdate
+              viewerCanUpdateBranch
+              mergeStateStatus
+              baseRepository { allowUpdateBranch }
               files(first: 100) { nodes { path viewerViewedState } }
             }
           }
@@ -436,7 +456,9 @@ final class GitHubAPI: GitHubAPIClient {
         let nodes = pullRequest?.files?.nodes ?? []
         let isAuthor = pullRequest?.viewerDidAuthor == true
         let canEdit = isAuthor && pullRequest?.viewerCanUpdate == true
-        return (Set(nodes.filter { $0.viewerViewedState == "VIEWED" }.map(\.path)), canEdit, isAuthor)
+        let suggestsUpdate = pullRequest?.baseRepository?.allowUpdateBranch == true || pullRequest?.mergeStateStatus == "BEHIND"
+        let canUpdateBranch = pullRequest?.viewerCanUpdateBranch == true && suggestsUpdate
+        return (Set(nodes.filter { $0.viewerViewedState == "VIEWED" }.map(\.path)), canEdit, isAuthor, canUpdateBranch)
     }
 
     private func repoParts(_ repoFullName: String) throws -> (owner: String, name: String) {
@@ -673,8 +695,12 @@ private struct ViewerStateResponse: Decodable {
     struct PullRequest: Decodable {
         let viewerDidAuthor: Bool?
         let viewerCanUpdate: Bool?
+        let viewerCanUpdateBranch: Bool?
+        let mergeStateStatus: String?
+        let baseRepository: BaseRepository?
         let files: Files?
     }
+    struct BaseRepository: Decodable { let allowUpdateBranch: Bool? }
     struct Files: Decodable { let nodes: [File] }
     struct File: Decodable {
         let path: String

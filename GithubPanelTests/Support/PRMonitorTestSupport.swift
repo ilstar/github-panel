@@ -52,6 +52,7 @@ final class FakeGitHubAPI: GitHubAPIClient {
     private(set) var postCommentCalls: [(token: String, reference: PullRequestReference, comment: NewPullRequestComment)] = []
     private(set) var editCalls: [(token: String, reference: PullRequestReference, title: String?, body: String?)] = []
     private(set) var reviewCalls: [(token: String, reference: PullRequestReference, review: NewPullRequestReview)] = []
+    private(set) var updateBranchCalls: [(token: String, pullRequestID: String, expectedHeadSHA: String)] = []
     var enableHandler: ((String) async -> Void)?
     var enqueueHandler: ((String) async -> Void)?
 
@@ -154,6 +155,11 @@ final class FakeGitHubAPI: GitHubAPIClient {
     func submitReview(token: String, reference: PullRequestReference, review: NewPullRequestReview) async throws {
         if let error { throw error }
         reviewCalls.append((token, reference, review))
+    }
+
+    func updatePullRequestBranch(token: String, pullRequestID: String, expectedHeadSHA: String) async throws {
+        if let error { throw error }
+        updateBranchCalls.append((token, pullRequestID, expectedHeadSHA))
     }
 }
 

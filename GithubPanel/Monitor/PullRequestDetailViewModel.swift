@@ -14,6 +14,8 @@ final class PullRequestDetailViewModel: ObservableObject {
     /// Saves a new title, description, or both. Nil leaves that field as it is on GitHub.
     typealias Edit = (PullRequestReference, String?, String?) async throws -> Void
     typealias SubmitReview = (NewPullRequestReview, PullRequestReference) async throws -> Void
+    /// Merges the base branch into the head branch: the pull request's node ID and the head commit it expects.
+    typealias UpdateBranch = (String, String) async throws -> Void
 
     let reference: PullRequestReference
     /// The last loaded content. Kept when a reload fails so the window does not go blank.
@@ -30,6 +32,8 @@ final class PullRequestDetailViewModel: ObservableObject {
     @Published private(set) var threadIndexes: [String: ReviewThreadIndex] = [:]
     /// The verdict of the review submitted from this view, once GitHub accepts it.
     @Published private(set) var submittedReview: PullRequestReviewEvent?
+    /// Whether an Update branch request is in flight.
+    @Published private(set) var isUpdatingBranch = false
 
     private let fetch: Fetch
     private let syncViewed: SetViewed
@@ -38,6 +42,7 @@ final class PullRequestDetailViewModel: ObservableObject {
     private let sendResolved: SetResolved
     private let sendEdit: Edit
     private let sendReview: SubmitReview
+    private let sendUpdateBranch: UpdateBranch
     private let cache: PullRequestDetailCache?
     /// Presentations built so far, keyed by filename and whether whitespace changes are hidden.
     private var presentations: [PresentationKey: DiffPresentation] = [:]
@@ -55,6 +60,7 @@ final class PullRequestDetailViewModel: ObservableObject {
          setResolved: @escaping SetResolved = { _, _ in },
          edit: @escaping Edit = { _, _, _ in },
          submitReview: @escaping SubmitReview = { _, _ in },
+         updateBranch: @escaping UpdateBranch = { _, _ in },
          cache: PullRequestDetailCache? = nil) {
         self.reference = reference
         self.fetch = fetch
@@ -64,6 +70,7 @@ final class PullRequestDetailViewModel: ObservableObject {
         self.sendResolved = setResolved
         self.sendEdit = edit
         self.sendReview = submitReview
+        self.sendUpdateBranch = updateBranch
         self.cache = cache
         if let cached = cache?.entry(for: reference) {
             apply(cached.content)
@@ -92,6 +99,9 @@ final class PullRequestDetailViewModel: ObservableObject {
                   },
                   submitReview: { [monitor] review, reference in
                       try await monitor.submitReview(review, on: reference)
+                  },
+                  updateBranch: { [monitor] pullRequestID, headSHA in
+                      try await monitor.updatePullRequestBranch(pullRequestID: pullRequestID, expectedHeadSHA: headSHA)
                   },
                   cache: monitor.detailCache)
     }
@@ -184,6 +194,31 @@ final class PullRequestDetailViewModel: ObservableObject {
         guard !event.requiresBody || !body.isEmpty else { return }
         try await sendReview(NewPullRequestReview(event: event, body: body, commitID: commitID), reference)
         submittedReview = event
+    }
+
+    /// Merges the base branch into the pull request's branch, then reloads to show the new head commit.
+    /// Hides the button right away so it cannot be pressed twice; a failure shows the error and brings it back.
+    func updateBranch() async {
+        guard let detail = content?.detail, detail.canUpdateBranch, !isUpdatingBranch else { return }
+        isUpdatingBranch = true
+        defer { isUpdatingBranch = false }
+        do {
+            try await sendUpdateBranch(detail.nodeID, detail.headSHA)
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
+        setCanUpdateBranch(false)
+        errorMessage = nil
+        await load()
+    }
+
+    private func setCanUpdateBranch(_ canUpdateBranch: Bool) {
+        guard let current = content else { return }
+        var detail = current.detail
+        detail.canUpdateBranch = canUpdateBranch
+        content = PullRequestDetailContent(detail: detail, files: current.files)
+        cacheContent()
     }
 
     /// Posts a new review thread on a diff line, against the head commit that was loaded.
