@@ -737,6 +737,8 @@ struct PullRequestConversationView: View {
             .padding(.bottom, 24)
             .frame(maxWidth: 900, alignment: .leading)
             .background(PageScrollAnchor())
+            // Fill the pane so the scroll view, and its scroller, reach the window's right edge.
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         // The comment box floats in glass over the bottom of the conversation, which scrolls under it.
         .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -749,6 +751,7 @@ struct PullRequestConversationView: View {
                 .padding(.horizontal, 32)
                 .padding(.bottom, 20)
                 .frame(maxWidth: 900, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }
