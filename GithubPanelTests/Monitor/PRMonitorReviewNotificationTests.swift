@@ -148,6 +148,97 @@ final class PRMonitorReviewNotificationTests: XCTestCase {
         XCTAssertNil(NotificationManager.reference(from: ["url": "https://github.com"]), "Older notifications only had a URL")
     }
 
+    func testNotificationPreferencesDefaultToEnabledAndPersistIndependently() {
+        let defaults = FakeDefaults()
+        let flags: [ReferenceWritableKeyPath<PRMonitor, Bool>] = [
+            \.notifyCheckResults, \.notifyApprovals, \.notifyChangesRequested,
+            \.notifyReviewsFromMe, \.notifyReviewsFromMyTeams
+        ]
+        for flag in flags {
+            let monitor = makeMonitor(defaults: defaults)
+            XCTAssertTrue(monitor[keyPath: flag])
+            monitor[keyPath: flag] = false
+            let restored = makeMonitor(defaults: defaults)
+            for other in flags {
+                XCTAssertEqual(restored[keyPath: other], other != flag)
+            }
+            restored[keyPath: flag] = true
+        }
+    }
+
+    func testPersonalAndTeamReviewPreferencesAreIndependentWithoutReplayingMutedRequests() async {
+        for personalEnabled in [true, false] {
+            let api = FakeGitHubAPI()
+            let notifications = FakeNotificationPoster()
+            let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"), notificationPoster: notifications)
+            monitor.notifyReviewsFromMe = personalEnabled
+            monitor.notifyReviewsFromMyTeams = !personalEnabled
+            await monitor.refreshReviewRequests()
+            api.reviewRequests = ReviewRequests(fromMe: [reviewRequestRow(number: 1)], fromMyTeams: [reviewRequestRow(number: 2)])
+            await monitor.refreshReviewRequests()
+            XCTAssertEqual(notifications.reviewPosts.map(\.reference.number), [personalEnabled ? 1 : 2])
+
+            monitor.notifyReviewsFromMe = true
+            monitor.notifyReviewsFromMyTeams = true
+            await monitor.refreshReviewRequests()
+            XCTAssertEqual(notifications.reviewPosts.count, 1)
+        }
+    }
+
+    func testDirectRequestAfterMutedTeamRequestStillNotifies() async {
+        let api = FakeGitHubAPI()
+        let notifications = FakeNotificationPoster()
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"), notificationPoster: notifications)
+        monitor.notifyReviewsFromMyTeams = false
+        api.reviewRequests = ReviewRequests(fromMe: [], fromMyTeams: [reviewRequestRow(number: 1)])
+        await monitor.refreshReviewRequests()
+        api.reviewRequests = ReviewRequests(fromMe: [reviewRequestRow(number: 1)], fromMyTeams: [])
+        await monitor.refreshReviewRequests()
+        XCTAssertEqual(notifications.reviewPosts.map(\.reference.number), [1])
+    }
+
+    func testApprovalAndChangeRequestPreferencesAreIndependentWithoutReplayingMutedReviews() async {
+        for approvalsEnabled in [true, false] {
+            let api = FakeGitHubAPI()
+            let notifications = FakeNotificationPoster()
+            let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"), notificationPoster: notifications)
+            monitor.notifyApprovals = approvalsEnabled
+            monitor.notifyChangesRequested = !approvalsEnabled
+            api.rows = [reviewed(number: 1)]
+            await monitor.refreshNow()
+            api.rows = [reviewed(number: 1, approvedBy: ["octocat"], changesRequestedBy: ["hubot"])]
+            await monitor.refreshNow()
+            XCTAssertEqual(notifications.reviewPosts.map(\.kind), approvalsEnabled ? [.approved(by: ["octocat"])] : [.changesRequested(by: ["hubot"])])
+            monitor.notifyApprovals = true
+            monitor.notifyChangesRequested = true
+            await monitor.refreshNow()
+            XCTAssertEqual(notifications.reviewPosts.count, 1)
+        }
+    }
+
+    func testMutedCheckResultsStillRunHooksAndDoNotReplayWhenEnabled() async {
+        let api = FakeGitHubAPI()
+        let notifications = FakeNotificationPoster()
+        let hooks = FakeHookRunner()
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"), notificationPoster: notifications, hookRunner: hooks)
+        monitor.notifyCheckResults = false
+        monitor.allSucceededHookScript = "echo success"
+        api.rows = [row(number: 1, status: .pending)]
+        await monitor.refreshNow()
+        api.rows = [row(number: 1, status: .success)]
+        await monitor.refreshNow()
+        XCTAssertTrue(notifications.posts.isEmpty)
+        XCTAssertEqual(hooks.runs.count, 1)
+        monitor.notifyCheckResults = true
+        await monitor.refreshNow()
+        XCTAssertTrue(notifications.posts.isEmpty)
+        api.rows = [row(number: 1, status: .pending)]
+        await monitor.refreshNow()
+        api.rows = [row(number: 1, status: .failure)]
+        await monitor.refreshNow()
+        XCTAssertEqual(notifications.posts.map(\.state), [.failure])
+    }
+
     private func reviewed(number: Int, approvedBy: [String] = [], changesRequestedBy: [String] = []) -> PullRequestRow {
         var item = row(number: number, status: .success)
         item.reviewStatus = PullRequestReviewStatus(approvedBy: approvedBy, changesRequestedBy: changesRequestedBy)
