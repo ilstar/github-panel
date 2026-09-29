@@ -15,6 +15,14 @@ final class PullRequestCommentViewsTests: XCTestCase {
         XCTAssertEqual(ReviewThreadView.summary(thread(line: 1, startLine: nil, commentCount: 0)), "0 comments")
     }
 
+    func testResolveTitleFollowsTheThreadState() {
+        let open = thread(line: 1, startLine: nil)
+        let resolved = ReviewThread(id: open.id, path: open.path, line: open.line, startLine: nil, side: .right,
+                                    isResolved: true, isOutdated: false, comments: open.comments)
+        XCTAssertEqual(ReviewThreadView.resolveTitle(open), "Resolve conversation")
+        XCTAssertEqual(ReviewThreadView.resolveTitle(resolved), "Unresolve conversation")
+    }
+
     func testComposerTrimsTheDraft() {
         XCTAssertEqual(CommentComposer.trimmed("  Looks good\n\n"), "Looks good")
         XCTAssertEqual(CommentComposer.trimmed(" \n "), "")

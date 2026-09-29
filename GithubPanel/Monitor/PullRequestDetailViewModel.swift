@@ -9,6 +9,8 @@ final class PullRequestDetailViewModel: ObservableObject {
     typealias SetViewed = (String, String, Bool) async throws -> Void
     typealias FetchComments = (PullRequestReference) async throws -> PullRequestComments
     typealias PostComment = (NewPullRequestComment, PullRequestReference) async throws -> Void
+    /// Resolves or unresolves one review thread: its node ID and the new state.
+    typealias SetResolved = (String, Bool) async throws -> Void
     /// Saves a new title, description, or both. Nil leaves that field as it is on GitHub.
     typealias Edit = (PullRequestReference, String?, String?) async throws -> Void
     typealias SubmitReview = (NewPullRequestReview, PullRequestReference) async throws -> Void
@@ -37,6 +39,7 @@ final class PullRequestDetailViewModel: ObservableObject {
     private let syncViewed: SetViewed
     private let fetchComments: FetchComments
     private let sendComment: PostComment
+    private let sendResolved: SetResolved
     private let sendEdit: Edit
     private let sendReview: SubmitReview
     private let sendUpdateBranch: UpdateBranch
@@ -54,6 +57,7 @@ final class PullRequestDetailViewModel: ObservableObject {
          setViewed: @escaping SetViewed = { _, _, _ in },
          fetchComments: @escaping FetchComments = { _ in .empty },
          postComment: @escaping PostComment = { _, _ in },
+         setResolved: @escaping SetResolved = { _, _ in },
          edit: @escaping Edit = { _, _, _ in },
          submitReview: @escaping SubmitReview = { _, _ in },
          updateBranch: @escaping UpdateBranch = { _, _ in },
@@ -63,6 +67,7 @@ final class PullRequestDetailViewModel: ObservableObject {
         self.syncViewed = setViewed
         self.fetchComments = fetchComments
         self.sendComment = postComment
+        self.sendResolved = setResolved
         self.sendEdit = edit
         self.sendReview = submitReview
         self.sendUpdateBranch = updateBranch
@@ -85,6 +90,9 @@ final class PullRequestDetailViewModel: ObservableObject {
                   fetchComments: { [monitor] reference in try await monitor.fetchPullRequestComments(reference) },
                   postComment: { [monitor] comment, reference in
                       try await monitor.postPullRequestComment(comment, on: reference)
+                  },
+                  setResolved: { [monitor] threadID, resolved in
+                      try await monitor.setReviewThreadResolved(threadID: threadID, resolved: resolved)
                   },
                   edit: { [monitor] reference, title, body in
                       try await monitor.editPullRequest(reference, title: title, body: body)
@@ -222,6 +230,19 @@ final class PullRequestDetailViewModel: ObservableObject {
     func reply(_ body: String, to thread: ReviewThread) async throws {
         guard let first = thread.comments.first else { return }
         try await post(.reply(body: body, commentID: first.databaseID))
+    }
+
+    /// Resolves or unresolves a review thread, then reloads the comments so it shows GitHub's state.
+    /// Throws when GitHub refuses, so the thread can show the error.
+    func setResolved(_ resolved: Bool, thread: ReviewThread) async throws {
+        guard thread.isResolved != resolved else { return }
+        try await sendResolved(thread.id, resolved)
+        do {
+            try await reloadComments()
+        } catch {
+            // The thread changed; only the refresh failed.
+            errorMessage = error.localizedDescription
+        }
     }
 
     func threadIndex(for filename: String) -> ReviewThreadIndex {

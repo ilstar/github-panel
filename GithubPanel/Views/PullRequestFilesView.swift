@@ -461,7 +461,9 @@ struct PullRequestFilesView: View {
     }
 
     private func threadView(_ thread: ReviewThread) -> some View {
-        ReviewThreadView(thread: thread, onReply: { body in try await viewModel.reply(body, to: thread) })
+        ReviewThreadView(thread: thread,
+                         onReply: { body in try await viewModel.reply(body, to: thread) },
+                         onSetResolved: { resolved in try await viewModel.setResolved(resolved, thread: thread) })
     }
 
     static func composerPlaceholder(_ anchor: DiffCommentAnchor) -> String {

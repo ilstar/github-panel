@@ -564,6 +564,35 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertTrue(unmark.query.contains("unmarkFileAsViewed(input: { pullRequestId: $id, path: $path })"))
     }
 
+    func testSetReviewThreadResolvedSendsResolveAndUnresolveMutations() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: #"{"data":{"resolveReviewThread":{"thread":{"id":"RT_1","isResolved":true}}}}"#)
+        transport.enqueue(json: #"{"data":{"unresolveReviewThread":{"thread":{"id":"RT_1","isResolved":false}}}}"#)
+        let api = GitHubAPI(transport: transport)
+
+        try await api.setReviewThreadResolved(token: "token", threadID: "RT_1", resolved: true)
+        try await api.setReviewThreadResolved(token: "token", threadID: "RT_1", resolved: false)
+
+        let resolve = try transport.graphQLBody(at: 0)
+        XCTAssertTrue(resolve.query.contains("resolveReviewThread(input: { threadId: $id })"))
+        XCTAssertFalse(resolve.query.contains("unresolveReviewThread"))
+        XCTAssertEqual(resolve.variables["id"] as? String, "RT_1")
+        let unresolve = try transport.graphQLBody(at: 1)
+        XCTAssertTrue(unresolve.query.contains("unresolveReviewThread(input: { threadId: $id })"))
+    }
+
+    func testSetReviewThreadResolvedSurfacesGraphQLErrors() async {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: #"{"errors":[{"message":"Resource not accessible by integration"}]}"#)
+
+        do {
+            try await GitHubAPI(transport: transport).setReviewThreadResolved(token: "token", threadID: "RT_1", resolved: true)
+            XCTFail("Expected an error")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, "Resource not accessible by integration")
+        }
+    }
+
     func testSetFileViewedSurfacesGraphQLErrors() async {
         let transport = MockHTTPTransport()
         transport.enqueue(json: #"{"errors":[{"message":"Could not resolve to a node"}]}"#)

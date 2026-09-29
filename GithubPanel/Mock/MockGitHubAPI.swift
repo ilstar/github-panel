@@ -185,6 +185,20 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
         }
     }
 
+    func setReviewThreadResolved(token: String, threadID: String, resolved: Bool) async throws {
+        locked {
+            for (id, current) in comments {
+                let threads = current.threads.map { thread in
+                    guard thread.id == threadID else { return thread }
+                    return ReviewThread(id: thread.id, path: thread.path, line: thread.line, startLine: thread.startLine,
+                                        side: thread.side, isResolved: resolved, isOutdated: thread.isOutdated,
+                                        comments: thread.comments)
+                }
+                comments[id] = PullRequestComments(comments: current.comments, threads: threads)
+            }
+        }
+    }
+
     private static func makeComments(now: Date) -> PullRequestComments {
         func comment(_ id: Int, _ author: String, _ body: String, hoursAgo: Double) -> PullRequestComment {
             PullRequestComment(id: "mock-comment-\(id)", databaseID: id, authorLogin: author, body: body,
