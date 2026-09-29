@@ -30,6 +30,10 @@ struct PullRequestDetailView: View {
                                          htmlURL: content.detail.htmlURL,
                                          isLoading: viewModel.isLoading,
                                          onRefresh: reload,
+                                         isUpdatingBranch: viewModel.isUpdatingBranch,
+                                         onUpdateBranch: content.detail.canUpdateBranch || viewModel.isUpdatingBranch ? {
+                                             Task { await viewModel.updateBranch() }
+                                         } : nil,
                                          isReviewing: $isReviewing,
                                          onSubmitReview: viewModel.canReview ? { event, body in
                                              try await viewModel.submitReview(event, body: body)
@@ -146,13 +150,16 @@ struct PullRequestDetailView: View {
 }
 
 /// The row over the pull request: the Conversation / Files changed switcher on the left and the
-/// Reload, Review and Open on GitHub buttons in glass capsules on the right. Edit title sits by the title instead.
+/// Reload, Update branch, Review and Open on GitHub buttons in glass capsules on the right. Edit title sits by the title instead.
 struct PullRequestDetailToolbar: View {
     @Binding var selectedTab: PullRequestDetailTab
     let segments: [GlassSegmentedControl<PullRequestDetailTab>.Segment]
     let htmlURL: URL
     let isLoading: Bool
     let onRefresh: () -> Void
+    var isUpdatingBranch = false
+    /// Merges the base branch into this branch. Nil when GitHub does not offer Update branch.
+    var onUpdateBranch: (() -> Void)?
     /// Whether the review form is open over the Review button.
     @Binding var isReviewing: Bool
     /// Submits a review. Nil when you cannot review this pull request, such as your own.
@@ -175,6 +182,24 @@ struct PullRequestDetailToolbar: View {
             .padding(.horizontal, 3)
             .frame(height: 34)
             .glassSurface(.control, in: Capsule())
+
+            if let onUpdateBranch {
+                Button(action: onUpdateBranch) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.triangle.merge")
+                            .font(.system(size: 12, weight: .semibold))
+                        Text(isUpdatingBranch ? "Updating..." : "Update branch")
+                    }
+                    .font(.system(size: 13, weight: .medium))
+                    .padding(.horizontal, 14)
+                    .frame(height: 34)
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(isUpdatingBranch)
+                .glassSurface(.control, in: Capsule())
+                .help("Merge the latest changes from the base branch into this branch")
+            }
 
             if let onSubmitReview {
                 Button {

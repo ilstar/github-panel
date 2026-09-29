@@ -414,6 +414,8 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertTrue(viewedBody.query.contains("viewerViewedState"))
         XCTAssertTrue(viewedBody.query.contains("viewerDidAuthor"))
         XCTAssertTrue(viewedBody.query.contains("viewerCanUpdate"))
+        XCTAssertTrue(viewedBody.query.contains("viewerCanUpdateBranch"))
+        XCTAssertTrue(viewedBody.query.contains("baseRepository { allowUpdateBranch }"))
         XCTAssertEqual(viewedBody.variables["owner"] as? String, "acme")
         XCTAssertEqual(viewedBody.variables["name"] as? String, "widgets")
         XCTAssertEqual(viewedBody.variables["number"] as? Int, 7)
@@ -431,6 +433,63 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertEqual(content.files.map(\.filename), ["Sources/New.swift", "logo.png"])
         XCTAssertFalse(content.files.contains(where: \.isViewed))
         XCTAssertFalse(content.detail.canEdit)
+        XCTAssertFalse(content.detail.canUpdateBranch)
+    }
+
+    func testFetchPullRequestDetailOffersUpdateBranchLikeGitHub() async throws {
+        let cases: [(state: String, json: String, canUpdateBranch: Bool)] = [
+            // The repository suggests updating branches.
+            ("open", #""viewerCanUpdateBranch":true,"mergeStateStatus":"CLEAN","baseRepository":{"allowUpdateBranch":true}"#, true),
+            // The branch rules require an up-to-date branch.
+            ("open", #""viewerCanUpdateBranch":true,"mergeStateStatus":"BEHIND","baseRepository":{"allowUpdateBranch":false}"#, true),
+            // Behind, but the repository neither suggests nor requires updating.
+            ("open", #""viewerCanUpdateBranch":true,"mergeStateStatus":"CLEAN","baseRepository":{"allowUpdateBranch":false}"#, false),
+            // Up to date, or the viewer may not push to the branch.
+            ("open", #""viewerCanUpdateBranch":false,"mergeStateStatus":"BEHIND","baseRepository":{"allowUpdateBranch":true}"#, false),
+            // Closed pull requests have nothing to update.
+            ("closed", #""viewerCanUpdateBranch":true,"mergeStateStatus":"CLEAN","baseRepository":{"allowUpdateBranch":true}"#, false)
+        ]
+        for testCase in cases {
+            let transport = MockHTTPTransport()
+            transport.enqueue(json: pullDetailResponse.replacingOccurrences(of: #""state":"open""#,
+                                                                            with: #""state":"\#(testCase.state)""#),
+                              path: pullPath)
+            transport.enqueue(json: "[]", path: filesPath)
+            transport.enqueue(json: #"{"data":{"repository":{"pullRequest":{\#(testCase.json),"files":{"nodes":[]}}}}}"#,
+                              path: "/graphql")
+
+            let content = try await GitHubAPI(transport: transport)
+                .fetchPullRequestDetail(token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7))
+
+            XCTAssertEqual(content.detail.canUpdateBranch, testCase.canUpdateBranch, "\(testCase.state) \(testCase.json)")
+        }
+    }
+
+    func testUpdatePullRequestBranchMergesTheBaseAtTheExpectedHead() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: #"{"data":{"updatePullRequestBranch":{"pullRequest":{"id":"PR_node"}}}}"#)
+
+        try await GitHubAPI(transport: transport)
+            .updatePullRequestBranch(token: "token", pullRequestID: "PR_node", expectedHeadSHA: "abc123")
+
+        let body = try transport.graphQLBody(at: 0)
+        XCTAssertTrue(body.query.contains("updatePullRequestBranch(input: { pullRequestId: $id, expectedHeadOid: $head, updateMethod: MERGE })"))
+        XCTAssertEqual(body.variables["id"] as? String, "PR_node")
+        XCTAssertEqual(body.variables["head"] as? String, "abc123")
+        XCTAssertEqual(transport.requests[0].value(forHTTPHeaderField: "Authorization"), "Bearer token")
+    }
+
+    func testUpdatePullRequestBranchSurfacesGraphQLErrors() async {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: #"{"errors":[{"message":"expected head sha didn't match current head ref"}]}"#)
+
+        do {
+            try await GitHubAPI(transport: transport)
+                .updatePullRequestBranch(token: "token", pullRequestID: "PR_node", expectedHeadSHA: "abc123")
+            XCTFail("Expected an error")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, "expected head sha didn't match current head ref")
+        }
     }
 
     func testFetchPullRequestDetailOnlyLetsTheAuthorEdit() async throws {

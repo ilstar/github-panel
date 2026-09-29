@@ -599,6 +599,14 @@ final class PRMonitor: ObservableObject {
         await requireFreshRefresh(for: session)
     }
 
+    /// Merges the base branch into the pull request's branch, then refreshes the list, whose merge state changes.
+    func updatePullRequestBranch(pullRequestID: String, expectedHeadSHA: String) async throws {
+        guard let token = loadSessionToken() else { throw MissingTokenError() }
+        let session = credentialSession
+        try await api.updatePullRequestBranch(token: token, pullRequestID: pullRequestID, expectedHeadSHA: expectedHeadSHA)
+        await requireFreshRefresh(for: session)
+    }
+
     /// Submits a review, then refreshes To Review, which drops a pull request once I have reviewed it.
     func submitReview(_ review: NewPullRequestReview, on reference: PullRequestReference) async throws {
         guard let token = loadSessionToken() else { throw MissingTokenError() }
