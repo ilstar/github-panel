@@ -359,6 +359,65 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         XCTAssertEqual(posted, [.reply(body: "Fixed", commentID: 41)])
     }
 
+    func testSetResolvedSendsTheThreadAndReloadsComments() async throws {
+        var sent: [(String, Bool)] = []
+        var resolved = false
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+                                                   fetch: { [self] _ in detailContent(title: "Resolve") },
+                                                   fetchComments: { [self] _ in
+                                                       let target = ReviewThread(id: "t", path: "a.swift", line: 1, startLine: nil,
+                                                                                 side: .right, isResolved: resolved, isOutdated: false,
+                                                                                 comments: [comment(1)])
+                                                       return PullRequestComments(comments: [], threads: [target])
+                                                   },
+                                                   setResolved: { id, value in
+                                                       sent.append((id, value))
+                                                       resolved = value
+                                                   })
+        await viewModel.load()
+        let target = try XCTUnwrap(viewModel.comments?.threads.first)
+
+        try await viewModel.setResolved(true, thread: target)
+        try await viewModel.setResolved(true, thread: try XCTUnwrap(viewModel.comments?.threads.first))
+
+        XCTAssertEqual(sent.map(\.0), ["t"])
+        XCTAssertEqual(sent.map(\.1), [true])
+        XCTAssertEqual(viewModel.comments?.threads.first?.isResolved, true)
+    }
+
+    func testFailedSetResolvedThrowsAndSkipsReload() async {
+        var commentFetches = 0
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+                                                   fetch: { [self] _ in detailContent(title: "Fail") },
+                                                   fetchComments: { _ in
+                                                       commentFetches += 1
+                                                       return .empty
+                                                   },
+                                                   setResolved: { _, _ in
+                                                       throw GitHubAPIError(message: "Forbidden", documentationURL: nil, statusCode: 403)
+                                                   })
+        await viewModel.load()
+
+        do {
+            try await viewModel.setResolved(true, thread: thread("t", path: "a.swift", line: 1))
+            XCTFail("Expected an error")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, "GitHub API error (403): Forbidden")
+        }
+        XCTAssertEqual(commentFetches, 1)
+    }
+
+    func testMonitorResolvesThreadsWithSessionToken() async throws {
+        let api = FakeGitHubAPI()
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+
+        try await monitor.setReviewThreadResolved(threadID: "RT_1", resolved: false)
+
+        XCTAssertEqual(api.setResolvedCalls.map(\.token), ["token"])
+        XCTAssertEqual(api.setResolvedCalls.map(\.threadID), ["RT_1"])
+        XCTAssertEqual(api.setResolvedCalls.map(\.resolved), [false])
+    }
+
     func testFailedPostThrowsAndSkipsReload() async {
         var commentFetches = 0
         let viewModel = PullRequestDetailViewModel(reference: reference,

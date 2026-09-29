@@ -46,6 +46,7 @@ final class FakeGitHubAPI: GitHubAPIClient {
     var detailHandler: ((PullRequestReference) async throws -> PullRequestDetailContent)?
     private(set) var setFileViewedCalls: [(token: String, pullRequestID: String, path: String, viewed: Bool)] = []
     var comments: PullRequestComments = .empty
+    private(set) var setResolvedCalls: [(token: String, threadID: String, resolved: Bool)] = []
     var commentsHandler: ((PullRequestReference) async throws -> PullRequestComments)?
     private(set) var commentsCalls: [(token: String, reference: PullRequestReference)] = []
     private(set) var postCommentCalls: [(token: String, reference: PullRequestReference, comment: NewPullRequestComment)] = []
@@ -138,6 +139,11 @@ final class FakeGitHubAPI: GitHubAPIClient {
     func postPullRequestComment(token: String, reference: PullRequestReference, comment: NewPullRequestComment) async throws {
         if let error { throw error }
         postCommentCalls.append((token, reference, comment))
+    }
+
+    func setReviewThreadResolved(token: String, threadID: String, resolved: Bool) async throws {
+        if let error { throw error }
+        setResolvedCalls.append((token, threadID, resolved))
     }
 
     func editPullRequest(token: String, reference: PullRequestReference, title: String?, body: String?) async throws {

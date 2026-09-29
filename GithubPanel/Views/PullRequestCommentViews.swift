@@ -201,17 +201,25 @@ struct CommentComposer: View {
     }
 }
 
-/// A review thread on the diff: its comments and a reply box. Resolved threads start folded, like on GitHub.
+/// A review thread on the diff: its comments, a reply box, and a button to resolve or unresolve it.
+/// Resolved threads start folded, like on GitHub.
 struct ReviewThreadView: View {
     let thread: ReviewThread
     let onReply: (String) async throws -> Void
+    /// Resolves (true) or unresolves (false) the thread. Throws to show the error.
+    let onSetResolved: (Bool) async throws -> Void
 
     @State private var isExpanded: Bool
     @State private var isReplying = false
+    @State private var isResolving = false
+    @State private var resolveError: String?
 
-    init(thread: ReviewThread, onReply: @escaping (String) async throws -> Void) {
+    init(thread: ReviewThread,
+         onReply: @escaping (String) async throws -> Void,
+         onSetResolved: @escaping (Bool) async throws -> Void = { _ in }) {
         self.thread = thread
         self.onReply = onReply
+        self.onSetResolved = onSetResolved
         _isExpanded = State(initialValue: !thread.isResolved)
     }
 
@@ -235,21 +243,33 @@ struct ReviewThreadView: View {
                                             isReplying = false
                                         })
                     } else {
-                        Button {
-                            isReplying = true
-                        } label: {
-                            Text("Reply…")
-                                .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 6)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                        .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
-                                )
-                                .contentShape(Rectangle())
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(spacing: 8) {
+                                Button {
+                                    isReplying = true
+                                } label: {
+                                    Text("Reply…")
+                                        .foregroundStyle(.secondary)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 6)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                                .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                                        )
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                resolveButton
+                            }
+                            if let resolveError {
+                                Text(resolveError)
+                                    .font(.caption)
+                                    .foregroundStyle(.red)
+                                    .textSelection(.enabled)
+                                    .lineLimit(3)
+                            }
                         }
-                        .buttonStyle(.plain)
                     }
                 }
                 .padding(12)
@@ -262,6 +282,38 @@ struct ReviewThreadView: View {
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
         )
+    }
+
+    private var resolveButton: some View {
+        HStack(spacing: 6) {
+            if isResolving {
+                ProgressView().controlSize(.small)
+            }
+            Button(Self.resolveTitle(thread), action: toggleResolved)
+                .disabled(isResolving)
+                .help(thread.isResolved ? "Mark this conversation as unresolved" : "Mark this conversation as resolved")
+        }
+    }
+
+    private func toggleResolved() {
+        guard !isResolving else { return }
+        let resolved = !thread.isResolved
+        isResolving = true
+        resolveError = nil
+        Task {
+            do {
+                try await onSetResolved(resolved)
+                // Fold a thread once it is resolved, like GitHub does.
+                if resolved { isExpanded = false }
+            } catch {
+                resolveError = error.localizedDescription
+            }
+            isResolving = false
+        }
+    }
+
+    static func resolveTitle(_ thread: ReviewThread) -> String {
+        thread.isResolved ? "Unresolve conversation" : "Resolve conversation"
     }
 
     private var header: some View {

@@ -294,6 +294,19 @@ final class GitHubAPI: GitHubAPIClient {
         _ = try await graphQL(Response.self, query: query, variables: ["id": pullRequestID, "path": path], token: token)
     }
 
+    func setReviewThreadResolved(token: String, threadID: String, resolved: Bool) async throws {
+        let mutation = resolved ? "resolveReviewThread" : "unresolveReviewThread"
+        let query = """
+        mutation($id: ID!) {
+          \(mutation)(input: { threadId: $id }) {
+            thread { id isResolved }
+          }
+        }
+        """
+        struct Response: Decodable {}
+        _ = try await graphQL(Response.self, query: query, variables: ["id": threadID], token: token)
+    }
+
     func fetchPullRequestComments(token: String, reference: PullRequestReference) async throws -> PullRequestComments {
         let (owner, name) = try repoParts(reference.repoFullName)
         // Only the first 100 comments and threads are loaded, like the changed files.

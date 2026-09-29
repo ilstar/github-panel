@@ -79,6 +79,21 @@ final class MockGitHubAPICommentTests: XCTestCase {
         }
     }
 
+    func testMockResolvesAndUnresolvesThreads() async throws {
+        let api = MockGitHubAPI()
+        let before = try await api.fetchPullRequestComments(token: "token", reference: reference)
+        let target = try XCTUnwrap(before.threads.first { !$0.isResolved })
+
+        try await api.setReviewThreadResolved(token: "token", threadID: target.id, resolved: true)
+        let resolved = try await api.fetchPullRequestComments(token: "token", reference: reference)
+        try await api.setReviewThreadResolved(token: "token", threadID: target.id, resolved: false)
+        let unresolved = try await api.fetchPullRequestComments(token: "token", reference: reference)
+
+        XCTAssertEqual(resolved.threads.first { $0.id == target.id }?.isResolved, true)
+        XCTAssertEqual(unresolved.threads.first { $0.id == target.id }?.isResolved, false)
+        XCTAssertEqual(resolved.threads.count, before.threads.count)
+    }
+
     func testMockPostsGeneralInlineAndReplyComments() async throws {
         let api = MockGitHubAPI()
         let before = try await api.fetchPullRequestComments(token: "token", reference: reference)
