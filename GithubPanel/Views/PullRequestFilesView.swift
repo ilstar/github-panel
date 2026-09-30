@@ -210,6 +210,7 @@ struct PullRequestFilesView: View {
                     .help("Clear filter")
                 }
             }
+            .prFont(.callout)
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
             .background(
@@ -221,7 +222,7 @@ struct PullRequestFilesView: View {
             let rows = FileTree.visibleRows(treeRows, collapsed: collapsedDirectories)
             if rows.isEmpty {
                 Text(files.isEmpty ? "No files changed." : "No matching files.")
-                    .font(.callout)
+                    .prFont(.callout)
                     .foregroundStyle(.secondary)
                     .padding(12)
                 Spacer()
@@ -246,7 +247,7 @@ struct PullRequestFilesView: View {
             case .directory:
                 let isCollapsed = collapsedDirectories.contains(row.id)
                 Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
-                    .font(.caption2.weight(.bold))
+                    .prFont(.caption2, weight: .bold)
                     .foregroundStyle(.secondary)
                     .frame(width: 12)
                 Image(systemName: isCollapsed ? "folder" : "folder.fill")
@@ -265,12 +266,12 @@ struct PullRequestFilesView: View {
 
             if row.kind == .file, viewModel.viewedFiles.contains(row.id) {
                 Image(systemName: "checkmark")
-                    .font(.caption.weight(.semibold))
+                    .prFont(.caption1, weight: .semibold)
                     .foregroundStyle(.secondary)
                     .help("Viewed")
             }
         }
-        .font(.callout)
+        .prFont(.callout)
         .padding(.leading, CGFloat(row.depth) * 14 + 4)
         .padding(.trailing, 6)
         .padding(.vertical, 3)

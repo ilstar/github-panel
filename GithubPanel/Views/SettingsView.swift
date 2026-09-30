@@ -73,7 +73,7 @@ struct SettingsView: View {
                 get: { PullRequestTextSize.clamped(prTextSize) },
                 set: { prTextSize = $0 }
             ), in: PullRequestTextSize.range)
-            Text("Adjusts text in PR descriptions, comments, and file diffs.")
+            Text("Adjusts text in PR descriptions, comments, file trees, and diffs.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Button("Reset PR Text Size") {
