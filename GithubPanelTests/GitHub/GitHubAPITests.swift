@@ -406,7 +406,7 @@ final class GitHubAPITests: XCTestCase {
 
         // The three requests run at the same time, so their order is not fixed.
         XCTAssertEqual(Set(transport.requests.compactMap { $0.url?.path }), [pullPath, filesPath, "/graphql"])
-        XCTAssertEqual(transport.requests.count, 3)
+        XCTAssertEqual(transport.requests.count, 4)
         XCTAssertEqual(try transport.request(path: filesPath).url?.query, "per_page=100")
         XCTAssertEqual(try transport.request(path: pullPath).value(forHTTPHeaderField: "Authorization"), "Bearer token")
         let graphQLIndex = try XCTUnwrap(transport.requests.firstIndex { $0.url?.path == "/graphql" })
@@ -419,6 +419,42 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertEqual(viewedBody.variables["owner"] as? String, "acme")
         XCTAssertEqual(viewedBody.variables["name"] as? String, "widgets")
         XCTAssertEqual(viewedBody.variables["number"] as? Int, 7)
+    }
+
+    func testCodeOwnersUsesBaseBranchPrecedenceAndTeamMembership() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: pullDetailResponse, path: pullPath)
+        transport.enqueue(json: pullFilesResponse, path: filesPath)
+        transport.enqueue(json: viewedFilesResponse, path: "/graphql")
+        transport.enqueue(json: #"{"data":{"viewer":{"login":"alice","email":"alice@example.com"},"repository":{"github":{"text":"/Sources/ @acme/dev\n*.png @bob"},"root":{"text":"* @alice"},"docs":null}}}"#, path: "/graphql")
+        transport.enqueue(json: #"{"state":"active"}"#, path: "/orgs/acme/teams/dev/memberships/alice")
+
+        let content = try await GitHubAPI(transport: transport).fetchPullRequestDetail(token: "token",
+            reference: PullRequestReference(repoFullName: "acme/widgets", number: 7))
+
+        XCTAssertEqual(content.files[0].codeOwners, ["@acme/dev"])
+        XCTAssertTrue(content.files[0].isOwnedByViewer)
+        XCTAssertEqual(content.files[1].codeOwners, ["@bob"])
+        XCTAssertFalse(content.files[1].isOwnedByViewer)
+        let index = try XCTUnwrap(transport.requests.firstIndex { $0.jsonBody?["query"] as? String != nil && ($0.jsonBody?["query"] as? String)?.contains("github: object") == true })
+        let body = try transport.graphQLBody(at: index)
+        XCTAssertEqual(body.variables["github"] as? String, "main:.github/CODEOWNERS")
+        XCTAssertEqual(body.variables["root"] as? String, "main:CODEOWNERS")
+    }
+
+    func testCodeOwnersFallsBackToRootAndKeepsOwnersWhenTeamAccessFails() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: pullDetailResponse, path: pullPath)
+        transport.enqueue(json: pullFilesResponse, path: filesPath)
+        transport.enqueue(json: viewedFilesResponse, path: "/graphql")
+        transport.enqueue(json: #"{"data":{"viewer":{"login":"alice","email":null},"repository":{"github":null,"root":{"text":"* @acme/dev"},"docs":{"text":"* @alice"}}}}"#, path: "/graphql")
+        transport.enqueue(json: #"{"message":"Forbidden"}"#, statusCode: 403, path: "/orgs/acme/teams/dev/memberships/alice")
+
+        let content = try await GitHubAPI(transport: transport).fetchPullRequestDetail(token: "token",
+            reference: PullRequestReference(repoFullName: "acme/widgets", number: 7))
+
+        XCTAssertEqual(content.files.map(\.codeOwners), [["@acme/dev"], ["@acme/dev"]])
+        XCTAssertFalse(content.files.contains(where: \.isOwnedByViewer))
     }
 
     func testFetchPullRequestDetailLoadsFilesWhenViewedStateFails() async throws {

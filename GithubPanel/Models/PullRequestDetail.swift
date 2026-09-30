@@ -54,6 +54,8 @@ struct PullRequestDetail: Equatable {
     var canUpdateBranch = false
     /// When GitHub last changed the pull request. Compared with the list's `updatedAt` to tell whether a cached copy is stale.
     var updatedAt: Date?
+
+    var offersUpdateBranch: Bool { isViewerAuthor && canUpdateBranch }
 }
 
 struct PullRequestFile: Identifiable, Equatable {
@@ -77,6 +79,8 @@ struct PullRequestFile: Identifiable, Equatable {
     let patch: String?
     /// Whether the viewer marked this file as viewed on GitHub. A file changed since it was viewed is not viewed.
     var isViewed = false
+    var codeOwners: [String] = []
+    var isOwnedByViewer = false
 }
 
 /// A pull request's detail and changed files, loaded together for the detail window.

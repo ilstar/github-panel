@@ -32,7 +32,7 @@ struct PullRequestDetailView: View {
                                          isLoading: viewModel.isLoading,
                                          onRefresh: reload,
                                          isUpdatingBranch: viewModel.isUpdatingBranch,
-                                         onUpdateBranch: content.detail.canUpdateBranch || viewModel.isUpdatingBranch ? {
+                                         onUpdateBranch: content.detail.offersUpdateBranch || (content.detail.isViewerAuthor && viewModel.isUpdatingBranch) ? {
                                              Task { await viewModel.updateBranch() }
                                          } : nil,
                                          isReviewing: $isReviewing,
