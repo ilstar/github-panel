@@ -255,6 +255,92 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertTrue(body.query.contains("timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT], last: 20)"))
     }
 
+    func testFetchOpenPRsKeepsRowsGitHubCouldSendWhenSAMLSSOBlocksSome() async throws {
+        let transport = MockHTTPTransport()
+        let page = openPRPage(numbers: [7, 3], hasNextPage: false, endCursor: nil)
+            .replacingOccurrences(of: #""nodes":["#, with: #""nodes":[null,"#)
+            .replacingOccurrences(of: "}}}}", with: "}}},\(samlErrors(path: #"["viewer","pullRequests","nodes",0]"#))}")
+        transport.enqueue(json: page, headers: ["X-GitHub-SSO": "partial-results; organizations=21955855"])
+
+        let result = try await GitHubAPI(transport: transport).fetchOpenPRs(token: "token")
+
+        XCTAssertEqual(result.rows.map(\.number), [7, 3])
+        XCTAssertEqual(result.ssoAuthorizationURL, SAMLSSO.tokenSettingsURL)
+    }
+
+    func testFetchOpenPRsHasNoSSOLinkWhenNothingIsBlocked() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: openPRResponse)
+
+        let result = try await GitHubAPI(transport: transport).fetchOpenPRs(token: "token")
+
+        XCTAssertNil(result.ssoAuthorizationURL)
+    }
+
+    func testFetchReviewRequestsKeepsRowsGitHubCouldSendWhenSAMLSSOBlocksSome() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: """
+        {"data":{
+          "viewer":{"login":"fred"},
+          "direct":{"nodes":[null]},
+          "all":{"nodes":[
+            {"id":"PR_b","title":"Team","number":9,"url":"https://github.com/acme/gears/pull/9",
+             "updatedAt":"2026-04-13T12:34:56Z","isDraft":false,
+             "repository":{"nameWithOwner":"acme/gears"},"author":null},
+            null
+          ]}
+        },\(samlErrors(path: #"["direct","nodes",0]"#))}
+        """, headers: ["X-GitHub-SSO": "required; url=https://github.com/orgs/secret/sso?authorization_request=abc"])
+
+        let requests = try await GitHubAPI(transport: transport).fetchReviewRequests(token: "token")
+
+        XCTAssertEqual(requests.fromMe.map(\.id), [])
+        XCTAssertEqual(requests.fromMyTeams.map(\.id), ["acme/gears#9"])
+        XCTAssertEqual(requests.ssoAuthorizationURL?.absoluteString,
+                       "https://github.com/orgs/secret/sso?authorization_request=abc")
+    }
+
+    func testOtherGraphQLErrorsAlongsideSAMLErrorsStillFailTheList() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: """
+        {"data":{"viewer":{"login":"fred"},"direct":{"nodes":[]},"all":{"nodes":[]}},
+         "errors":[{"type":"FORBIDDEN","message":"Resource protected by organization SAML enforcement."},
+                   {"type":"RATE_LIMITED","message":"API rate limit exceeded"}]}
+        """)
+
+        do {
+            _ = try await GitHubAPI(transport: transport).fetchReviewRequests(token: "token")
+            XCTFail("Expected a GraphQL error")
+        } catch let error as GraphQLError {
+            XCTAssertTrue(error.message.contains("API rate limit exceeded"))
+        }
+    }
+
+    func testSAMLErrorsStillFailRequestsThatNeedCompleteData() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: """
+        {"data":{"repository":null},\(samlErrors(path: #"["repository"]"#))}
+        """)
+
+        do {
+            _ = try await GitHubAPI(transport: transport)
+                .fetchPullRequestComments(token: "token", reference: PullRequestReference(repoFullName: "secret/app", number: 1))
+            XCTFail("Expected a GraphQL error")
+        } catch let error as GraphQLError {
+            XCTAssertTrue(error.message.contains("SAML"))
+        }
+    }
+
+    func testSAMLSSOAuthorizationURLComesFromTheHeaderWhenItNamesOne() {
+        XCTAssertEqual(SAMLSSO.authorizationURL(fromHeader: "required; url=https://github.com/orgs/acme/sso?authorization_request=x")
+                           .absoluteString,
+                       "https://github.com/orgs/acme/sso?authorization_request=x")
+        XCTAssertEqual(SAMLSSO.authorizationURL(fromHeader: "partial-results; organizations=1,2"), SAMLSSO.tokenSettingsURL)
+        XCTAssertEqual(SAMLSSO.authorizationURL(fromHeader: nil), SAMLSSO.tokenSettingsURL)
+        // Only GitHub's own pages are trusted as a place to authorize the token.
+        XCTAssertEqual(SAMLSSO.authorizationURL(fromHeader: "required; url=https://evil.example/sso"), SAMLSSO.tokenSettingsURL)
+    }
+
     func testGraphQLErrorsAreSurfaced() async throws {
         let transport = MockHTTPTransport()
         transport.enqueue(json: #"{"data":null,"errors":[{"message":"Nope"},{"message":"Still nope"}]}"#)
@@ -1040,6 +1126,7 @@ private final class MockHTTPTransport: HTTPTransport {
     struct QueuedResponse {
         let data: Data
         let statusCode: Int
+        let headers: [String: String]?
         /// Only a request to this URL path takes the response. Nil matches any request, in order.
         let path: String?
     }
@@ -1054,9 +1141,9 @@ private final class MockHTTPTransport: HTTPTransport {
     }
 
     /// Queues a response. Pass `path` for requests that run at the same time, whose order is not fixed.
-    func enqueue(json: String, statusCode: Int = 200, path: String? = nil) {
+    func enqueue(json: String, statusCode: Int = 200, headers: [String: String]? = nil, path: String? = nil) {
         lock.withLock {
-            responses.append(QueuedResponse(data: Data(json.utf8), statusCode: statusCode, path: path))
+            responses.append(QueuedResponse(data: Data(json.utf8), statusCode: statusCode, headers: headers, path: path))
         }
     }
 
@@ -1069,12 +1156,12 @@ private final class MockHTTPTransport: HTTPTransport {
             recordedRequests.append(request)
             let index = responses.firstIndex { $0.path == nil || $0.path == request.url?.path }
             return index.map { responses.remove(at: $0) }
-                ?? QueuedResponse(data: Data(), statusCode: 200, path: nil)
+                ?? QueuedResponse(data: Data(), statusCode: 200, headers: nil, path: nil)
         }
         let http = HTTPURLResponse(url: request.url!,
                                    statusCode: response.statusCode,
                                    httpVersion: nil,
-                                   headerFields: nil)!
+                                   headerFields: response.headers)!
         return (response.data, http)
     }
 
@@ -1093,6 +1180,14 @@ private extension URLRequest {
         guard let httpBody else { return nil }
         return try? JSONSerialization.jsonObject(with: httpBody) as? [String: Any]
     }
+}
+
+/// The `"errors"` member GitHub sends for a node hidden by an organization's SAML enforcement.
+private func samlErrors(path: String) -> String {
+    """
+    "errors":[{"type":"FORBIDDEN","path":\(path),"locations":[{"line":1,"column":1}],
+      "message":"Resource protected by organization SAML enforcement. You must grant your Personal Access token access to this organization."}]
+    """
 }
 
 /// One page of open pull requests with just the fields every row needs.

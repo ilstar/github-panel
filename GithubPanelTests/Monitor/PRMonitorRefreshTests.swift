@@ -52,6 +52,24 @@ final class PRMonitorRefreshTests: XCTestCase {
         XCTAssertEqual(api.fetchOpenPRTokens.count, 1)
     }
 
+    func testRefreshShowsPartialRowsWithSSOLinkUntilNothingIsBlocked() async {
+        let api = FakeGitHubAPI()
+        api.rows = [row(number: 7, status: .success)]
+        api.openSSOAuthorizationURL = SAMLSSO.tokenSettingsURL
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+
+        await monitor.refreshNow()
+
+        XCTAssertNil(monitor.lastError)
+        XCTAssertEqual(monitor.prRows.map(\.number), [7])
+        XCTAssertEqual(monitor.openPullRequestsSSOAuthorizationURL, SAMLSSO.tokenSettingsURL)
+
+        api.openSSOAuthorizationURL = nil
+        await monitor.refreshNow()
+
+        XCTAssertNil(monitor.openPullRequestsSSOAuthorizationURL)
+    }
+
     func testConcurrentOpenRefreshesShareOneRequest() async {
         let gate = SuspendedOpenRequests()
         let api = FakeGitHubAPI()

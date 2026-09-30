@@ -6,19 +6,23 @@ struct ReviewRequests: Equatable {
     let fromMe: [ReviewRequestRow]
     /// Review requested only from a team the viewer belongs to.
     let fromMyTeams: [ReviewRequestRow]
+    /// Set when some requests were left out because the token isn't SSO-authorized for their organization.
+    let ssoAuthorizationURL: URL?
 
     static let empty = ReviewRequests(fromMe: [], fromMyTeams: [])
 
     /// GitHub's `review-requested:@me` matches both direct and team requests, while
     /// `user-review-requested:@me` matches only direct ones; team requests are the difference.
-    init(direct: [ReviewRequestRow], all: [ReviewRequestRow]) {
+    init(direct: [ReviewRequestRow], all: [ReviewRequestRow], ssoAuthorizationURL: URL? = nil) {
         let directIDs = Set(direct.map(\.id))
-        self.init(fromMe: direct, fromMyTeams: all.filter { !directIDs.contains($0.id) })
+        self.init(fromMe: direct, fromMyTeams: all.filter { !directIDs.contains($0.id) },
+                  ssoAuthorizationURL: ssoAuthorizationURL)
     }
 
-    init(fromMe: [ReviewRequestRow], fromMyTeams: [ReviewRequestRow]) {
+    init(fromMe: [ReviewRequestRow], fromMyTeams: [ReviewRequestRow], ssoAuthorizationURL: URL? = nil) {
         self.fromMe = fromMe
         self.fromMyTeams = fromMyTeams
+        self.ssoAuthorizationURL = ssoAuthorizationURL
     }
 
     /// Rows in display order: requests from me first, then from my teams.

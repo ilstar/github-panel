@@ -58,6 +58,7 @@ final class FakeGitHubAPI: GitHubAPIClient {
     private(set) var submitPendingReviewCalls: [(token: String, reviewID: String, event: PullRequestReviewEvent, body: String)] = []
     private(set) var deletePendingReviewCalls: [(token: String, reviewID: String)] = []
     var enableHandler: ((String) async -> Void)?
+    var openSSOAuthorizationURL: URL?
     var enqueueHandler: ((String) async -> Void)?
 
     func fetchCurrentUser(token: String) async throws -> GitHubUser {
@@ -72,7 +73,8 @@ final class FakeGitHubAPI: GitHubAPIClient {
         if let openHandler { return try await openHandler(token) }
         if let error { throw error }
         return OpenPullRequests(login: user.login,
-                                rows: rows)
+                                rows: rows,
+                                ssoAuthorizationURL: openSSOAuthorizationURL)
     }
 
     func fetchClosedPRs(token: String, username: String, page: Int, perPage: Int) async throws -> PullRequestHistoryPage {

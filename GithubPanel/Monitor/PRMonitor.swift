@@ -18,6 +18,8 @@ final class PRMonitor: ObservableObject {
     @Published var lastError: String?
     @Published var lastHistoryError: String?
     @Published var lastReviewRequestsError: String?
+    /// Set when the last open pull request refresh left some out because the token isn't SSO-authorized.
+    @Published var openPullRequestsSSOAuthorizationURL: URL?
     @Published var lastRefreshAt: Date?
     @Published var lastHistoryRefreshAt: Date?
     @Published var lastReviewRequestsRefreshAt: Date?
@@ -157,6 +159,7 @@ final class PRMonitor: ObservableObject {
         didLoadSessionToken = true
         hasToken = false
         setPRRows([])
+        openPullRequestsSSOAuthorizationURL = nil
         setHistoryRows([])
         setReviewRequests(.empty)
         historyPage = 1
@@ -364,6 +367,7 @@ final class PRMonitor: ObservableObject {
                     cachedLogin = result.login
                     updateNotificationsForRows(result.rows)
                     setPRRows(result.rows)
+                    openPullRequestsSSOAuthorizationURL = result.ssoAuthorizationURL
                     lastRefreshAt = dateProvider.now
                     prefetchDetails(for: result.rows)
                 }
