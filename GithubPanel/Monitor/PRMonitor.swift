@@ -616,6 +616,19 @@ final class PRMonitor: ObservableObject {
         await requireFreshRefresh(for: session)
     }
 
+    func fetchPullRequestChecks(_ reference: PullRequestReference) async throws -> PullRequestChecks {
+        guard let token = loadSessionToken() else { throw MissingTokenError() }
+        return try await api.fetchPullRequestChecks(token: token, reference: reference)
+    }
+
+    /// Reruns failed checks, then refreshes the list, whose check state goes back to pending.
+    func rerunChecks(_ rerun: CheckRerun, in repoFullName: String) async throws {
+        guard let token = loadSessionToken() else { throw MissingTokenError() }
+        let session = credentialSession
+        try await api.rerunChecks(token: token, repoFullName: repoFullName, rerun: rerun)
+        await requireFreshRefresh(for: session)
+    }
+
     /// Submits a review, then refreshes To Review, which drops a pull request once I have reviewed it.
     func submitReview(_ review: NewPullRequestReview, on reference: PullRequestReference) async throws {
         guard let token = loadSessionToken() else { throw MissingTokenError() }

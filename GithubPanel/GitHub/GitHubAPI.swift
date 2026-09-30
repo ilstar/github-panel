@@ -566,6 +566,81 @@ final class GitHubAPI: GitHubAPIClient {
         _ = try await graphQL(Response.self, query: query, variables: ["id": pullRequestID, "head": expectedHeadSHA], token: token)
     }
 
+    /// Only the first 100 checks load, which covers all but the largest matrices.
+    func fetchPullRequestChecks(token: String, reference: PullRequestReference) async throws -> PullRequestChecks {
+        let (owner, name) = try repoParts(reference.repoFullName)
+        let query = """
+        query($owner: String!, $name: String!, $number: Int!) {
+          repository(owner: $owner, name: $name) {
+            id
+            pullRequest(number: $number) {
+              commits(last: 1) {
+                nodes {
+                  commit {
+                    statusCheckRollup {
+                      contexts(first: 100) {
+                        nodes {
+                          __typename
+                          ... on CheckRun {
+                            id name status conclusion startedAt completedAt detailsUrl title
+                            isRequired(pullRequestNumber: $number)
+                            checkSuite {
+                              id
+                              app { name }
+                              workflowRun { databaseId workflow { name } }
+                            }
+                          }
+                          ... on StatusContext {
+                            id context state description targetUrl createdAt
+                            isRequired(pullRequestNumber: $number)
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        """
+        let response = try await graphQL(ChecksResponse.self, query: query,
+                                         variables: ["owner": owner, "name": name, "number": reference.number],
+                                         token: token)
+        guard let repository = response.repository, let pullRequest = repository.pullRequest else {
+            throw GraphQLError(message: "Pull request \(reference.id) was not found.")
+        }
+        let contexts = pullRequest.commits.nodes.last?.commit.statusCheckRollup?.contexts.nodes ?? []
+        return PullRequestChecks(checks: contexts.compactMap { $0.check(repositoryID: repository.id) })
+    }
+
+    func rerunChecks(token: String, repoFullName: String, rerun: CheckRerun) async throws {
+        switch rerun {
+        case let .workflowRun(runID):
+            let (owner, name) = try repoParts(repoFullName)
+            var request = makeRequest(path: "/repos/\(owner)/\(name)/actions/runs/\(runID)/rerun-failed-jobs", token: token)
+            request.httpMethod = "POST"
+            let (data, response) = try await transport.data(for: request)
+            guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+            guard (200...299).contains(http.statusCode) else {
+                if let apiError = try? JSONDecoder().decode(GitHubAPIError.self, from: data) {
+                    throw apiError.withStatus(http.statusCode)
+                }
+                throw GitHubAPIError(message: "Unexpected response from GitHub.", documentationURL: nil, statusCode: http.statusCode)
+            }
+        case let .checkSuite(repositoryID, suiteID):
+            let query = """
+            mutation($repo: ID!, $suite: ID!) {
+              rerequestCheckSuite(input: { repositoryId: $repo, checkSuiteId: $suite }) {
+                checkSuite { id }
+              }
+            }
+            """
+            struct Response: Decodable {}
+            _ = try await graphQL(Response.self, query: query, variables: ["repo": repositoryID, "suite": suiteID], token: token)
+        }
+    }
+
     /// Paths the viewer marked as viewed, whether they may edit the pull request, and whether GitHub offers Update branch.
     /// GitHub reports files changed since they were viewed as `DISMISSED`, not `VIEWED`.
     /// `viewerCanUpdateBranch` is false when the branch is up to date. GitHub shows the button only when the repository
@@ -915,6 +990,97 @@ private struct CommentsResponse: Decodable {
                                createdAt: createdAt,
                                htmlURL: url,
                                isPending: state == "PENDING")
+        }
+    }
+
+    let repository: Repository?
+}
+
+private struct ChecksResponse: Decodable {
+    struct Repository: Decodable {
+        let id: String
+        let pullRequest: PullRequest?
+    }
+    struct PullRequest: Decodable { let commits: Connection<CommitNode> }
+    struct Connection<Node: Decodable>: Decodable { let nodes: [Node] }
+    struct CommitNode: Decodable { let commit: Commit }
+    struct Commit: Decodable { let statusCheckRollup: Rollup? }
+    struct Rollup: Decodable { let contexts: Connection<Context> }
+    struct Context: Decodable {
+        struct CheckSuite: Decodable {
+            struct App: Decodable { let name: String }
+            struct WorkflowRun: Decodable {
+                struct Workflow: Decodable { let name: String }
+                let databaseId: Int
+                let workflow: Workflow?
+            }
+            let id: String
+            let app: App?
+            let workflowRun: WorkflowRun?
+        }
+
+        let typename: String
+        let id: String?
+        let isRequired: Bool?
+        // CheckRun
+        let name: String?
+        let status: String?
+        let conclusion: String?
+        let startedAt: Date?
+        let completedAt: Date?
+        let detailsUrl: URL?
+        let title: String?
+        let checkSuite: CheckSuite?
+        // StatusContext
+        let context: String?
+        let state: String?
+        let description: String?
+        let targetUrl: URL?
+        let createdAt: Date?
+
+        enum CodingKeys: String, CodingKey {
+            case typename = "__typename"
+            case id, isRequired, name, status, conclusion, startedAt, completedAt, detailsUrl, title, checkSuite
+            case context, state, description, targetUrl, createdAt
+        }
+
+        func check(repositoryID: String) -> PullRequestCheck? {
+            switch typename {
+            case "CheckRun":
+                guard let id, let name, let status else { return nil }
+                let outcome = PullRequestCheck.outcome(status: status, conclusion: conclusion)
+                let rerun: CheckRerun? = checkSuite.map { suite in
+                    suite.workflowRun.map { .workflowRun($0.databaseId) }
+                        ?? .checkSuite(repositoryID: repositoryID, suiteID: suite.id)
+                }
+                // GitHub leaves the summary blank for most Actions jobs; name the conclusion when it is not plain failure.
+                let summary = title?.isEmpty == false ? title
+                    : ["CANCELLED", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED"].contains(conclusion ?? "")
+                        ? conclusion?.replacingOccurrences(of: "_", with: " ").capitalized : nil
+                return PullRequestCheck(id: id,
+                                        name: name,
+                                        workflowName: checkSuite?.workflowRun?.workflow?.name ?? checkSuite?.app?.name,
+                                        outcome: outcome,
+                                        summary: summary,
+                                        startedAt: startedAt,
+                                        completedAt: status == "COMPLETED" ? completedAt : nil,
+                                        detailsURL: detailsUrl,
+                                        isRequired: isRequired ?? false,
+                                        rerun: rerun)
+            case "StatusContext":
+                guard let id, let context, let state else { return nil }
+                return PullRequestCheck(id: id,
+                                        name: context,
+                                        workflowName: nil,
+                                        outcome: PullRequestCheck.outcome(statusState: state),
+                                        summary: description?.isEmpty == false ? description : nil,
+                                        startedAt: nil,
+                                        completedAt: nil,
+                                        detailsURL: targetUrl,
+                                        isRequired: isRequired ?? false)
+            default:
+                return nil
+            }
         }
     }
 

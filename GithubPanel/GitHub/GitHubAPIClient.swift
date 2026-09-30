@@ -23,6 +23,10 @@ protocol GitHubAPIClient {
     func submitPendingReview(token: String, reviewID: String, event: PullRequestReviewEvent, body: String) async throws
     func deletePendingReview(token: String, reviewID: String) async throws
     func updatePullRequestBranch(token: String, pullRequestID: String, expectedHeadSHA: String) async throws
+    /// The check runs and commit statuses on the pull request's head commit.
+    func fetchPullRequestChecks(token: String, reference: PullRequestReference) async throws -> PullRequestChecks
+    /// Runs a workflow run's failed jobs, or another app's check suite, again.
+    func rerunChecks(token: String, repoFullName: String, rerun: CheckRerun) async throws
 }
 
 protocol HTTPTransport {

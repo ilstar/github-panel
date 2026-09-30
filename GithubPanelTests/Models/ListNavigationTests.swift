@@ -47,8 +47,10 @@ final class ListNavigationTests: XCTestCase {
 
     func testDetailTabsWrapAround() {
         XCTAssertEqual(PullRequestDetailTab.conversation.next, .files)
-        XCTAssertEqual(PullRequestDetailTab.files.next, .conversation)
-        XCTAssertEqual(PullRequestDetailTab.conversation.previous, .files)
+        XCTAssertEqual(PullRequestDetailTab.files.next, .checks)
+        XCTAssertEqual(PullRequestDetailTab.checks.next, .conversation)
+        XCTAssertEqual(PullRequestDetailTab.conversation.previous, .checks)
+        XCTAssertEqual(PullRequestDetailTab.checks.previous, .files)
         XCTAssertEqual(PullRequestDetailTab.files.previous, .conversation)
     }
 }

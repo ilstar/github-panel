@@ -4,6 +4,7 @@ import AppKit
 enum PullRequestDetailTab: String, CaseIterable, Identifiable {
     case conversation
     case files
+    case checks
 
     var id: String { rawValue }
 }
@@ -87,6 +88,11 @@ struct PullRequestDetailView: View {
                     PullRequestFilesView(viewModel: viewModel,
                                          files: content.files,
                                          filesURL: content.detail.htmlURL.appendingPathComponent("files"))
+                case .checks:
+                    PullRequestChecksView(checks: viewModel.checks,
+                                          rerunsInFlight: viewModel.rerunsInFlight,
+                                          onRerun: { rerun in Task { await viewModel.rerun(rerun) } },
+                                          onRerunFailed: { Task { await viewModel.rerunFailedChecks() } })
                 }
             } else if let error = viewModel.errorMessage {
                 VStack(spacing: 12) {
@@ -111,7 +117,15 @@ struct PullRequestDetailView: View {
 
     private func tabSegments(fileCount: Int) -> [GlassSegmentedControl<PullRequestDetailTab>.Segment] {
         [.init(value: .conversation, title: conversationTitle),
-         .init(value: .files, title: "Files changed \(fileCount)")]
+         .init(value: .files, title: "Files changed \(fileCount)"),
+         .init(value: .checks, title: Self.checksTitle(viewModel.checks))]
+    }
+
+    /// "Checks", "Checks 12", or "Checks 2 failing" so a red X shows before the tab is opened.
+    static func checksTitle(_ checks: PullRequestChecks?) -> String {
+        guard let checks, !checks.checks.isEmpty else { return "Checks" }
+        let failing = checks.count(.failure)
+        return failing > 0 ? "Checks \(failing) failing" : "Checks \(checks.checks.count)"
     }
 
     private var conversationTitle: String {
@@ -159,7 +173,7 @@ struct PullRequestDetailView: View {
     }
 }
 
-/// The row over the pull request: the Conversation / Files changed switcher on the left and the
+/// The row over the pull request: the Conversation / Files changed / Checks switcher on the left and the
 /// Reload, Update branch, Review and Open on GitHub buttons in glass capsules on the right. Edit title sits by the title instead.
 struct PullRequestDetailToolbar: View {
     @Binding var selectedTab: PullRequestDetailTab
@@ -975,7 +989,7 @@ enum DiffColors {
     }
 }
 
-private extension View {
+extension View {
     /// The soft rounded card behind the description and each comment.
     func conversationCard() -> some View {
         let shape = RoundedRectangle(cornerRadius: Theme.cardCornerRadius, style: .continuous)
