@@ -725,6 +725,74 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         XCTAssertTrue(api.updateBranchCalls.isEmpty)
     }
 
+    func testLoadFetchesTheChecks() async {
+        let checks = PullRequestChecks(checks: [check("a", .failure, rerun: .workflowRun(1))])
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+                                                   fetch: { [self] _ in detailContent(title: "Title") },
+                                                   fetchChecks: { _ in checks })
+        XCTAssertNil(viewModel.checks)
+
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.checks, checks)
+    }
+
+    func testRerunFailedChecksRunsEachWorkflowOnceThenReloads() async {
+        var reruns: [(CheckRerun, String)] = []
+        var checksLoads = 0
+        let viewModel = PullRequestDetailViewModel(
+            reference: reference,
+            fetch: { [self] _ in detailContent(title: "Title") },
+            fetchChecks: { [self] _ in
+                checksLoads += 1
+                return PullRequestChecks(checks: [check("a", .failure, rerun: .workflowRun(1)),
+                                                  check("b", .failure, rerun: .workflowRun(1)),
+                                                  check("c", .failure, rerun: .checkSuite(repositoryID: "R", suiteID: "S")),
+                                                  check("d", .success, rerun: .workflowRun(2))])
+            },
+            rerunChecks: { rerun, repo in reruns.append((rerun, repo)) })
+        await viewModel.load()
+
+        await viewModel.rerunFailedChecks()
+
+        XCTAssertEqual(reruns.map(\.0), [.workflowRun(1), .checkSuite(repositoryID: "R", suiteID: "S")])
+        XCTAssertEqual(reruns.map(\.1), ["acme/widgets", "acme/widgets"])
+        XCTAssertEqual(checksLoads, 2)
+        XCTAssertTrue(viewModel.rerunsInFlight.isEmpty)
+        XCTAssertNil(viewModel.errorMessage)
+    }
+
+    func testFailedRerunShowsTheError() async {
+        var checksLoads = 0
+        let viewModel = PullRequestDetailViewModel(
+            reference: reference,
+            fetch: { [self] _ in detailContent(title: "Title") },
+            fetchChecks: { [self] _ in
+                checksLoads += 1
+                return PullRequestChecks(checks: [check("a", .failure, rerun: .workflowRun(1))])
+            },
+            rerunChecks: { _, _ in throw GitHubAPIError(message: "Must have admin rights", documentationURL: nil) })
+        await viewModel.load()
+
+        await viewModel.rerun(.workflowRun(1))
+
+        XCTAssertEqual(viewModel.errorMessage, "GitHub API error: Must have admin rights")
+        XCTAssertEqual(checksLoads, 1)
+        XCTAssertTrue(viewModel.rerunsInFlight.isEmpty)
+    }
+
+    func testMonitorRerunsChecksWithSessionTokenAndRefreshesTheList() async throws {
+        let api = FakeGitHubAPI()
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+
+        try await monitor.rerunChecks(.workflowRun(42), in: "acme/widgets")
+
+        XCTAssertEqual(api.rerunCalls.map(\.token), ["token"])
+        XCTAssertEqual(api.rerunCalls.map(\.repoFullName), ["acme/widgets"])
+        XCTAssertEqual(api.rerunCalls.map(\.rerun), [.workflowRun(42)])
+        XCTAssertEqual(api.fetchOpenPRTokens, ["token"])
+    }
+
     func testMonitorFetchWithoutTokenFails() async {
         let api = FakeGitHubAPI()
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: nil))
@@ -736,6 +804,11 @@ final class PullRequestDetailViewModelTests: XCTestCase {
             XCTAssertTrue(error is MissingTokenError)
         }
         XCTAssertTrue(api.detailCalls.isEmpty)
+    }
+
+    private func check(_ id: String, _ outcome: PullRequestCheck.Outcome, rerun: CheckRerun? = nil) -> PullRequestCheck {
+        PullRequestCheck(id: id, name: id, workflowName: nil, outcome: outcome, summary: nil,
+                         startedAt: nil, completedAt: nil, detailsURL: nil, rerun: rerun)
     }
 
     private func comment(_ id: Int) -> PullRequestComment {

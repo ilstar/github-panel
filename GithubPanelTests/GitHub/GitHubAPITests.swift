@@ -515,6 +515,104 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertEqual(transport.requests[0].value(forHTTPHeaderField: "Authorization"), "Bearer token")
     }
 
+    func testFetchPullRequestChecksDecodesCheckRunsAndStatuses() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: """
+        {"data":{"repository":{"id":"R_repo","pullRequest":{"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"nodes":[
+          {"__typename":"CheckRun","id":"CR_1","name":"Build","status":"COMPLETED","conclusion":"SUCCESS",
+           "startedAt":"2026-04-12T12:00:00Z","completedAt":"2026-04-12T12:02:05Z",
+           "detailsUrl":"https://github.com/acme/widgets/actions/runs/11/job/1","title":null,"isRequired":true,
+           "checkSuite":{"id":"CS_1","app":{"name":"GitHub Actions"},"workflowRun":{"databaseId":11,"workflow":{"name":"CI"}}}},
+          {"__typename":"CheckRun","id":"CR_2","name":"Tests","status":"COMPLETED","conclusion":"TIMED_OUT",
+           "startedAt":"2026-04-12T12:00:00Z","completedAt":"2026-04-12T12:30:00Z",
+           "detailsUrl":"https://github.com/acme/widgets/actions/runs/11/job/2","title":"","isRequired":false,
+           "checkSuite":{"id":"CS_1","app":{"name":"GitHub Actions"},"workflowRun":{"databaseId":11,"workflow":{"name":"CI"}}}},
+          {"__typename":"CheckRun","id":"CR_3","name":"Scan","status":"IN_PROGRESS","conclusion":null,
+           "startedAt":"2026-04-12T12:00:00Z","completedAt":null,"detailsUrl":null,"title":"Scanning",
+           "checkSuite":{"id":"CS_2","app":{"name":"Scanner"},"workflowRun":null}},
+          {"__typename":"StatusContext","id":"SC_1","context":"ci/legacy","state":"ERROR","description":"Boom",
+           "targetUrl":"https://ci.example.com/1","createdAt":"2026-04-12T12:00:00Z","isRequired":false}
+        ]}}}}]}}}}}
+        """)
+
+        let checks = try await GitHubAPI(transport: transport)
+            .fetchPullRequestChecks(token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7))
+
+        XCTAssertEqual(checks.checks.map(\.id), ["CR_2", "SC_1", "CR_3", "CR_1"])
+        let timedOut = checks.checks[0]
+        XCTAssertEqual(timedOut.displayName, "CI / Tests")
+        XCTAssertEqual(timedOut.outcome, .failure)
+        XCTAssertEqual(timedOut.summary, "Timed Out")
+        XCTAssertEqual(timedOut.duration(now: Date()), 1_800)
+        XCTAssertEqual(timedOut.rerun, .workflowRun(11))
+        XCTAssertEqual(timedOut.detailsURL?.absoluteString, "https://github.com/acme/widgets/actions/runs/11/job/2")
+        let status = checks.checks[1]
+        XCTAssertEqual(status.name, "ci/legacy")
+        XCTAssertEqual(status.outcome, .failure)
+        XCTAssertEqual(status.summary, "Boom")
+        XCTAssertNil(status.rerun)
+        let scan = checks.checks[2]
+        XCTAssertEqual(scan.displayName, "Scanner / Scan")
+        XCTAssertEqual(scan.outcome, .pending)
+        XCTAssertEqual(scan.rerun, .checkSuite(repositoryID: "R_repo", suiteID: "CS_2"))
+        XCTAssertTrue(checks.checks[3].isRequired)
+        XCTAssertEqual(checks.checks[3].duration(now: Date()), 125)
+
+        let body = try transport.graphQLBody(at: 0)
+        XCTAssertTrue(body.query.contains("contexts(first: 100)"))
+        XCTAssertTrue(body.query.contains("isRequired(pullRequestNumber: $number)"))
+        XCTAssertEqual(body.variables["owner"] as? String, "acme")
+        XCTAssertEqual(body.variables["name"] as? String, "widgets")
+        XCTAssertEqual(body.variables["number"] as? Int, 7)
+    }
+
+    func testFetchPullRequestChecksWithoutRollupIsEmpty() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: #"{"data":{"repository":{"id":"R","pullRequest":{"commits":{"nodes":[{"commit":{"statusCheckRollup":null}}]}}}}}"#)
+
+        let checks = try await GitHubAPI(transport: transport)
+            .fetchPullRequestChecks(token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7))
+
+        XCTAssertEqual(checks, .empty)
+    }
+
+    func testRerunWorkflowRunPostsRerunFailedJobs() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: "{}", statusCode: 201)
+
+        try await GitHubAPI(transport: transport).rerunChecks(token: "token", repoFullName: "acme/widgets", rerun: .workflowRun(11))
+
+        let request = try XCTUnwrap(transport.requests.first)
+        XCTAssertEqual(request.url?.path, "/repos/acme/widgets/actions/runs/11/rerun-failed-jobs")
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer token")
+    }
+
+    func testRerunWorkflowRunSurfacesRefusals() async {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: #"{"message":"Resource not accessible by integration"}"#, statusCode: 403)
+
+        do {
+            try await GitHubAPI(transport: transport).rerunChecks(token: "token", repoFullName: "acme/widgets", rerun: .workflowRun(11))
+            XCTFail("Expected an error")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, "GitHub API error (403): Resource not accessible by integration")
+        }
+    }
+
+    func testRerunCheckSuiteRerequestsIt() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: #"{"data":{"rerequestCheckSuite":{"checkSuite":{"id":"CS_2"}}}}"#)
+
+        try await GitHubAPI(transport: transport).rerunChecks(token: "token", repoFullName: "acme/widgets",
+                                                              rerun: .checkSuite(repositoryID: "R_repo", suiteID: "CS_2"))
+
+        let body = try transport.graphQLBody(at: 0)
+        XCTAssertTrue(body.query.contains("rerequestCheckSuite(input: { repositoryId: $repo, checkSuiteId: $suite })"))
+        XCTAssertEqual(body.variables["repo"] as? String, "R_repo")
+        XCTAssertEqual(body.variables["suite"] as? String, "CS_2")
+    }
+
     func testUpdatePullRequestBranchSurfacesGraphQLErrors() async {
         let transport = MockHTTPTransport()
         transport.enqueue(json: #"{"errors":[{"message":"expected head sha didn't match current head ref"}]}"#)

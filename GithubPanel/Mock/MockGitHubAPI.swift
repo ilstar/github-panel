@@ -20,6 +20,8 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
     private var updatedBranches: Set<String> = []
     /// Pull request reference IDs, keyed by the node ID of the pending review started on them.
     private var pendingReviews: [String: String] = [:]
+    /// Checks rerun on each pull request, keyed by reference ID. They show as pending.
+    private var rerunTargets: [String: Set<CheckRerun>] = [:]
 
     init(now: Date = Date(), isEmpty: Bool = false) {
         let rows = isEmpty ? [] : Self.makePullRequests().map {
@@ -416,6 +418,59 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
 
     func updatePullRequestBranch(token: String, pullRequestID: String, expectedHeadSHA: String) async throws {
         locked { _ = updatedBranches.insert(pullRequestID) }
+    }
+
+    func fetchPullRequestChecks(token: String, reference: PullRequestReference) async throws -> PullRequestChecks {
+        locked {
+            let status = pullRequests[reference.id]?.status
+                ?? reviewRequests.rows.first { $0.id == reference.id }?.checkState
+                ?? .success
+            return Self.makeChecks(status: status, reference: reference, rerun: rerunTargets[reference.id] ?? [], now: Date())
+        }
+    }
+
+    /// Like GitHub, the rerun checks start over as pending.
+    func rerunChecks(token: String, repoFullName: String, rerun: CheckRerun) async throws {
+        locked {
+            for id in pullRequests.keys where id.hasPrefix("\(repoFullName)#") {
+                rerunTargets[id, default: []].insert(rerun)
+            }
+            for row in reviewRequests.rows where row.repoFullName == repoFullName {
+                rerunTargets[row.id, default: []].insert(rerun)
+            }
+        }
+    }
+
+    private static func makeChecks(status: CheckState, reference: PullRequestReference,
+                                   rerun: Set<CheckRerun>, now: Date) -> PullRequestChecks {
+        guard status != .noChecks else { return .empty }
+        let runURL = "https://github.com/\(reference.repoFullName)/actions/runs"
+        func check(_ id: Int, _ name: String, workflow: String?, _ outcome: PullRequestCheck.Outcome,
+                   minutesAgo: Double, seconds: Double, summary: String? = nil, runID: Int? = nil) -> PullRequestCheck {
+            let rerunTarget = runID.map { CheckRerun.workflowRun($0) }
+            let isRerun = rerunTarget.map { rerun.contains($0) } == true && outcome == .failure
+            let started = now.addingTimeInterval(-minutesAgo * 60)
+            let finished = outcome == .pending || isRerun ? nil : started.addingTimeInterval(seconds)
+            return PullRequestCheck(id: "mock-check-\(id)", name: name, workflowName: workflow,
+                                    outcome: isRerun ? .pending : outcome, summary: isRerun ? nil : summary,
+                                    startedAt: isRerun ? now : started, completedAt: finished,
+                                    detailsURL: URL(string: "\(runURL)/\(runID ?? 1)/job/\(id)"),
+                                    isRequired: id <= 2, rerun: rerunTarget)
+        }
+        let failing = status == .failure || status == .error
+        let pending = status == .pending
+        return PullRequestChecks(checks: [
+            check(1, "Build", workflow: "CI", .success, minutesAgo: 14, seconds: 142, runID: 9_001),
+            check(2, "Unit tests", workflow: "CI", failing ? .failure : pending ? .pending : .success,
+                  minutesAgo: 12, seconds: 318, runID: 9_001),
+            check(3, "UI tests", workflow: "CI", failing ? .failure : .success,
+                  minutesAgo: 12, seconds: 1_805, summary: failing ? "Timed Out" : nil, runID: 9_001),
+            check(4, "SwiftLint", workflow: "Lint", .success, minutesAgo: 14, seconds: 37, runID: 9_002),
+            check(5, "Deploy preview", workflow: "Preview", .skipped, minutesAgo: 14, seconds: 0, runID: 9_003),
+            PullRequestCheck(id: "mock-status-1", name: "codecov/patch", workflowName: nil,
+                             outcome: pending ? .pending : .success, summary: pending ? "Waiting for CI" : "92.4% of diff hit",
+                             startedAt: nil, completedAt: nil, detailsURL: URL(string: "https://codecov.io"))
+        ])
     }
 
     private func updatePullRequest(with nodeID: String, transform: (PullRequestRow) -> PullRequestRow) {

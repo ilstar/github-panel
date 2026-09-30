@@ -24,6 +24,9 @@ final class PullRequestDetailViewModel: ObservableObject {
     typealias SubmitPendingReview = (String, PullRequestReviewEvent, String) async throws -> Void
     /// Discards the pending review with the given node ID.
     typealias DeletePendingReview = (String) async throws -> Void
+    typealias FetchChecks = (PullRequestReference) async throws -> PullRequestChecks
+    /// Runs failed checks again in the given repository.
+    typealias RerunChecks = (CheckRerun, String) async throws -> Void
 
     let reference: PullRequestReference
     /// The last loaded content. Kept when a reload fails so the window does not go blank.
@@ -42,6 +45,10 @@ final class PullRequestDetailViewModel: ObservableObject {
     @Published private(set) var submittedReview: PullRequestReviewEvent?
     /// Whether an Update branch request is in flight.
     @Published private(set) var isUpdatingBranch = false
+    /// The checks on the head commit. Nil until they first load.
+    @Published private(set) var checks: PullRequestChecks?
+    /// Reruns GitHub has not answered yet, so their buttons cannot be pressed twice.
+    @Published private(set) var rerunsInFlight: Set<CheckRerun> = []
 
     private let fetch: Fetch
     private let syncViewed: SetViewed
@@ -55,6 +62,8 @@ final class PullRequestDetailViewModel: ObservableObject {
     private let sendPendingComment: AddPendingComment
     private let sendSubmitPendingReview: SubmitPendingReview
     private let sendDeletePendingReview: DeletePendingReview
+    private let fetchChecks: FetchChecks
+    private let sendRerun: RerunChecks
     /// The pending review started here, until the comments reload with it. Keeps a failed reload from starting a second one.
     private var startedReviewID: String?
     private let cache: PullRequestDetailCache?
@@ -81,6 +90,8 @@ final class PullRequestDetailViewModel: ObservableObject {
          addPendingComment: @escaping AddPendingComment = { _, _ in },
          submitPendingReview: @escaping SubmitPendingReview = { _, _, _ in },
          deletePendingReview: @escaping DeletePendingReview = { _ in },
+         fetchChecks: @escaping FetchChecks = { _ in .empty },
+         rerunChecks: @escaping RerunChecks = { _, _ in },
          cache: PullRequestDetailCache? = nil) {
         self.reference = reference
         self.fetch = fetch
@@ -95,6 +106,8 @@ final class PullRequestDetailViewModel: ObservableObject {
         self.sendPendingComment = addPendingComment
         self.sendSubmitPendingReview = submitPendingReview
         self.sendDeletePendingReview = deletePendingReview
+        self.fetchChecks = fetchChecks
+        self.sendRerun = rerunChecks
         self.cache = cache
         if let cached = cache?.entry(for: reference) {
             apply(cached.content)
@@ -139,6 +152,10 @@ final class PullRequestDetailViewModel: ObservableObject {
                   deletePendingReview: { [monitor] reviewID in
                       try await monitor.deletePendingReview(reviewID: reviewID)
                   },
+                  fetchChecks: { [monitor] reference in try await monitor.fetchPullRequestChecks(reference) },
+                  rerunChecks: { [monitor] rerun, repoFullName in
+                      try await monitor.rerunChecks(rerun, in: repoFullName)
+                  },
                   cache: monitor.detailCache)
     }
 
@@ -146,8 +163,9 @@ final class PullRequestDetailViewModel: ObservableObject {
         guard !isLoading else { return }
         isLoading = true
         defer { isLoading = false }
-        // The comments load alongside the diff, which shows as soon as it arrives.
+        // The comments and checks load alongside the diff, which shows as soon as it arrives.
         async let loadedComments = fetchComments(reference)
+        async let loadedChecks = fetchChecks(reference)
         do {
             apply(try await fetch(reference))
             cacheContent()
@@ -160,6 +178,51 @@ final class PullRequestDetailViewModel: ObservableObject {
             let comments = try await loadedComments
             apply(comments)
             cache?.store(comments, for: reference)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        do {
+            checks = try await loadedChecks
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Runs the failed checks of one workflow run or check suite again, then reloads the checks to show them pending.
+    func rerun(_ rerun: CheckRerun) async {
+        guard !rerunsInFlight.contains(rerun) else { return }
+        rerunsInFlight.insert(rerun)
+        defer { rerunsInFlight.remove(rerun) }
+        do {
+            try await sendRerun(rerun, reference.repoFullName)
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
+        await reloadChecks()
+    }
+
+    /// Runs every failed check again, once per workflow run or check suite.
+    func rerunFailedChecks() async {
+        guard let reruns = checks?.failedReruns.filter({ !rerunsInFlight.contains($0) }), !reruns.isEmpty else { return }
+        rerunsInFlight.formUnion(reruns)
+        defer { rerunsInFlight.subtract(reruns) }
+        var failure: Error?
+        for rerun in reruns {
+            do {
+                try await sendRerun(rerun, reference.repoFullName)
+            } catch {
+                failure = error
+            }
+        }
+        errorMessage = failure?.localizedDescription
+        await reloadChecks()
+    }
+
+    private func reloadChecks() async {
+        do {
+            checks = try await fetchChecks(reference)
         } catch {
             errorMessage = error.localizedDescription
         }
