@@ -657,6 +657,17 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         XCTAssertNil(viewModel.errorMessage)
     }
 
+    func testUpdateBranchSkipsOtherAuthorsEvenWithWritePermission() async {
+        var updateCount = 0
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+            fetch: { [self] _ in detailContent(title: "Title", canUpdateBranch: true, isViewerAuthor: false) },
+            updateBranch: { _, _ in updateCount += 1 })
+        await viewModel.load()
+        XCTAssertEqual(viewModel.content?.detail.offersUpdateBranch, false)
+        await viewModel.updateBranch()
+        XCTAssertEqual(updateCount, 0)
+    }
+
     func testUpdateBranchSkipsWhenGitHubDoesNotOfferIt() async {
         var updateCount = 0
         let viewModel = PullRequestDetailViewModel(reference: reference,
@@ -743,7 +754,7 @@ final class PullRequestDetailViewModelTests: XCTestCase {
     }
 
     private func detailContent(title: String, body: String = "", files: [PullRequestFile] = [], canEdit: Bool = false,
-                               canUpdateBranch: Bool = false) -> PullRequestDetailContent {
+                               canUpdateBranch: Bool = false, isViewerAuthor: Bool = true) -> PullRequestDetailContent {
         PullRequestDetailContent(
             detail: PullRequestDetail(reference: reference,
                                       nodeID: "PR_node",
@@ -761,6 +772,7 @@ final class PullRequestDetailViewModelTests: XCTestCase {
                                       changedFiles: 0,
                                       commits: 1,
                                       canEdit: canEdit,
+                                      isViewerAuthor: isViewerAuthor,
                                       canUpdateBranch: canUpdateBranch),
             files: files
         )

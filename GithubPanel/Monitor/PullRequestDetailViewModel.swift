@@ -319,7 +319,7 @@ final class PullRequestDetailViewModel: ObservableObject {
     /// Merges the base branch into the pull request's branch, then reloads to show the new head commit.
     /// Hides the button right away so it cannot be pressed twice; a failure shows the error and brings it back.
     func updateBranch() async {
-        guard let detail = content?.detail, detail.canUpdateBranch, !isUpdatingBranch else { return }
+        guard let detail = content?.detail, detail.offersUpdateBranch, !isUpdatingBranch else { return }
         isUpdatingBranch = true
         defer { isUpdatingBranch = false }
         do {

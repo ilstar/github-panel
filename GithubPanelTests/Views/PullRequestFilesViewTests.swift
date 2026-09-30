@@ -13,7 +13,8 @@ final class PullRequestFilesViewTests: XCTestCase {
 
     func testStatusLabels() {
         XCTAssertEqual(PullRequestFileHeader.statusLabel(.removed), "DELETED")
-        XCTAssertEqual(PullRequestFileHeader.statusLabel(.changed), "MODIFIED")
+        XCTAssertNil(PullRequestFileHeader.statusLabel(.changed))
+        XCTAssertNil(PullRequestFileHeader.statusLabel(.modified))
     }
 
     func testCopyPathPutsFilenameOnPasteboard() {

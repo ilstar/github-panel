@@ -31,6 +31,7 @@ struct PullRequestFilesView: View {
     @State private var didCollapseViewedFiles = false
     @State private var collapsedDirectories: Set<String> = []
     @State private var searchText = ""
+    @State private var onlyOwnedByViewer = false
     @State private var selectedFile: String?
     @State private var scrollRequest: ScrollRequest?
     /// The diff line with an open new-comment box. One at a time, like on GitHub.
@@ -174,7 +175,7 @@ struct PullRequestFilesView: View {
     // MARK: - File tree
 
     private var treeRows: [FileTreeRow] {
-        FileTree.rows(for: files.map(\.filename).filter { FileTree.matches($0, query: searchText) })
+        FileTree.rows(for: FileTree.filteredFiles(files, query: searchText, onlyOwnedByViewer: onlyOwnedByViewer).map(\.filename))
     }
 
     /// The files that match the search, in the same order as the tree.
@@ -199,6 +200,15 @@ struct PullRequestFilesView: View {
                             searchText = ""
                         }
                     }
+                Menu {
+                    Toggle("Only show files owned by you", isOn: $onlyOwnedByViewer)
+                } label: {
+                    Image(systemName: "line.3.horizontal.decrease.circle")
+                        .foregroundStyle(onlyOwnedByViewer ? Color.accentColor : Color.secondary)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Filter files by ownership")
                 if !searchText.isEmpty {
                     Button {
                         searchText = ""
@@ -262,6 +272,10 @@ struct PullRequestFilesView: View {
                 .truncationMode(.middle)
 
             Spacer(minLength: 4)
+
+            if row.kind == .file, let file = files.first(where: { $0.filename == row.id }) {
+                CodeOwnerShield(file: file)
+            }
 
             if row.kind == .file, viewModel.viewedFiles.contains(row.id) {
                 Image(systemName: "checkmark")
@@ -564,12 +578,16 @@ struct PullRequestFileHeader: View {
             .buttonStyle(.plain)
             .help(isCollapsed ? "Expand file" : "Collapse file")
 
-            Text(Self.statusLabel(file.status))
-                .font(.caption2.weight(.bold))
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(Capsule().fill(Color.secondary.opacity(0.15)))
-                .foregroundStyle(.secondary)
+            if let status = Self.statusLabel(file.status) {
+                Text(status)
+                    .font(.caption2.weight(.bold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Color.secondary.opacity(0.15)))
+                    .foregroundStyle(.secondary)
+            }
+
+            CodeOwnerShield(file: file)
 
             Text(Self.displayName(file))
                 .font(.system(.callout, design: .monospaced).weight(.semibold))
@@ -626,11 +644,11 @@ struct PullRequestFileHeader: View {
         return file.filename
     }
 
-    static func statusLabel(_ status: PullRequestFile.Status) -> String {
+    static func statusLabel(_ status: PullRequestFile.Status) -> String? {
         switch status {
         case .added: return "ADDED"
         case .removed: return "DELETED"
-        case .modified, .changed: return "MODIFIED"
+        case .modified, .changed: return nil
         case .renamed: return "RENAMED"
         case .copied: return "COPIED"
         case .unchanged: return "UNCHANGED"
@@ -847,3 +865,16 @@ private struct DiffLineHalf: View {
     }
 }
 
+
+struct CodeOwnerShield: View {
+    let file: PullRequestFile
+
+    var body: some View {
+        if !file.codeOwners.isEmpty {
+            Image(systemName: "shield.fill")
+                .foregroundStyle(file.isOwnedByViewer ? Color.accentColor : Color.secondary)
+                .help((file.isOwnedByViewer ? "Owned by you · " : "Code owners: ") + file.codeOwners.joined(separator: ", "))
+                .accessibilityLabel(file.isOwnedByViewer ? "Owned by you" : "Has code owners")
+        }
+    }
+}

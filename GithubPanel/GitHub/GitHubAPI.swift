@@ -270,6 +270,8 @@ final class GitHubAPI: GitHubAPIClient {
         let files = try await fileList
         let viewer = await viewerState
         let viewed = viewer?.viewedFiles ?? []
+        let ownership = try? await fetchCodeOwners(token: token, owner: parts[0], name: parts[1], baseRef: pull.base.ref,
+                                                   paths: files.map { $0.filename })
         var detail = pull.detail(reference: reference)
         detail.canEdit = viewer?.canEdit ?? false
         detail.isViewerAuthor = viewer?.isAuthor ?? false
@@ -278,8 +280,54 @@ final class GitHubAPI: GitHubAPIClient {
                                         files: files.map { file in
                                             var file = file.file
                                             file.isViewed = viewed.contains(file.filename)
+                                            file.codeOwners = ownership?.owners.owners(for: file.filename) ?? []
+                                            file.isOwnedByViewer = CodeOwners.isOwnedByViewer(file.codeOwners,
+                                                login: ownership?.login ?? "", email: ownership?.email, teams: ownership?.teams ?? [])
                                             return file
                                         })
+    }
+
+    /// Read all supported locations in one request, using the base branch and GitHub's location precedence.
+    private func fetchCodeOwners(token: String, owner: String, name: String, baseRef: String,
+                                 paths: [String]) async throws -> (owners: CodeOwners, login: String, email: String?, teams: Set<String>) {
+        let query = """
+        query($owner: String!, $name: String!, $github: String!, $root: String!, $docs: String!) {
+          viewer { login email }
+          repository(owner: $owner, name: $name) {
+            github: object(expression: $github) { ... on Blob { text } }
+            root: object(expression: $root) { ... on Blob { text } }
+            docs: object(expression: $docs) { ... on Blob { text } }
+          }
+        }
+        """
+        struct Response: Decodable {
+            struct Viewer: Decodable { let login: String; let email: String? }
+            struct Blob: Decodable { let text: String? }
+            struct Repository: Decodable { let github: Blob?; let root: Blob?; let docs: Blob? }
+            let viewer: Viewer
+            let repository: Repository?
+        }
+        let response = try await graphQL(Response.self, query: query,
+            variables: ["owner": owner, "name": name, "github": baseRef + ":.github/CODEOWNERS",
+                        "root": baseRef + ":CODEOWNERS", "docs": baseRef + ":docs/CODEOWNERS"], token: token)
+        let rules = CodeOwners(response.repository?.github?.text ?? response.repository?.root?.text ?? response.repository?.docs?.text ?? "")
+        let teamOwners = Set(paths.flatMap { rules.owners(for: $0) }.filter { $0.hasPrefix("@") && $0.contains("/") })
+        let teams = await withTaskGroup(of: String?.self) { group in
+            for team in teamOwners {
+                group.addTask {
+                    let parts = team.dropFirst().split(separator: "/").map(String.init)
+                    guard parts.count == 2 else { return nil }
+                    struct Membership: Decodable { let state: String }
+                    let request = self.makeRequest(path: "/orgs/\(parts[0])/teams/\(parts[1])/memberships/\(response.viewer.login)", token: token)
+                    let membership = try? await self.decode(Membership.self, request: request)
+                    return membership?.state == "active" ? team.lowercased() : nil
+                }
+            }
+            var result: Set<String> = []
+            for await team in group { if let team { result.insert(team) } }
+            return result
+        }
+        return (rules, response.viewer.login, response.viewer.email, teams)
     }
 
     func setFileViewed(token: String, pullRequestID: String, path: String, viewed: Bool) async throws {

@@ -41,6 +41,10 @@ enum FileTree {
         return trimmed.isEmpty || path.localizedCaseInsensitiveContains(trimmed)
     }
 
+    static func filteredFiles(_ files: [PullRequestFile], query: String, onlyOwnedByViewer: Bool) -> [PullRequestFile] {
+        files.filter { matches($0.filename, query: query) && (!onlyOwnedByViewer || $0.isOwnedByViewer) }
+    }
+
     /// Leaves out the rows inside collapsed directories.
     static func visibleRows(_ rows: [FileTreeRow], collapsed: Set<String>) -> [FileTreeRow] {
         guard !collapsed.isEmpty else { return rows }

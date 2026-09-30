@@ -394,7 +394,12 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
                         additions: 0,
                         deletions: 0,
                         patch: nil)
-    ]
+    ].enumerated().map { index, file in
+        var file = file
+        if index < 3 { file.codeOwners = [index == 0 ? "@mock-user" : "@mock/design"] }
+        file.isOwnedByViewer = index == 0
+        return file
+    }
 
     func editPullRequest(token: String, reference: PullRequestReference, title: String?, body: String?) async throws {
         locked {
