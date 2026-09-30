@@ -320,6 +320,10 @@ struct ContentView: View {
                           hint: "Common fixes: ensure your token has `repo` (private) or `public_repo` scopes, and authorize SSO for org repos.")
             }
 
+            if let url = monitor.openPullRequestsSSOAuthorizationURL {
+                ssoNote(url, hiding: "pull requests")
+            }
+
             if monitor.hasToken {
                 openPullRequestsList
             }
@@ -400,6 +404,9 @@ struct ContentView: View {
                         .controlSize(.large)
                     }
                 case .empty:
+                    if let url = monitor.reviewRequests.ssoAuthorizationURL {
+                        ssoNote(url, hiding: "review requests")
+                    }
                     EmptyStateView(systemImage: "checkmark",
                                    title: "You’re All Caught Up",
                                    message: "Pull requests waiting for a review from you or your teams will appear here.",
@@ -408,6 +415,9 @@ struct ContentView: View {
                     // A failed refresh keeps the last list, so say why it may be out of date.
                     if let error = monitor.lastReviewRequestsError {
                         errorNote(error, hint: nil)
+                    }
+                    if let url = monitor.reviewRequests.ssoAuthorizationURL {
+                        ssoNote(url, hiding: "review requests")
                     }
                     reviewRequestsList
                 }
@@ -572,6 +582,26 @@ struct ContentView: View {
         .background(
             RoundedRectangle(cornerRadius: Theme.rowCornerRadius, style: .continuous)
                 .fill(Theme.red.opacity(0.1))
+        )
+    }
+
+    /// Says some rows are missing because an organization's SAML SSO hasn't authorized the token.
+    private func ssoNote(_ url: URL, hiding items: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "lock.fill")
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Some \(items) are hidden because an organization requires SAML SSO.")
+                Link("Authorize your token for SSO", destination: url)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .font(.caption)
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.rowCornerRadius, style: .continuous)
+                .fill(Color.orange.opacity(0.1))
         )
     }
 

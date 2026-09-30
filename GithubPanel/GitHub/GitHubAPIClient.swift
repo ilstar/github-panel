@@ -38,4 +38,6 @@ struct GitHubUser: Decodable {
 struct OpenPullRequests {
     let login: String
     let rows: [PullRequestRow]
+    /// Set when some pull requests were left out because the token isn't SSO-authorized for their organization.
+    var ssoAuthorizationURL: URL? = nil
 }

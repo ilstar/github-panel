@@ -66,12 +66,16 @@ final class GitHubAPI: GitHubAPIClient {
         var login = ""
         var nodes: [PullRequestNode] = []
         var cursor: String?
+        var ssoAuthorizationURL: URL?
         for _ in 0..<Self.maxOpenPullRequestPages {
             let variables: [String: Any] = cursor.map { ["after": $0] } ?? [:]
-            let response = try await graphQL(OpenPullRequestsResponse.self,
-                                             query: query, variables: variables, token: token)
+            let result = try await graphQLKeepingSSOBlockedData(OpenPullRequestsResponse.self,
+                                                                query: query, variables: variables, token: token)
+            let response = result.value
+            ssoAuthorizationURL = ssoAuthorizationURL ?? result.ssoAuthorizationURL
             login = response.viewer.login
-            nodes += response.viewer.pullRequests.nodes
+            // Pull requests in an organization the token isn't SSO-authorized for come back as null.
+            nodes += response.viewer.pullRequests.nodes.compactMap { $0 }
             guard let pageInfo = response.viewer.pullRequests.pageInfo,
                   pageInfo.hasNextPage,
                   let next = pageInfo.endCursor else { break }
@@ -100,7 +104,7 @@ final class GitHubAPI: GitHubAPIClient {
                            reviewStatus: pr.reviewStatus,
                            mergeMethods: pr.repository.mergeMethods)
         }
-        return OpenPullRequests(login: login, rows: rows)
+        return OpenPullRequests(login: login, rows: rows, ssoAuthorizationURL: ssoAuthorizationURL)
     }
 
     func fetchClosedPRs(token: String, username: String, page: Int, perPage: Int) async throws -> PullRequestHistoryPage {
@@ -167,12 +171,14 @@ final class GitHubAPI: GitHubAPIClient {
           }
         }
         """
-        let response = try await graphQL(ReviewRequestsResponse.self,
-                                         query: query, variables: [:], token: token)
+        let result = try await graphQLKeepingSSOBlockedData(ReviewRequestsResponse.self,
+                                                            query: query, variables: [:], token: token)
+        let response = result.value
         let login = response.viewer?.login
         // A direct request's wait starts when I was asked; a team request's when a team was.
         return ReviewRequests(direct: response.direct.rows { $0.typename == "User" && (login == nil || $0.login == login) },
-                              all: response.all.rows { $0.typename == "Team" })
+                              all: response.all.rows { $0.typename == "Team" },
+                              ssoAuthorizationURL: result.ssoAuthorizationURL)
     }
 
     func enqueuePullRequest(token: String, pullRequestID: String) async throws {
@@ -633,6 +639,25 @@ final class GitHubAPI: GitHubAPIClient {
                                        query: String,
                                        variables: [String: Any],
                                        token: String) async throws -> T {
+        try await graphQLResult(type, query: query, variables: variables, token: token,
+                                keepingSSOBlockedData: false).value
+    }
+
+    /// Like `graphQL`, but when the only errors are SAML SSO blocks, returns the data GitHub could
+    /// still send (blocked nodes come back as null) along with where to authorize the token.
+    private func graphQLKeepingSSOBlockedData<T: Decodable>(_ type: T.Type,
+                                                            query: String,
+                                                            variables: [String: Any],
+                                                            token: String) async throws -> GraphQLResult<T> {
+        try await graphQLResult(type, query: query, variables: variables, token: token,
+                                keepingSSOBlockedData: true)
+    }
+
+    private func graphQLResult<T: Decodable>(_ type: T.Type,
+                                             query: String,
+                                             variables: [String: Any],
+                                             token: String,
+                                             keepingSSOBlockedData: Bool) async throws -> GraphQLResult<T> {
         var request = URLRequest(url: URL(string: "https://api.github.com/graphql")!)
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -659,13 +684,18 @@ final class GitHubAPI: GitHubAPIClient {
             let raw = String(data: data, encoding: .utf8) ?? "<non-utf8 response>"
             throw GraphQLError(message: "GraphQL decode failed: \(raw)")
         }
-        if let errors = envelope.errors, !errors.isEmpty {
+        let errors = envelope.errors ?? []
+        if keepingSSOBlockedData, !errors.isEmpty, errors.allSatisfy(\.isSAMLSSOBlock), let value = envelope.data {
+            let url = SAMLSSO.authorizationURL(fromHeader: http.value(forHTTPHeaderField: "X-GitHub-SSO"))
+            return GraphQLResult(value: value, ssoAuthorizationURL: url)
+        }
+        if !errors.isEmpty {
             throw GraphQLError(message: errors.map(\.message).joined(separator: " "))
         }
         guard let value = envelope.data else {
             throw GraphQLError(message: "Empty response from GitHub.")
         }
-        return value
+        return GraphQLResult(value: value, ssoAuthorizationURL: nil)
     }
 }
 
@@ -901,7 +931,7 @@ private struct OpenPullRequestsResponse: Decodable {
 
     struct Connection: Decodable {
         let pageInfo: PageInfo?
-        let nodes: [PullRequestNode]
+        let nodes: [PullRequestNode?]
     }
 
     struct PageInfo: Decodable {
@@ -984,11 +1014,12 @@ private struct ReviewRequestsResponse: Decodable {
     let all: Search
 
     struct Search: Decodable {
-        let nodes: [Node]
+        /// A pull request in an organization the token isn't SSO-authorized for comes back as null.
+        let nodes: [Node?]
 
         /// `isMyRequest` picks the review-requested events that count as asking me.
         func rows(isMyRequest: (Reviewer) -> Bool) -> [ReviewRequestRow] {
-            nodes.map { pr in
+            nodes.compactMap { $0 }.map { pr in
                 let requests = (pr.timelineItems?.nodes ?? []).filter { event in
                     event.requestedReviewer.map(isMyRequest) ?? false
                 }
@@ -1065,8 +1096,37 @@ private struct GraphQLResponse<T: Decodable>: Decodable {
     let errors: [GraphQLErrorPayload]?
 }
 
+private struct GraphQLResult<T> {
+    let value: T
+    /// Set when GitHub left out data because the token isn't SSO-authorized for an organization.
+    let ssoAuthorizationURL: URL?
+}
+
 private struct GraphQLErrorPayload: Decodable {
     let message: String
+    let type: String?
+
+    /// GitHub reports data hidden by an organization's SAML enforcement as a FORBIDDEN error.
+    var isSAMLSSOBlock: Bool {
+        type == "FORBIDDEN" && message.localizedCaseInsensitiveContains("SAML")
+    }
+}
+
+enum SAMLSSO {
+    /// Where a classic token's SSO access is granted, per organization, under "Configure SSO".
+    static let tokenSettingsURL = URL(string: "https://github.com/settings/tokens")!
+
+    /// GitHub's `X-GitHub-SSO` header names the authorize page as `required; url=<url>` when it
+    /// knows one; partial results only list organization IDs, so fall back to the token settings.
+    static func authorizationURL(fromHeader header: String?) -> URL {
+        let url = header?
+            .split(separator: ";")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .first { $0.hasPrefix("url=") }
+            .flatMap { URL(string: String($0.dropFirst("url=".count))) }
+        guard let url, url.scheme == "https", url.host == "github.com" else { return tokenSettingsURL }
+        return url
+    }
 }
 
 struct GraphQLError: LocalizedError {
