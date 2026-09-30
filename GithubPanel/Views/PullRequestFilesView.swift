@@ -769,9 +769,10 @@ struct SplitDiffRowView: View {
 
 /// Line numbers, marker, and text for one diff line.
 private struct DiffLineHalf: View {
-    static let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
-    /// Every character in the monospaced font is this wide.
-    static let characterWidth = ("0" as NSString).size(withAttributes: [.font: font]).width
+    @Environment(\.pullRequestTextSize) private var textSize
+    private var font: NSFont { PullRequestTextSize.codeFont(setting: textSize) }
+    /// Keep line numbers and comment targets aligned with the chosen font.
+    private var characterWidth: CGFloat { PullRequestTextSize.codeCharacterWidth(setting: textSize) }
 
     let line: DiffDisplayLine
     /// The line number columns; nil leaves a column blank.
@@ -788,7 +789,7 @@ private struct DiffLineHalf: View {
     @State private var isSelectable = false
 
     private var gutterWidth: CGFloat {
-        CGFloat(numbers.count * DiffGutterText.columnWidth) * Self.characterWidth
+        CGFloat(numbers.count * DiffGutterText.columnWidth) * characterWidth
     }
 
     var body: some View {
@@ -801,7 +802,7 @@ private struct DiffLineHalf: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.vertical, 1)
-        .font(Font(Self.font))
+        .font(Font(font))
         .background(alignment: .leading) {
             DiffColors.gutterBackground(for: line.kind)
                 .frame(width: gutterWidth)
@@ -818,7 +819,7 @@ private struct DiffLineHalf: View {
                         .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(Color.accentColor))
                 }
                 .buttonStyle(.plain)
-                .frame(width: CGFloat(DiffGutterText.markerWidth) * Self.characterWidth)
+                .frame(width: CGFloat(DiffGutterText.markerWidth) * characterWidth)
                 .padding(.leading, gutterWidth)
                 .help("Add a comment on this line")
             }

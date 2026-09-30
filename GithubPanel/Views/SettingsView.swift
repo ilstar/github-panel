@@ -7,6 +7,8 @@ struct SettingsView: View {
     @State private var isSaving = false
     @AppStorage(AppAppearance.defaultsKey) private var appearance: AppAppearance = .system
 
+    @AppStorage(PullRequestTextSize.defaultsKey) private var prTextSize = PullRequestTextSize.defaultSize
+
     var body: some View {
         Form {
             tokenSection
@@ -67,6 +69,17 @@ struct SettingsView: View {
             .onChange(of: appearance) { newValue in
                 newValue.apply()
             }
+            Stepper("PR text size: \(PullRequestTextSize.clamped(prTextSize)) pt", value: Binding(
+                get: { PullRequestTextSize.clamped(prTextSize) },
+                set: { prTextSize = $0 }
+            ), in: PullRequestTextSize.range)
+            Text("Adjusts text in PR descriptions, comments, and file diffs.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Button("Reset PR Text Size") {
+                prTextSize = PullRequestTextSize.defaultSize
+            }
+            .disabled(prTextSize == PullRequestTextSize.defaultSize)
         } header: {
             Text("Appearance")
         }

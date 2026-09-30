@@ -29,6 +29,11 @@ enum Theme {
     /// A soft fill for cards such as the description, comments and the token form.
     static let cardFill = Color(light: NSColor(white: 1, alpha: 0.72),
                                 dark: NSColor(white: 1, alpha: 0.05))
+    /// Opaque reading surfaces with a visible edge against the PR pane.
+    static let conversationCardFill = Color(light: .white,
+                                             dark: NSColor(white: 0.17, alpha: 1))
+    static let conversationCardBorder = Color(light: NSColor(white: 0.74, alpha: 1),
+                                               dark: NSColor(white: 0.35, alpha: 1))
     static let hairline = Color.primary.opacity(0.08)
     /// The Merge and Add to queue buttons: a flat green that keeps white text readable.
     static let mergeFill = Color(red: 0.122, green: 0.498, blue: 0.239)
