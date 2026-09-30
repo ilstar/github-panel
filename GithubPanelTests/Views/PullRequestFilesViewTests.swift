@@ -11,10 +11,10 @@ final class PullRequestFilesViewTests: XCTestCase {
                        "Same.swift")
     }
 
-    func testStatusLabels() {
-        XCTAssertEqual(PullRequestFileHeader.statusLabel(.removed), "DELETED")
-        XCTAssertNil(PullRequestFileHeader.statusLabel(.changed))
-        XCTAssertNil(PullRequestFileHeader.statusLabel(.modified))
+    func testShieldIdentifiesTeamAndIndividualOwners() {
+        XCTAssertEqual(CodeOwnerShield.ownerLabel("@acme/platform"), "Team @acme/platform")
+        XCTAssertEqual(CodeOwnerShield.ownerLabel("@alice"), "@alice")
+        XCTAssertEqual(CodeOwnerShield.ownerLabel("alice@example.com"), "alice@example.com")
     }
 
     func testCopyPathPutsFilenameOnPasteboard() {

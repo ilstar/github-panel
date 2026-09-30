@@ -578,15 +578,6 @@ struct PullRequestFileHeader: View {
             .buttonStyle(.plain)
             .help(isCollapsed ? "Expand file" : "Collapse file")
 
-            if let status = Self.statusLabel(file.status) {
-                Text(status)
-                    .font(.caption2.weight(.bold))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Capsule().fill(Color.secondary.opacity(0.15)))
-                    .foregroundStyle(.secondary)
-            }
-
             CodeOwnerShield(file: file)
 
             Text(Self.displayName(file))
@@ -642,17 +633,6 @@ struct PullRequestFileHeader: View {
             return "\(previous) → \(file.filename)"
         }
         return file.filename
-    }
-
-    static func statusLabel(_ status: PullRequestFile.Status) -> String? {
-        switch status {
-        case .added: return "ADDED"
-        case .removed: return "DELETED"
-        case .modified, .changed: return nil
-        case .renamed: return "RENAMED"
-        case .copied: return "COPIED"
-        case .unchanged: return "UNCHANGED"
-        }
     }
 
     static func copyPath(_ path: String, to pasteboard: NSPasteboard = .general) {
@@ -868,13 +848,34 @@ private struct DiffLineHalf: View {
 
 struct CodeOwnerShield: View {
     let file: PullRequestFile
+    @State private var isHovering = false
 
     var body: some View {
         if !file.codeOwners.isEmpty {
             Image(systemName: "shield.fill")
                 .foregroundStyle(file.isOwnedByViewer ? Color.accentColor : Color.secondary)
-                .help((file.isOwnedByViewer ? "Owned by you · " : "Code owners: ") + file.codeOwners.joined(separator: ", "))
-                .accessibilityLabel(file.isOwnedByViewer ? "Owned by you" : "Has code owners")
+                .contentShape(Rectangle())
+                .onHover { isHovering = $0 }
+                .popover(isPresented: $isHovering, arrowEdge: .bottom) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Code owners")
+                            .font(.headline)
+                        ForEach(Array(file.codeOwners.enumerated()), id: \.offset) { _, owner in
+                            Label(Self.ownerLabel(owner), systemImage: owner.contains("/") ? "person.2" : "person")
+                        }
+                        if file.isOwnedByViewer {
+                            Text("You own this file")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(12)
+                }
+                .accessibilityLabel("Code owners: " + file.codeOwners.map(Self.ownerLabel).joined(separator: ", "))
         }
+    }
+
+    static func ownerLabel(_ owner: String) -> String {
+        owner.hasPrefix("@") && owner.contains("/") ? "Team " + owner : owner
     }
 }
