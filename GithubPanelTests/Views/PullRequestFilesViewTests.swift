@@ -52,7 +52,8 @@ final class PullRequestFilesViewTests: XCTestCase {
     func testDiffListMonitorsItsOwnScrolling() async throws {
         let reference = PullRequestReference(repoFullName: "acme/widgets", number: 7)
         let files = [PullRequestFile(filename: "Sources/A.swift", previousFilename: nil, status: .modified,
-                                     additions: 1, deletions: 0, patch: "@@ -1 +1,2 @@\n a\n+b")]
+                                     additions: 1, deletions: 0, patch: "@@ -1 +1,2 @@\n a\n+b",
+                                     codeOwners: ["@acme/platform"], isOwnedByViewer: true)]
         let content = PullRequestDetailContent(detail: detailContent(for: reference).detail, files: files)
         let viewModel = PullRequestDetailViewModel(reference: reference) { _ in content }
         await viewModel.load()

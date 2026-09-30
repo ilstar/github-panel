@@ -273,10 +273,6 @@ struct PullRequestFilesView: View {
 
             Spacer(minLength: 4)
 
-            if row.kind == .file, let file = files.first(where: { $0.filename == row.id }) {
-                CodeOwnerShield(file: file)
-            }
-
             if row.kind == .file, viewModel.viewedFiles.contains(row.id) {
                 Image(systemName: "checkmark")
                     .font(.caption.weight(.semibold))
