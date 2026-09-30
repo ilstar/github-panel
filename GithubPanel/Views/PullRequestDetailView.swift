@@ -9,6 +9,7 @@ enum PullRequestDetailTab: String, CaseIterable, Identifiable {
 }
 
 struct PullRequestDetailView: View {
+    @AppStorage(PullRequestTextSize.defaultsKey) private var prTextSize = PullRequestTextSize.defaultSize
     @StateObject private var viewModel: PullRequestDetailViewModel
     @State private var selectedTab: PullRequestDetailTab = .conversation
     @State private var isEditingTitle = false
@@ -99,6 +100,8 @@ struct PullRequestDetailView: View {
             }
         }
         .frame(minWidth: 420, minHeight: 400)
+        .prFont(.body)
+        .environment(\.pullRequestTextSize, prTextSize)
         .navigationTitle(navigationTitle)
         .focusedSceneValue(\.pullRequestDetail, actions)
         .task {
@@ -302,7 +305,7 @@ struct PullRequestDetailHeader: View {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     titleText
                     Text("#\(String(detail.reference.number))")
-                        .font(.system(size: 26, weight: .regular))
+                        .prFont(size: 26, weight: .regular)
                         .foregroundStyle(.tertiary)
                     if Self.showsEditTitleButton(for: detail) {
                         editTitleButton
@@ -315,13 +318,13 @@ struct PullRequestDetailHeader: View {
                 PullRequestStateBadge(state: detail.state)
 
                 summary
-                    .font(.callout)
+                    .prFont(.callout)
                     .foregroundStyle(.secondary)
                     .padding(.leading, 2)
 
                 if copiedBranchNotice {
                     Text("Copied")
-                        .font(.caption.weight(.medium))
+                        .prFont(.caption1, weight: .medium)
                         .foregroundStyle(.secondary)
                         .transition(.opacity)
                 }
@@ -333,7 +336,8 @@ struct PullRequestDetailHeader: View {
                 Text("−\(detail.deletions)")
                     .foregroundStyle(DiffColors.deletionText)
             }
-            .font(.callout.monospacedDigit())
+            .prFont(.callout)
+            .monospacedDigit()
         }
     }
 
@@ -362,7 +366,7 @@ struct PullRequestDetailHeader: View {
     @ViewBuilder
     private var titleText: some View {
         let title = Text(detail.title)
-            .font(.system(size: 26, weight: .bold))
+            .prFont(size: 26, weight: .bold)
             .tracking(-0.5)
         if detail.canEdit {
             title
@@ -416,7 +420,7 @@ struct BranchTag: View {
             onCopy()
         } label: {
             Text(name)
-                .font(.system(.callout, design: .monospaced))
+                .prFont(.callout, design: .monospaced)
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .foregroundStyle(Theme.branch)
@@ -458,7 +462,7 @@ struct PullRequestTitleEditor: View {
             HStack(spacing: 8) {
                 TextField("Title", text: $title)
                     .textFieldStyle(.roundedBorder)
-                    .font(.title3)
+                    .prFont(.title3)
                     .focused($isFocused)
                     .disabled(isSaving)
                     .onSubmit(save)
@@ -472,7 +476,7 @@ struct PullRequestTitleEditor: View {
             }
             if let errorMessage {
                 Text(errorMessage)
-                    .font(.caption)
+                    .prFont(.caption1)
                     .foregroundStyle(.red)
                     .textSelection(.enabled)
             }
@@ -558,7 +562,7 @@ struct PullRequestBodyEditor: View {
                 switch tab {
                 case .write:
                     TextEditor(text: $text)
-                        .font(.body)
+                        .prFont(.body)
                         .scrollContentBackground(.hidden)
                         .focused($isFocused)
                         .frame(minHeight: 160, maxHeight: 480)
@@ -591,7 +595,7 @@ struct PullRequestBodyEditor: View {
             HStack(spacing: 8) {
                 if let errorMessage {
                     Text(errorMessage)
-                        .font(.caption)
+                        .prFont(.caption1)
                         .foregroundStyle(.red)
                         .textSelection(.enabled)
                         .lineLimit(3)
@@ -652,7 +656,7 @@ struct PullRequestStateBadge: View {
 
     var body: some View {
         Label(title, systemImage: iconName)
-            .font(.caption.weight(.semibold))
+            .prFont(.caption1, weight: .semibold)
             .padding(.leading, 8)
             .padding(.trailing, 10)
             .frame(height: 24)
@@ -709,9 +713,9 @@ struct PullRequestConversationView: View {
                     HStack(spacing: 8) {
                         AvatarView(login: detail.authorLogin)
                         Text(detail.authorLogin)
-                            .font(.callout.weight(.semibold))
+                            .prFont(.callout, weight: .semibold)
                         Text("opened this pull request \(detail.createdAt.formatted(.relative(presentation: .named)))")
-                            .font(.callout)
+                            .prFont(.callout)
                             .foregroundStyle(.secondary)
                         Spacer(minLength: 8)
                         if detail.canEdit && !isEditingBody {
@@ -796,6 +800,7 @@ struct MarkdownView: View {
                 blockView(block)
             }
         }
+        .prFont(.body)
         .textSelection(.enabled)
     }
 
@@ -805,7 +810,7 @@ struct MarkdownView: View {
         case let .heading(level, text):
             VStack(alignment: .leading, spacing: 4) {
                 Text(Self.inline(text))
-                    .font(level == 1 ? .title2.weight(.semibold) : level == 2 ? .title3.weight(.semibold) : .headline)
+                    .prFont(level == 1 ? .title2 : level == 2 ? .title3 : .headline, weight: .semibold)
                 if level <= 2 {
                     Divider()
                 }
@@ -841,7 +846,7 @@ struct MarkdownView: View {
         case let .code(_, text):
             ScrollView(.horizontal) {
                 Text(text)
-                    .font(.system(size: 12, design: .monospaced))
+                    .prFont(size: 12, design: .monospaced)
                     .padding(12)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -873,7 +878,7 @@ private struct MarkdownTableView: View {
             GridRow {
                 ForEach(header.indices, id: \.self) { column in
                     cell(header[column], column: column)
-                        .font(.body.weight(.semibold))
+                        .prFont(.body, weight: .semibold)
                         .background(Color.secondary.opacity(0.08))
                 }
             }
@@ -974,7 +979,7 @@ private extension View {
     /// The soft rounded card behind the description and each comment.
     func conversationCard() -> some View {
         let shape = RoundedRectangle(cornerRadius: Theme.cardCornerRadius, style: .continuous)
-        return background(shape.fill(Theme.cardFill))
-            .overlay(shape.strokeBorder(Theme.hairline, lineWidth: 0.5))
+        return background(shape.fill(Theme.conversationCardFill))
+            .overlay(shape.strokeBorder(Theme.conversationCardBorder, lineWidth: 1))
     }
 }

@@ -10,13 +10,13 @@ struct PullRequestCommentView: View {
             HStack(spacing: 8) {
                 AvatarView(login: comment.authorLogin)
                 Text(comment.authorLogin)
-                    .font(.callout.weight(.semibold))
+                    .prFont(.callout, weight: .semibold)
                 if comment.isPending {
                     ThreadBadge(text: "Pending")
                         .help("A draft in your pending review. Only you can see it until you submit the review.")
                 }
                 Text("commented \(comment.createdAt.formatted(.relative(presentation: .named)))")
-                    .font(.callout)
+                    .prFont(.callout)
                     .foregroundStyle(.secondary)
                     .help(comment.createdAt.formatted(date: .abbreviated, time: .shortened))
                 Spacer(minLength: 8)
@@ -71,6 +71,7 @@ struct CommentComposer: View {
             case .floating: floatingBody
             }
         }
+        .prFont(.body)
         .onAppear {
             // An inline composer opens from a click on a line, so start typing right away.
             if onCancel != nil { isFocused = true }
@@ -90,7 +91,7 @@ struct CommentComposer: View {
             HStack(alignment: .bottom, spacing: 10) {
                 ZStack(alignment: .topLeading) {
                     TextEditor(text: $text)
-                        .font(.body)
+                        .prFont(.body)
                         .scrollContentBackground(.hidden)
                         .focused($isFocused)
                         .frame(minHeight: 22, maxHeight: 160)
@@ -123,7 +124,7 @@ struct CommentComposer: View {
 
     private func errorText(_ message: String) -> some View {
         Text(message)
-            .font(.caption)
+            .prFont(.caption1)
             .foregroundStyle(.red)
             .textSelection(.enabled)
             .lineLimit(3)
@@ -133,7 +134,7 @@ struct CommentComposer: View {
         VStack(alignment: .leading, spacing: 8) {
             ZStack(alignment: .topLeading) {
                 TextEditor(text: $text)
-                    .font(.body)
+                    .prFont(.body)
                     .scrollContentBackground(.hidden)
                     .focused($isFocused)
                     .frame(minHeight: 64, maxHeight: 200)
@@ -282,7 +283,7 @@ struct ReviewThreadView: View {
                             }
                             if let resolveError {
                                 Text(resolveError)
-                                    .font(.caption)
+                                    .prFont(.caption1)
                                     .foregroundStyle(.red)
                                     .textSelection(.enabled)
                                     .lineLimit(3)
@@ -293,7 +294,7 @@ struct ReviewThreadView: View {
                 .padding(12)
             }
         }
-        .font(.body)
+        .prFont(.body)
         .background(Color(nsColor: .textBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         .overlay(
@@ -340,10 +341,10 @@ struct ReviewThreadView: View {
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                    .font(.caption2.weight(.bold))
+                    .prFont(.caption2, weight: .bold)
                     .frame(width: 10)
                 Text(Self.title(thread))
-                    .font(.callout.weight(.semibold))
+                    .prFont(.callout, weight: .semibold)
                     .lineLimit(1)
                     .truncationMode(.head)
                 if thread.isOutdated {
@@ -355,7 +356,7 @@ struct ReviewThreadView: View {
                 Spacer(minLength: 8)
                 if !isExpanded {
                     Text(Self.summary(thread))
-                        .font(.callout)
+                        .prFont(.callout)
                         .foregroundStyle(.secondary)
                 }
             }
@@ -391,7 +392,7 @@ private struct ThreadBadge: View {
 
     var body: some View {
         Text(text)
-            .font(.caption2.weight(.bold))
+            .prFont(.caption2, weight: .bold)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(Capsule().fill(Color.secondary.opacity(0.15)))

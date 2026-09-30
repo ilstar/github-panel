@@ -72,6 +72,45 @@ final class PullRequestFilesViewTests: XCTestCase {
         XCTAssertEqual(monitors.map(\.enclosingScrollView), [diffList])
     }
 
+    @MainActor
+    func testFileTreeRowsAndFilterGrowWithPRTextSize() async throws {
+        let reference = PullRequestReference(repoFullName: "acme/widgets", number: 7)
+        let files = (0..<50).map {
+            PullRequestFile(filename: "Sources/File\($0).swift", previousFilename: nil,
+                            status: .modified, additions: 0, deletions: 0, patch: nil)
+        }
+        let content = PullRequestDetailContent(detail: detailContent(for: reference).detail, files: files)
+        let viewModel = PullRequestDetailViewModel(reference: reference) { _ in content }
+        await viewModel.load()
+        let suite = "GithubPanelTests.fileTreeSize.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defaults.set(true, forKey: PullRequestFilesView.showsFileTreeDefaultsKey)
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        func measurements(size: Int) throws -> (rowsHeight: CGFloat, filterSize: CGFloat) {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 600),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            let host = NSHostingView(rootView: PullRequestFilesView(viewModel: viewModel, files: files,
+                                                                    filesURL: content.detail.htmlURL)
+                .defaultAppStorage(defaults)
+                .environment(\.pullRequestTextSize, size))
+            window.contentView = host
+            window.orderFront(nil)
+            defer { window.orderOut(nil); window.contentView = nil }
+            host.layoutSubtreeIfNeeded()
+            let tree = try XCTUnwrap(Self.descendants(of: host).compactMap { $0 as? NSScrollView }
+                .min { $0.frame.width < $1.frame.width })
+            let filter = try XCTUnwrap(Self.descendants(of: host).compactMap { $0 as? NSTextField }
+                .first { $0.placeholderString == "Filter files" })
+            return (try XCTUnwrap(tree.documentView).frame.height, try XCTUnwrap(filter.font).pointSize)
+        }
+        let small = try measurements(size: 11)
+        let large = try measurements(size: 20)
+        XCTAssertGreaterThan(large.rowsHeight, small.rowsHeight)
+        XCTAssertEqual(large.filterSize - small.filterSize, 9, accuracy: 0.01)
+    }
+
     private static func descendants(of view: NSView) -> [NSView] {
         [view] + view.subviews.flatMap(descendants)
     }
