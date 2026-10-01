@@ -337,6 +337,7 @@ final class GitHubAPI: GitHubAPIClient {
         let files = try await fileList
         let viewer = await viewerState
         let viewed = viewer?.viewedFiles ?? []
+        let changedSinceViewed = viewer?.changedSinceViewed ?? []
         let ownership = try? await fetchCodeOwners(token: token, owner: parts[0], name: parts[1], baseRef: pull.base.ref,
                                                    paths: files.map { $0.filename })
         var detail = pull.detail(reference: reference)
@@ -345,15 +346,27 @@ final class GitHubAPI: GitHubAPIClient {
         detail.canUpdateBranch = (detail.state == .open || detail.state == .draft) && viewer?.canUpdateBranch == true
         detail.reviewers = viewer?.reviewers ?? .none
         detail.canRequestReviewers = (detail.state == .open || detail.state == .draft) && viewer?.canRequestReviewers == true
+        detail.lastReviewedSHA = viewer?.lastReviewedSHA
         return PullRequestDetailContent(detail: detail,
                                         files: files.map { file in
                                             var file = file.file
                                             file.isViewed = viewed.contains(file.filename)
+                                            file.isChangedSinceViewed = changedSinceViewed.contains(file.filename)
                                             file.codeOwners = ownership?.owners.owners(for: file.filename) ?? []
                                             file.isOwnedByViewer = CodeOwners.isOwnedByViewer(file.codeOwners,
                                                 login: ownership?.login ?? "", email: ownership?.email, teams: ownership?.teams ?? [])
                                             return file
                                         })
+    }
+
+    /// Uses the compare API, which diffs `headSHA` against its merge base with `baseSHA`, like GitHub's commit range view.
+    /// GitHub caps this at 300 files; later ones are not loaded.
+    func fetchChangedFiles(token: String, repoFullName: String, baseSHA: String, headSHA: String) async throws -> [PullRequestFile] {
+        let (owner, name) = try repoParts(repoFullName)
+        struct CompareResponse: Decodable { let files: [PullFileResponse]? }
+        let response = try await decode(CompareResponse.self,
+                                        request: makeRequest(path: "/repos/\(owner)/\(name)/compare/\(baseSHA)...\(headSHA)", token: token))
+        return (response.files ?? []).map(\.file)
     }
 
     /// Read all supported locations in one request, using the base branch and GitHub's location precedence.
@@ -704,11 +717,12 @@ final class GitHubAPI: GitHubAPIClient {
         }
     }
 
-    /// Paths the viewer marked as viewed, whether they may edit the pull request, and whether GitHub offers Update branch.
+    /// Paths the viewer marked as viewed, paths changed since they were viewed, the commit of the viewer's last review,
+    /// whether they may edit the pull request, and whether GitHub offers Update branch.
     /// GitHub reports files changed since they were viewed as `DISMISSED`, not `VIEWED`.
     /// `viewerCanUpdateBranch` is false when the branch is up to date. GitHub shows the button only when the repository
     /// suggests updating branches, or when its rules require an up-to-date branch, which makes the merge state `BEHIND`.
-    private func fetchViewerState(token: String, owner: String, name: String, number: Int) async throws -> (viewedFiles: Set<String>, canEdit: Bool, isAuthor: Bool, canUpdateBranch: Bool, reviewers: PullRequestReviewers, canRequestReviewers: Bool) {
+    private func fetchViewerState(token: String, owner: String, name: String, number: Int) async throws -> (viewedFiles: Set<String>, changedSinceViewed: Set<String>, lastReviewedSHA: String?, canEdit: Bool, isAuthor: Bool, canUpdateBranch: Bool, reviewers: PullRequestReviewers, canRequestReviewers: Bool) {
         let query = """
         query($owner: String!, $name: String!, $number: Int!) {
           repository(owner: $owner, name: $name) {
@@ -724,6 +738,9 @@ final class GitHubAPI: GitHubAPIClient {
               reviewDecision
               latestReviews(first: 100) {
                 nodes { state author { login } onBehalfOf(first: 10) { nodes { combinedSlug } } }
+              }
+              viewerReviews: reviews(last: 100, states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED]) {
+                nodes { viewerDidAuthor commit { oid } }
               }
               reviewRequests(first: 100) {
                 nodes {
@@ -750,7 +767,10 @@ final class GitHubAPI: GitHubAPIClient {
         let canEdit = isAuthor && pullRequest?.viewerCanUpdate == true
         let suggestsUpdate = pullRequest?.baseRepository?.allowUpdateBranch == true || pullRequest?.mergeStateStatus == "BEHIND"
         let canUpdateBranch = pullRequest?.viewerCanUpdateBranch == true && suggestsUpdate
-        return (Set(nodes.filter { $0.viewerViewedState == "VIEWED" }.map(\.path)), canEdit, isAuthor, canUpdateBranch,
+        let lastReviewedSHA = pullRequest?.viewerReviews?.nodes.last { $0.viewerDidAuthor == true }?.commit?.oid
+        return (Set(nodes.filter { $0.viewerViewedState == "VIEWED" }.map(\.path)),
+                Set(nodes.filter { $0.viewerViewedState == "DISMISSED" }.map(\.path)),
+                lastReviewedSHA, canEdit, isAuthor, canUpdateBranch,
                 pullRequest?.reviewers ?? .none,
                 ["ADMIN", "MAINTAIN", "WRITE", "TRIAGE"].contains(response.repository?.viewerPermission ?? ""))
     }
@@ -1024,6 +1044,7 @@ private struct ViewerStateResponse: Decodable {
         var reviewDecision: String?
         var latestReviews: Connection<Review>?
         var reviewRequests: Connection<ReviewRequest>?
+        var viewerReviews: Connection<ViewerReview>?
 
         var reviewers: PullRequestReviewers {
             PullRequestReviewers(
@@ -1055,6 +1076,12 @@ private struct ViewerStateResponse: Decodable {
         /// Missing when the reviewer's account was deleted.
         let author: Login?
         let onBehalfOf: Connection<Team>?
+    }
+    struct ViewerReview: Decodable {
+        struct Commit: Decodable { let oid: String }
+        let viewerDidAuthor: Bool?
+        /// Missing when the commit is no longer in the repository, such as after a force push.
+        let commit: Commit?
     }
     struct ReviewRequest: Decodable {
         struct Reviewer: Decodable {
@@ -1277,6 +1304,12 @@ private struct PullRequestNode: Decodable {
         let state: String
         /// Missing when the reviewer's account was deleted.
         let author: Login?
+    }
+    struct ViewerReview: Decodable {
+        struct Commit: Decodable { let oid: String }
+        let viewerDidAuthor: Bool?
+        /// Missing when the commit is no longer in the repository, such as after a force push.
+        let commit: Commit?
     }
     struct ReviewRequest: Decodable {
         struct Reviewer: Decodable {

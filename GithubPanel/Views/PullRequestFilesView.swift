@@ -21,6 +21,7 @@ struct PullRequestFilesView: View {
     static let showsFileTreeDefaultsKey = "diffShowsFileTree"
 
     @ObservedObject var viewModel: PullRequestDetailViewModel
+    /// Every file the pull request changes.
     let files: [PullRequestFile]
     let filesURL: URL
 
@@ -53,6 +54,11 @@ struct PullRequestFilesView: View {
 
             Divider()
 
+            if isShowingChangesSinceLastReview {
+                sinceLastReviewBanner
+                Divider()
+            }
+
             HStack(spacing: 0) {
                 if showsFileTree {
                     fileTree
@@ -72,6 +78,22 @@ struct PullRequestFilesView: View {
         }
     }
 
+    private var isShowingChangesSinceLastReview: Bool {
+        viewModel.fileScope == .sinceLastReview
+    }
+
+    /// The files in the chosen scope: every changed file, or only those changed since the viewer's last review.
+    private var shownFiles: [PullRequestFile] {
+        isShowingChangesSinceLastReview ? viewModel.filesSinceLastReview ?? [] : files
+    }
+
+    /// GitHub's page for the shown diff, used by View on GitHub.
+    private var shownFilesURL: URL {
+        guard isShowingChangesSinceLastReview, let detail = viewModel.content?.detail,
+              let base = detail.lastReviewedSHA else { return filesURL }
+        return filesURL.appendingPathComponent("\(base)..\(detail.headSHA)")
+    }
+
     // MARK: - Keyboard
 
     private var actions: PullRequestFilesActions {
@@ -82,7 +104,7 @@ struct PullRequestFilesView: View {
                                 toggleFileTree: { showsFileTree.toggle() },
                                 showNextFile: { showFile(offset: 1) },
                                 showPreviousFile: { showFile(offset: -1) },
-                                collapseAll: collapsed.count == files.count ? nil : { collapsed = Set(files.map(\.filename)) },
+                                collapseAll: collapsed.count == shownFiles.count ? nil : { collapsed = Set(shownFiles.map(\.filename)) },
                                 expandAll: collapsed.isEmpty ? nil : { collapsed = [] },
                                 toggleWhitespace: { hideWhitespace.toggle() },
                                 toggleMode: { mode = mode == .unified ? .split : .unified })
@@ -143,9 +165,21 @@ struct PullRequestFilesView: View {
             }
             .help(showsFileTree ? "Hide file tree" : "Show file tree")
 
-            Text("\(viewedCount) / \(files.count) files viewed")
+            Text("\(viewedCount) / \(shownFiles.count) files viewed")
                 .font(.callout.monospacedDigit())
                 .foregroundStyle(.secondary)
+
+            if viewModel.canShowChangesSinceLastReview {
+                Picker("", selection: Binding(get: { viewModel.fileScope },
+                                              set: { scope in Task { await viewModel.showFiles(scope) } })) {
+                    Text("All changes").tag(PullRequestDetailViewModel.FileScope.all)
+                    Text("Since your last review").tag(PullRequestDetailViewModel.FileScope.sinceLastReview)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+                .help("Show every change, or only the commits pushed since you last reviewed")
+            }
 
             Spacer()
 
@@ -163,25 +197,62 @@ struct PullRequestFilesView: View {
 
             Button("Expand All") { collapsed = [] }
                 .disabled(collapsed.isEmpty)
-            Button("Collapse All") { collapsed = Set(files.map(\.filename)) }
-                .disabled(collapsed.count == files.count)
+            Button("Collapse All") { collapsed = Set(shownFiles.map(\.filename)) }
+                .disabled(collapsed.count == shownFiles.count)
         }
     }
 
+    /// Says which commits the diff covers. Comments are off here, since the line numbers are not the pull request's.
+    private var sinceLastReviewBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "clock.arrow.circlepath")
+                .foregroundStyle(.secondary)
+            Text(Self.sinceLastReviewMessage(lastReviewedSHA: viewModel.content?.detail.lastReviewedSHA))
+            if viewModel.isLoadingChangesSinceLastReview {
+                ProgressView()
+                    .controlSize(.small)
+            }
+            Spacer()
+            Button("Show All Changes") {
+                Task { await viewModel.showFiles(.all) }
+            }
+        }
+        .font(.callout)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 6)
+        .background(Color.accentColor.opacity(0.08))
+    }
+
+    static func sinceLastReviewMessage(lastReviewedSHA: String?) -> String {
+        let commit = lastReviewedSHA.map { " (\($0.prefix(7)))" } ?? ""
+        return "Showing changes since your last review\(commit). Switch to All changes to comment."
+    }
+
+    /// What the diff list says when there are no files in the chosen scope.
+    private var noFilesMessage: String {
+        guard isShowingChangesSinceLastReview else { return "No files changed." }
+        return viewModel.filesSinceLastReview == nil ? "Loading changes since your last review…" : "No new changes since your last review."
+    }
+
     private var viewedCount: Int {
-        files.filter { viewModel.viewedFiles.contains($0.filename) }.count
+        shownFiles.filter { viewModel.viewedFiles.contains($0.filename) }.count
     }
 
     // MARK: - File tree
 
     private var treeRows: [FileTreeRow] {
-        FileTree.rows(for: FileTree.filteredFiles(files, query: searchText, onlyOwnedByViewer: onlyOwnedByViewer).map(\.filename))
+        FileTree.rows(for: FileTree.filteredFiles(shownFiles, query: searchText, onlyOwnedByViewer: onlyOwnedByViewer).map(\.filename))
     }
 
     /// The files that match the search, in the same order as the tree.
     private var visibleFiles: [PullRequestFile] {
-        let byName = Dictionary(files.map { ($0.filename, $0) }, uniquingKeysWith: { first, _ in first })
+        let byName = Dictionary(shownFiles.map { ($0.filename, $0) }, uniquingKeysWith: { first, _ in first })
         return treeRows.filter { $0.kind == .file }.compactMap { byName[$0.id] }
+    }
+
+    /// Files the viewer marked as viewed that changed since and are not viewed again yet.
+    private var changedSinceViewed: Set<String> {
+        Set(files.filter { $0.isChangedSinceViewed && !viewModel.viewedFiles.contains($0.filename) }.map(\.filename))
     }
 
     private var fileTree: some View {
@@ -231,7 +302,7 @@ struct PullRequestFilesView: View {
 
             let rows = FileTree.visibleRows(treeRows, collapsed: collapsedDirectories)
             if rows.isEmpty {
-                Text(files.isEmpty ? "No files changed." : "No matching files.")
+                Text(shownFiles.isEmpty ? noFilesMessage : "No matching files.")
                     .prFont(.callout)
                     .foregroundStyle(.secondary)
                     .padding(12)
@@ -279,6 +350,11 @@ struct PullRequestFilesView: View {
                     .prFont(.caption1, weight: .semibold)
                     .foregroundStyle(.secondary)
                     .help("Viewed")
+            } else if row.kind == .file, changedSinceViewed.contains(row.id) {
+                Circle()
+                    .fill(Color.accentColor)
+                    .frame(width: 6, height: 6)
+                    .help("Changed since you viewed it")
             }
         }
         .prFont(.callout)
@@ -317,8 +393,8 @@ struct PullRequestFilesView: View {
                 // One lazy row per diff line, so only the lines on screen are built. Each file is a section whose
                 // header stays pinned to the top until the next file's header pushes it off.
                 LazyVStack(alignment: .leading, spacing: 0, pinnedViews: .sectionHeaders) {
-                    if files.isEmpty {
-                        Text("No files changed.")
+                    if shownFiles.isEmpty {
+                        Text(noFilesMessage)
                             .foregroundStyle(.secondary)
                     } else if visibleFiles.isEmpty {
                         Text("No files match “\(searchText)”.")
@@ -361,9 +437,9 @@ struct PullRequestFilesView: View {
                          collapsed: collapsed,
                          mode: mode,
                          hideWhitespace: hideWhitespace,
-                         threads: viewModel.threadIndex(for:),
-                         composing: composingAnchor) { filename in
-            guard let lines = viewModel.diffLines[filename], !lines.isEmpty else { return nil }
+                         threads: isShowingChangesSinceLastReview ? { _ in ReviewThreadIndex(threads: []) } : viewModel.threadIndex(for:),
+                         composing: isShowingChangesSinceLastReview ? nil : composingAnchor) { filename in
+            guard let lines = viewModel.lines(for: filename), !lines.isEmpty else { return nil }
             return viewModel.presentation(for: filename, hideWhitespace: hideWhitespace)
         })
     }
@@ -389,7 +465,7 @@ struct PullRequestFilesView: View {
         case let .noDiff(file):
             HStack(spacing: 4) {
                 Text(file.patch == nil ? "Binary file or diff too large to show here." : "No changes to show.")
-                Link("View on GitHub", destination: filesURL)
+                Link("View on GitHub", destination: shownFilesURL)
             }
             .font(.callout)
             .foregroundStyle(.secondary)
@@ -423,7 +499,9 @@ struct PullRequestFilesView: View {
     }
 
     private func addCommentAction(_ anchor: DiffCommentAnchor?) -> (() -> Void)? {
-        anchor.map { anchor in { composingAnchor = anchor } }
+        // The lines are numbered against the last reviewed commit, which GitHub's comments do not take.
+        guard !isShowingChangesSinceLastReview else { return nil }
+        return anchor.map { anchor in { composingAnchor = anchor } }
     }
 
     /// The threads under one diff line, plus the new-comment box when it is open on that line.
@@ -529,7 +607,8 @@ struct PullRequestFilesView: View {
         return PullRequestFileHeader(file: file,
                                      isCollapsed: isCollapsed,
                                      isViewed: isViewed,
-                                     commentCount: viewModel.threadIndex(for: file.filename).threads.count,
+                                     isChangedSinceViewed: !isViewed && changedSinceViewed.contains(file.filename),
+                                     commentCount: isShowingChangesSinceLastReview ? 0 : viewModel.threadIndex(for: file.filename).threads.count,
                                      onToggle: {
                                          if isCollapsed {
                                              collapsed.remove(file.filename)
@@ -558,6 +637,7 @@ struct PullRequestFileHeader: View {
     let file: PullRequestFile
     let isCollapsed: Bool
     let isViewed: Bool
+    var isChangedSinceViewed = false
     var commentCount = 0
     let onToggle: () -> Void
     let onSetViewed: (Bool) -> Void
@@ -606,6 +686,16 @@ struct PullRequestFileHeader: View {
                 Label("\(commentCount)", systemImage: "text.bubble")
                     .foregroundStyle(.secondary)
                     .help(commentCount == 1 ? "1 conversation" : "\(commentCount) conversations")
+            }
+
+            if isChangedSinceViewed {
+                Text("Changed since last view")
+                    .font(.caption)
+                    .foregroundStyle(Color.accentColor)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Color.accentColor.opacity(0.12)))
+                    .help("You marked this file as viewed, then it changed")
             }
 
             Text("+\(file.additions)")

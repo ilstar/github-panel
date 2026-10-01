@@ -580,6 +580,11 @@ final class PRMonitor: ObservableObject {
         return try await api.fetchPullRequestDetail(token: token, reference: reference)
     }
 
+    func fetchChangedFiles(in repoFullName: String, from baseSHA: String, to headSHA: String) async throws -> [PullRequestFile] {
+        guard let token = loadSessionToken() else { throw MissingTokenError() }
+        return try await api.fetchChangedFiles(token: token, repoFullName: repoFullName, baseSHA: baseSHA, headSHA: headSHA)
+    }
+
     func setFileViewed(pullRequestID: String, path: String, viewed: Bool) async throws {
         guard let token = loadSessionToken() else { throw MissingTokenError() }
         try await api.setFileViewed(token: token, pullRequestID: pullRequestID, path: path, viewed: viewed)

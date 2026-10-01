@@ -17,6 +17,13 @@ final class PullRequestFilesViewTests: XCTestCase {
         XCTAssertEqual(CodeOwnerShield.ownerLabel("alice@example.com"), "alice@example.com")
     }
 
+    func testSinceLastReviewMessageNamesTheShortCommit() {
+        XCTAssertEqual(PullRequestFilesView.sinceLastReviewMessage(lastReviewedSHA: "0123456789abcdef"),
+                       "Showing changes since your last review (0123456). Switch to All changes to comment.")
+        XCTAssertEqual(PullRequestFilesView.sinceLastReviewMessage(lastReviewedSHA: nil),
+                       "Showing changes since your last review. Switch to All changes to comment.")
+    }
+
     func testCopyPathPutsFilenameOnPasteboard() {
         let pasteboard = NSPasteboard(name: NSPasteboard.Name("GithubPanelTests.copyPath.\(UUID().uuidString)"))
         defer { pasteboard.releaseGlobally() }
