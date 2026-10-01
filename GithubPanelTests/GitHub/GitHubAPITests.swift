@@ -507,6 +507,45 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertEqual(viewedBody.variables["number"] as? Int, 7)
     }
 
+    func testFetchPullRequestDetailDecodesReviewers() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: pullDetailResponse, path: pullPath)
+        transport.enqueue(json: "[]", path: filesPath)
+        transport.enqueue(json: #"""
+        {"data":{"repository":{"pullRequest":{
+          "files":{"nodes":[]},
+          "author":{"login":"octocat"},
+          "reviewDecision":"REVIEW_REQUIRED",
+          "latestReviews":{"nodes":[
+            {"state":"APPROVED","author":{"login":"hubot"},"onBehalfOf":{"nodes":[{"combinedSlug":"acme/ios"}]}},
+            {"state":"CHANGES_REQUESTED","author":{"login":"monalisa"},"onBehalfOf":{"nodes":[]}},
+            {"state":"COMMENTED","author":{"login":"octocat"},"onBehalfOf":{"nodes":[]}},
+            {"state":"APPROVED","author":null,"onBehalfOf":{"nodes":[]}}
+          ]},
+          "reviewRequests":{"nodes":[
+            {"asCodeOwner":true,"requestedReviewer":{"combinedSlug":"acme/web"}},
+            {"asCodeOwner":false,"requestedReviewer":{"login":"monalisa"}},
+            {"asCodeOwner":false,"requestedReviewer":null}
+          ]}
+        }}}}
+        """#, path: "/graphql")
+
+        let content = try await GitHubAPI(transport: transport)
+            .fetchPullRequestDetail(token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7))
+
+        XCTAssertEqual(content.detail.reviewers, PullRequestReviewers(decision: .reviewRequired, reviewers: [
+            PullRequestReviewer(name: "acme/web", kind: .team, state: .pending, isCodeOwner: true),
+            PullRequestReviewer(name: "hubot", kind: .user, state: .approved, onBehalfOf: ["acme/ios"]),
+            PullRequestReviewer(name: "monalisa", kind: .user, state: .pending, previousState: .changesRequested)
+        ]))
+        let index = try XCTUnwrap(transport.requests.firstIndex { $0.url?.path == "/graphql" })
+        let query = try transport.graphQLBody(at: index).query
+        XCTAssertTrue(query.contains("latestReviews(first: 100)"))
+        XCTAssertTrue(query.contains("onBehalfOf(first: 10) { nodes { combinedSlug } }"))
+        XCTAssertTrue(query.contains("asCodeOwner"))
+        XCTAssertTrue(query.contains("... on Team { combinedSlug }"))
+    }
+
     func testCodeOwnersUsesBaseBranchPrecedenceAndTeamMembership() async throws {
         let transport = MockHTTPTransport()
         transport.enqueue(json: pullDetailResponse, path: pullPath)
@@ -556,6 +595,7 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertFalse(content.files.contains(where: \.isViewed))
         XCTAssertFalse(content.detail.canEdit)
         XCTAssertFalse(content.detail.canUpdateBranch)
+        XCTAssertEqual(content.detail.reviewers, .none)
     }
 
     func testFetchPullRequestDetailOffersUpdateBranchLikeGitHub() async throws {

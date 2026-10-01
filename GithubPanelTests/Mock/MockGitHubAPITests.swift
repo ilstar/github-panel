@@ -38,6 +38,17 @@ final class MockGitHubAPITests: XCTestCase {
         }
     }
 
+    func testMockDetailShowsReviewersWithPartialApproval() async throws {
+        let api = MockGitHubAPI()
+        let reference = PullRequestReference(repoFullName: "mock/github-panel", number: 102)
+
+        let reviewers = try await api.fetchPullRequestDetail(token: "token", reference: reference).detail.reviewers
+
+        XCTAssertEqual(reviewers.decision, .reviewRequired)
+        XCTAssertEqual(reviewers.reviewers.map(\.name), ["hubot", "mock/web-team", "monalisa", "octocat"])
+        XCTAssertEqual(reviewers.reviewers.map(\.state), [.pending, .pending, .commented, .approved])
+    }
+
     func testMockEditsOwnPullRequestsOnly() async throws {
         let api = MockGitHubAPI()
         let own = PullRequestReference(repoFullName: "mock/github-panel", number: 109)

@@ -54,6 +54,8 @@ struct PullRequestDetail: Equatable {
     var canUpdateBranch = false
     /// When GitHub last changed the pull request. Compared with the list's `updatedAt` to tell whether a cached copy is stale.
     var updatedAt: Date?
+    /// Who was asked to review and how each reviewer responded. Empty when GitHub does not return them.
+    var reviewers = PullRequestReviewers.none
 
     var offersUpdateBranch: Bool { isViewerAuthor && canUpdateBranch }
 }

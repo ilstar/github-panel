@@ -766,6 +766,11 @@ struct PullRequestConversationView: View {
                 .padding(.bottom, 18)
                 .conversationCard()
 
+                PullRequestReviewersView(reviewers: detail.reviewers)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 14)
+                    .conversationCard()
+
                 if let comments {
                     ForEach(comments) { comment in
                         PullRequestCommentView(comment: comment)

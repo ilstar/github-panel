@@ -109,7 +109,7 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
         let reviewAuthor = reviewRequests.rows.first { $0.id == reference.id }?.authorLogin
         let isOwn = pullRequests[reference.id] != nil || reviewAuthor == nil
         let authorLogin = isOwn ? user.login : reviewAuthor ?? user.login
-        let detail = PullRequestDetail(reference: reference,
+        var detail = PullRequestDetail(reference: reference,
                                        nodeID: nodeID,
                                        title: title,
                                        body: editedBodies[reference.id] ?? Self.detailBody,
@@ -128,6 +128,7 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
                                        isViewerAuthor: isOwn,
                                        canUpdateBranch: isOwn && !updatedBranches.contains(nodeID),
                                        updatedAt: pullRequests[reference.id]?.updatedAt)
+        detail.reviewers = Self.detailReviewers(number: reference.number, authorLogin: authorLogin)
         let viewed = viewedFiles[nodeID] ?? []
         let files = Self.detailFiles.map { file in
             var file = file
@@ -135,6 +136,41 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
             return file
         }
         return PullRequestDetailContent(detail: detail, files: files)
+    }
+
+    /// Reviewers for the detail window, matching each pull request's review tag in the list.
+    private static func detailReviewers(number: Int, authorLogin: String) -> PullRequestReviewers {
+        typealias Review = PullRequestReviewers.Review
+        typealias Request = PullRequestReviewers.Request
+        let (decision, reviews, requests): (ReviewDecision?, [Review], [Request])
+        switch number {
+        case 101:
+            (decision, reviews, requests) = (.approved,
+                                             [Review(author: "octocat", state: "APPROVED"),
+                                              Review(author: "hubot", state: "APPROVED", onBehalfOf: ["mock/web-team"])],
+                                             [])
+        case 102:
+            // One approval in, a re-requested reviewer, and a team still to go.
+            (decision, reviews, requests) = (.reviewRequired,
+                                             [Review(author: "octocat", state: "APPROVED", onBehalfOf: ["mock/ios-team"]),
+                                              Review(author: "hubot", state: "COMMENTED"),
+                                              Review(author: "monalisa", state: "COMMENTED")],
+                                             [Request(name: "hubot", kind: .user, asCodeOwner: true),
+                                              Request(name: "mock/web-team", kind: .team)])
+        case 107:
+            (decision, reviews, requests) = (.changesRequested,
+                                             [Review(author: "hubot", state: "APPROVED"),
+                                              Review(author: "monalisa", state: "CHANGES_REQUESTED")],
+                                             [])
+        case 108:
+            (decision, reviews, requests) = (.reviewRequired, [], [])
+        case 113:
+            (decision, reviews, requests) = (.reviewRequired, [Review(author: "hubot", state: "DISMISSED")],
+                                             [Request(name: "octocat", kind: .user)])
+        default:
+            return .none
+        }
+        return PullRequestReviewers(decision: decision, reviews: reviews, requests: requests, authorLogin: authorLogin)
     }
 
     func setFileViewed(token: String, pullRequestID: String, path: String, viewed: Bool) async throws {

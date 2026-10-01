@@ -282,6 +282,7 @@ final class GitHubAPI: GitHubAPIClient {
         detail.canEdit = viewer?.canEdit ?? false
         detail.isViewerAuthor = viewer?.isAuthor ?? false
         detail.canUpdateBranch = (detail.state == .open || detail.state == .draft) && viewer?.canUpdateBranch == true
+        detail.reviewers = viewer?.reviewers ?? .none
         return PullRequestDetailContent(detail: detail,
                                         files: files.map { file in
                                             var file = file.file
@@ -645,7 +646,7 @@ final class GitHubAPI: GitHubAPIClient {
     /// GitHub reports files changed since they were viewed as `DISMISSED`, not `VIEWED`.
     /// `viewerCanUpdateBranch` is false when the branch is up to date. GitHub shows the button only when the repository
     /// suggests updating branches, or when its rules require an up-to-date branch, which makes the merge state `BEHIND`.
-    private func fetchViewerState(token: String, owner: String, name: String, number: Int) async throws -> (viewedFiles: Set<String>, canEdit: Bool, isAuthor: Bool, canUpdateBranch: Bool) {
+    private func fetchViewerState(token: String, owner: String, name: String, number: Int) async throws -> (viewedFiles: Set<String>, canEdit: Bool, isAuthor: Bool, canUpdateBranch: Bool, reviewers: PullRequestReviewers) {
         let query = """
         query($owner: String!, $name: String!, $number: Int!) {
           repository(owner: $owner, name: $name) {
@@ -656,6 +657,22 @@ final class GitHubAPI: GitHubAPIClient {
               mergeStateStatus
               baseRepository { allowUpdateBranch }
               files(first: 100) { nodes { path viewerViewedState } }
+              author { login }
+              reviewDecision
+              latestReviews(first: 100) {
+                nodes { state author { login } onBehalfOf(first: 10) { nodes { combinedSlug } } }
+              }
+              reviewRequests(first: 100) {
+                nodes {
+                  asCodeOwner
+                  requestedReviewer {
+                    ... on User { login }
+                    ... on Bot { login }
+                    ... on Mannequin { login }
+                    ... on Team { combinedSlug }
+                  }
+                }
+              }
             }
           }
         }
@@ -670,7 +687,8 @@ final class GitHubAPI: GitHubAPIClient {
         let canEdit = isAuthor && pullRequest?.viewerCanUpdate == true
         let suggestsUpdate = pullRequest?.baseRepository?.allowUpdateBranch == true || pullRequest?.mergeStateStatus == "BEHIND"
         let canUpdateBranch = pullRequest?.viewerCanUpdateBranch == true && suggestsUpdate
-        return (Set(nodes.filter { $0.viewerViewedState == "VIEWED" }.map(\.path)), canEdit, isAuthor, canUpdateBranch)
+        return (Set(nodes.filter { $0.viewerViewedState == "VIEWED" }.map(\.path)), canEdit, isAuthor, canUpdateBranch,
+                pullRequest?.reviewers ?? .none)
     }
 
     private func repoParts(_ repoFullName: String) throws -> (owner: String, name: String) {
@@ -935,8 +953,50 @@ private struct ViewerStateResponse: Decodable {
         let mergeStateStatus: String?
         let baseRepository: BaseRepository?
         let files: Files?
+        var author: Login?
+        var reviewDecision: String?
+        var latestReviews: Connection<Review>?
+        var reviewRequests: Connection<ReviewRequest>?
+
+        var reviewers: PullRequestReviewers {
+            PullRequestReviewers(
+                decision: reviewDecision.flatMap(ReviewDecision.init(rawValue:)),
+                reviews: (latestReviews?.nodes ?? []).compactMap { review in
+                    review.author.map {
+                        PullRequestReviewers.Review(author: $0.login, state: review.state,
+                                                    onBehalfOf: (review.onBehalfOf?.nodes ?? []).map(\.combinedSlug))
+                    }
+                },
+                requests: (reviewRequests?.nodes ?? []).compactMap { request in
+                    guard let reviewer = request.requestedReviewer else { return nil }
+                    if let slug = reviewer.combinedSlug {
+                        return PullRequestReviewers.Request(name: slug, kind: .team, asCodeOwner: request.asCodeOwner ?? false)
+                    }
+                    return reviewer.login.map {
+                        PullRequestReviewers.Request(name: $0, kind: .user, asCodeOwner: request.asCodeOwner ?? false)
+                    }
+                },
+                authorLogin: author?.login ?? "")
+        }
     }
     struct BaseRepository: Decodable { let allowUpdateBranch: Bool? }
+    struct Connection<Node: Decodable>: Decodable { let nodes: [Node] }
+    struct Login: Decodable { let login: String }
+    struct Team: Decodable { let combinedSlug: String }
+    struct Review: Decodable {
+        let state: String
+        /// Missing when the reviewer's account was deleted.
+        let author: Login?
+        let onBehalfOf: Connection<Team>?
+    }
+    struct ReviewRequest: Decodable {
+        struct Reviewer: Decodable {
+            let login: String?
+            let combinedSlug: String?
+        }
+        let asCodeOwner: Bool?
+        let requestedReviewer: Reviewer?
+    }
     struct Files: Decodable { let nodes: [File] }
     struct File: Decodable {
         let path: String
