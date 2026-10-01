@@ -719,79 +719,49 @@ struct PullRequestConversationView: View {
     var onSetTask: (Int, Bool) -> Void = { _, _ in }
 
     @State private var isEditingBody = false
+    @State private var paneWidth: CGFloat = 0
+
+    /// The description and comments column, as wide as it was before the sidebar.
+    static let mainColumnMaxWidth: CGFloat = 836
+    /// GitHub's sidebar sits beside the description at a fixed width.
+    static let sidebarWidth: CGFloat = 220
+    static let sidebarSpacing: CGFloat = 28
+    static let horizontalPadding: CGFloat = 32
+    /// Below this the description would get too narrow, so the sidebar moves above it, as on GitHub's narrow layout.
+    static let minimumMainColumnWidth: CGFloat = 420
+
+    static func showsSidebar(paneWidth: CGFloat) -> Bool {
+        paneWidth >= 2 * horizontalPadding + minimumMainColumnWidth + sidebarSpacing + sidebarWidth
+    }
+
+    private var showsSidebar: Bool { Self.showsSidebar(paneWidth: paneWidth) }
+
+    private var contentMaxWidth: CGFloat {
+        2 * Self.horizontalPadding + Self.mainColumnMaxWidth + (showsSidebar ? Self.sidebarSpacing + Self.sidebarWidth : 0)
+    }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack(spacing: 8) {
-                        AvatarView(login: detail.authorLogin)
-                        Text(detail.authorLogin)
-                            .prFont(.callout, weight: .semibold)
-                        Text("opened this pull request \(detail.createdAt.formatted(.relative(presentation: .named)))")
-                            .prFont(.callout)
-                            .foregroundStyle(.secondary)
-                        Spacer(minLength: 8)
-                        if detail.canEdit && !isEditingBody {
-                            Button {
-                                isEditingBody = true
-                            } label: {
-                                Image(systemName: "pencil")
-                            }
-                            .buttonStyle(QuietButtonStyle())
-                            .help("Edit description")
-                        }
-                    }
-
-                    Group {
-                        if isEditingBody {
-                            PullRequestBodyEditor(body: detail.body,
-                                                  onCancel: { isEditingBody = false },
-                                                  onSave: { body in
-                                                      try await onSaveBody(body)
-                                                      isEditingBody = false
-                                                  })
-                        } else if detail.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            Text("No description provided.")
-                                .italic()
-                                .foregroundStyle(.secondary)
-                        } else {
-                            MarkdownView(markdown: detail.body, onSetTask: detail.canEdit ? onSetTask : nil)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 16)
-                .padding(.bottom, 18)
-                .conversationCard()
-
-                PullRequestReviewersView(reviewers: detail.reviewers)
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 14)
-                    .conversationCard()
-
-                if let comments {
-                    ForEach(comments) { comment in
-                        PullRequestCommentView(comment: comment)
-                            .padding(.horizontal, 20)
-                            .padding(.vertical, 15)
-                            .conversationCard()
-                    }
-                } else {
-                    ProgressView()
-                        .controlSize(.small)
-                        .frame(maxWidth: .infinity)
+            HStack(alignment: .top, spacing: Self.sidebarSpacing) {
+                mainColumn
+                    .frame(maxWidth: Self.mainColumnMaxWidth, alignment: .leading)
+                if showsSidebar {
+                    sidebar
+                        .frame(width: Self.sidebarWidth)
                 }
             }
-            .padding(.horizontal, 32)
+            .padding(.horizontal, Self.horizontalPadding)
             .padding(.top, 20)
             .padding(.bottom, 24)
-            .frame(maxWidth: 900, alignment: .leading)
+            .frame(maxWidth: contentMaxWidth, alignment: .leading)
             .background(PageScrollAnchor())
             // Fill the pane so the scroll view, and its scroller, reach the window's right edge.
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .background(GeometryReader { proxy in
+            Color.clear.preference(key: ConversationPaneWidthKey.self, value: proxy.size.width)
+        })
+        .onPreferenceChange(ConversationPaneWidthKey.self) { paneWidth = $0 }
         // The comment box floats in glass over the bottom of the conversation, which scrolls under it.
         .safeAreaInset(edge: .bottom, spacing: 0) {
             CommentComposer(placeholder: "Leave a comment (Markdown supported)",
@@ -799,12 +769,90 @@ struct PullRequestConversationView: View {
                             style: .floating,
                             focusRequest: commentFocusRequest,
                             onSubmit: onComment)
-                .frame(maxWidth: 900 - 64)
-                .padding(.horizontal, 32)
+                .frame(maxWidth: Self.mainColumnMaxWidth)
+                .padding(.leading, Self.horizontalPadding)
+                .padding(.trailing, Self.horizontalPadding + (showsSidebar ? Self.sidebarSpacing + Self.sidebarWidth : 0))
                 .padding(.bottom, 20)
-                .frame(maxWidth: 900, alignment: .leading)
+                .frame(maxWidth: contentMaxWidth, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    private var sidebar: some View {
+        PullRequestReviewersView(reviewers: detail.reviewers)
+            .padding(.top, 4)
+    }
+
+    private var mainColumn: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if !showsSidebar {
+                sidebar
+            }
+
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 8) {
+                    AvatarView(login: detail.authorLogin)
+                    Text(detail.authorLogin)
+                        .prFont(.callout, weight: .semibold)
+                    Text("opened this pull request \(detail.createdAt.formatted(.relative(presentation: .named)))")
+                        .prFont(.callout)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 8)
+                    if detail.canEdit && !isEditingBody {
+                        Button {
+                            isEditingBody = true
+                        } label: {
+                            Image(systemName: "pencil")
+                        }
+                        .buttonStyle(QuietButtonStyle())
+                        .help("Edit description")
+                    }
+                }
+
+                Group {
+                    if isEditingBody {
+                        PullRequestBodyEditor(body: detail.body,
+                                              onCancel: { isEditingBody = false },
+                                              onSave: { body in
+                                                  try await onSaveBody(body)
+                                                  isEditingBody = false
+                                              })
+                    } else if detail.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text("No description provided.")
+                            .italic()
+                            .foregroundStyle(.secondary)
+                    } else {
+                        MarkdownView(markdown: detail.body, onSetTask: detail.canEdit ? onSetTask : nil)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 16)
+            .padding(.bottom, 18)
+            .conversationCard()
+
+            if let comments {
+                ForEach(comments) { comment in
+                    PullRequestCommentView(comment: comment)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 15)
+                        .conversationCard()
+                }
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+    }
+}
+
+private struct ConversationPaneWidthKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }
 

@@ -5,6 +5,14 @@ import XCTest
 
 @MainActor
 final class PullRequestConversationViewTests: XCTestCase {
+    /// Reviewers sit beside the description when there is room, and move above it in a narrow pane.
+    func testSidebarShowsBesideTheDescriptionOnlyWhenItFits() {
+        XCTAssertTrue(PullRequestConversationView.showsSidebar(paneWidth: 1000))
+        XCTAssertTrue(PullRequestConversationView.showsSidebar(paneWidth: 732))
+        XCTAssertFalse(PullRequestConversationView.showsSidebar(paneWidth: 731))
+        XCTAssertFalse(PullRequestConversationView.showsSidebar(paneWidth: 420))
+    }
+
     /// The conversation's content stops at 900pt, but its scroller should still sit at the pane's right edge.
     func testScrollViewFillsAPaneWiderThanTheContent() throws {
         let reference = PullRequestReference(repoFullName: "acme/widgets", number: 7)
