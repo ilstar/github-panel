@@ -632,6 +632,67 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         XCTAssertTrue(api.postCommentCalls.isEmpty)
     }
 
+    func testRequestingAReviewerShowsThemWaitingThenReloads() async {
+        var fetchCount = 0
+        var requests: [(name: String, kind: PullRequestReviewer.Kind, requested: Bool)] = []
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+            fetch: { [self] _ in
+                fetchCount += 1
+                let content = detailContent(title: "Title")
+                var detail = content.detail
+                detail.canRequestReviewers = true
+                return PullRequestDetailContent(detail: detail, files: content.files)
+            },
+            setReviewRequested: { _, name, kind, requested in requests.append((name, kind, requested)) })
+        await viewModel.load()
+
+        await viewModel.setReviewRequested("acme/web", kind: .team, requested: true)
+
+        XCTAssertEqual(requests.map(\.name), ["acme/web"])
+        XCTAssertEqual(requests.map(\.requested), [true])
+        XCTAssertEqual(fetchCount, 2)
+        XCTAssertTrue(viewModel.reviewRequestsInFlight.isEmpty)
+        XCTAssertNil(viewModel.errorMessage)
+    }
+
+    func testRequestingAReviewerOptimisticallyUpdatesAndShowsFailures() async {
+        var shouldFail = false
+        var reviewers = PullRequestReviewers.none
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+            fetch: { [self] _ in
+                let content = detailContent(title: "Title")
+                var detail = content.detail
+                detail.canRequestReviewers = true
+                detail.reviewers = reviewers
+                return PullRequestDetailContent(detail: detail, files: content.files)
+            },
+            setReviewRequested: { _, name, kind, requested in
+                if shouldFail { throw GitHubAPIError(message: "Reviews may only be requested from collaborators", documentationURL: nil) }
+                reviewers = reviewers.settingRequest(name: name, kind: kind, requested: requested)
+            })
+        await viewModel.load()
+
+        await viewModel.setReviewRequested("hubot", kind: .user, requested: true)
+        XCTAssertTrue(viewModel.content?.detail.reviewers.isRequested("user:hubot") == true)
+
+        shouldFail = true
+        await viewModel.setReviewRequested("monalisa", kind: .user, requested: true)
+        XCTAssertEqual(viewModel.errorMessage, "GitHub API error: Reviews may only be requested from collaborators")
+        XCTAssertEqual(viewModel.content?.detail.reviewers.reviewers.map(\.name), ["hubot"])
+    }
+
+    func testRequestingReviewersNeedsPermission() async {
+        var requestCount = 0
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+            fetch: { [self] _ in detailContent(title: "Title") },
+            setReviewRequested: { _, _, _, _ in requestCount += 1 })
+        await viewModel.load()
+
+        await viewModel.setReviewRequested("hubot", kind: .user, requested: true)
+
+        XCTAssertEqual(requestCount, 0)
+    }
+
     func testUpdateBranchSendsHeadCommitThenReloads() async {
         var fetchCount = 0
         var updates: [(pullRequestID: String, headSHA: String)] = []

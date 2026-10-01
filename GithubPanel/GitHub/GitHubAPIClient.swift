@@ -27,6 +27,11 @@ protocol GitHubAPIClient {
     func fetchPullRequestChecks(token: String, reference: PullRequestReference) async throws -> PullRequestChecks
     /// Runs a workflow run's failed jobs, or another app's check suite, again.
     func rerunChecks(token: String, repoFullName: String, rerun: CheckRerun) async throws
+    /// Users and teams that could review the pull request, matching `query`, for the reviewer picker.
+    func fetchReviewerCandidates(token: String, reference: PullRequestReference, query: String) async throws -> [ReviewerCandidate]
+    /// Requests a review from a user or team (`org/team-slug`), or removes their request.
+    func setReviewRequested(token: String, reference: PullRequestReference, name: String,
+                            kind: PullRequestReviewer.Kind, requested: Bool) async throws
 }
 
 protocol HTTPTransport {

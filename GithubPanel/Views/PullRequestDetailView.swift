@@ -83,7 +83,13 @@ struct PullRequestDetailView: View {
                                                 onSaveBody: { body in try await viewModel.edit(body: body) },
                                                 onSetTask: { index, checked in
                                                     Task { await viewModel.setTask(index, checked: checked) }
-                                                })
+                                                },
+                                                reviewerActions: content.detail.canRequestReviewers ? ReviewerRequestActions(
+                                                    inFlight: viewModel.reviewRequestsInFlight,
+                                                    loadCandidates: { query in try await viewModel.reviewerCandidates(matching: query) },
+                                                    setRequested: { name, kind, requested in
+                                                        Task { await viewModel.setReviewRequested(name, kind: kind, requested: requested) }
+                                                    }) : nil)
                 case .files:
                     PullRequestFilesView(viewModel: viewModel,
                                          files: content.files,
@@ -717,89 +723,151 @@ struct PullRequestConversationView: View {
     let onSaveBody: (String) async throws -> Void
     /// Checks or unchecks a task item in the description: its index and the new state.
     var onSetTask: (Int, Bool) -> Void = { _, _ in }
+    /// Set when the viewer may request reviews.
+    var reviewerActions: ReviewerRequestActions?
 
     @State private var isEditingBody = false
+    /// Room for the description and comments column beside GitHub's sidebar, plus the pane's side padding.
+    static let contentMaxWidth: CGFloat = 2 * 32 + SidebarLayout.mainMaxWidth + SidebarLayout.spacing + SidebarLayout.sidebarWidth
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack(spacing: 8) {
-                        AvatarView(login: detail.authorLogin)
-                        Text(detail.authorLogin)
-                            .prFont(.callout, weight: .semibold)
-                        Text("opened this pull request \(detail.createdAt.formatted(.relative(presentation: .named)))")
-                            .prFont(.callout)
-                            .foregroundStyle(.secondary)
-                        Spacer(minLength: 8)
-                        if detail.canEdit && !isEditingBody {
-                            Button {
-                                isEditingBody = true
-                            } label: {
-                                Image(systemName: "pencil")
-                            }
-                            .buttonStyle(QuietButtonStyle())
-                            .help("Edit description")
-                        }
-                    }
-
-                    Group {
-                        if isEditingBody {
-                            PullRequestBodyEditor(body: detail.body,
-                                                  onCancel: { isEditingBody = false },
-                                                  onSave: { body in
-                                                      try await onSaveBody(body)
-                                                      isEditingBody = false
-                                                  })
-                        } else if detail.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            Text("No description provided.")
-                                .italic()
-                                .foregroundStyle(.secondary)
-                        } else {
-                            MarkdownView(markdown: detail.body, onSetTask: detail.canEdit ? onSetTask : nil)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 16)
-                .padding(.bottom, 18)
-                .conversationCard()
-
-                if let comments {
-                    ForEach(comments) { comment in
-                        PullRequestCommentView(comment: comment)
-                            .padding(.horizontal, 20)
-                            .padding(.vertical, 15)
-                            .conversationCard()
-                    }
-                } else {
-                    ProgressView()
-                        .controlSize(.small)
-                        .frame(maxWidth: .infinity)
-                }
+            SidebarLayout {
+                mainColumn
+                PullRequestReviewersView(reviewers: detail.reviewers, actions: reviewerActions)
+                    .padding(.top, 4)
             }
             .padding(.horizontal, 32)
             .padding(.top, 20)
             .padding(.bottom, 24)
-            .frame(maxWidth: 900, alignment: .leading)
+            .frame(maxWidth: Self.contentMaxWidth, alignment: .leading)
             .background(PageScrollAnchor())
             // Fill the pane so the scroll view, and its scroller, reach the window's right edge.
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         // The comment box floats in glass over the bottom of the conversation, which scrolls under it.
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            CommentComposer(placeholder: "Leave a comment (Markdown supported)",
-                            submitTitle: "Comment",
-                            style: .floating,
-                            focusRequest: commentFocusRequest,
-                            onSubmit: onComment)
-                .frame(maxWidth: 900 - 64)
-                .padding(.horizontal, 32)
-                .padding(.bottom, 20)
-                .frame(maxWidth: 900, alignment: .leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            // An empty sidebar keeps the comment box in the main column, clear of the reviewers.
+            SidebarLayout {
+                CommentComposer(placeholder: "Leave a comment (Markdown supported)",
+                                submitTitle: "Comment",
+                                style: .floating,
+                                focusRequest: commentFocusRequest,
+                                onSubmit: onComment)
+                Color.clear.frame(height: 0)
+            }
+            .padding(.horizontal, 32)
+            .padding(.bottom, 20)
+            .frame(maxWidth: Self.contentMaxWidth, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    private var mainColumn: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 8) {
+                    AvatarView(login: detail.authorLogin)
+                    Text(detail.authorLogin)
+                        .prFont(.callout, weight: .semibold)
+                    Text("opened this pull request \(detail.createdAt.formatted(.relative(presentation: .named)))")
+                        .prFont(.callout)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 8)
+                    if detail.canEdit && !isEditingBody {
+                        Button {
+                            isEditingBody = true
+                        } label: {
+                            Image(systemName: "pencil")
+                        }
+                        .buttonStyle(QuietButtonStyle())
+                        .help("Edit description")
+                    }
+                }
+
+                Group {
+                    if isEditingBody {
+                        PullRequestBodyEditor(body: detail.body,
+                                              onCancel: { isEditingBody = false },
+                                              onSave: { body in
+                                                  try await onSaveBody(body)
+                                                  isEditingBody = false
+                                              })
+                    } else if detail.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text("No description provided.")
+                            .italic()
+                            .foregroundStyle(.secondary)
+                    } else {
+                        MarkdownView(markdown: detail.body, onSetTask: detail.canEdit ? onSetTask : nil)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 16)
+            .padding(.bottom, 18)
+            .conversationCard()
+
+            if let comments {
+                ForEach(comments) { comment in
+                    PullRequestCommentView(comment: comment)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 15)
+                        .conversationCard()
+                }
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+    }
+}
+
+/// GitHub's pull request layout: the main column with a fixed-width sidebar to its right. When the main
+/// column would get narrower than `minimumMainWidth`, the sidebar moves above it instead.
+/// Takes exactly two subviews: the main column, then the sidebar.
+struct SidebarLayout: Layout {
+    static let mainMaxWidth: CGFloat = 836
+    static let sidebarWidth: CGFloat = 220
+    static let spacing: CGFloat = 28
+    static let stackedSpacing: CGFloat = 14
+    static let minimumMainWidth: CGFloat = 420
+
+    static func showsSidebar(width: CGFloat) -> Bool {
+        width >= minimumMainWidth + spacing + sidebarWidth
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? Self.mainMaxWidth + Self.spacing + Self.sidebarWidth
+        return frames(width: width, subviews: subviews).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let frames = frames(width: bounds.width, subviews: subviews)
+        for (subview, frame) in zip(subviews, [frames.main, frames.sidebar]) {
+            subview.place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
+                          proposal: ProposedViewSize(frame.size))
+        }
+    }
+
+    private func frames(width: CGFloat, subviews: Subviews) -> (main: CGRect, sidebar: CGRect, size: CGSize) {
+        guard subviews.count == 2 else { return (.zero, .zero, .zero) }
+        func height(_ subview: LayoutSubview, width: CGFloat) -> CGFloat {
+            subview.sizeThatFits(ProposedViewSize(width: width, height: nil)).height
+        }
+        if Self.showsSidebar(width: width) {
+            let mainWidth = min(Self.mainMaxWidth, width - Self.spacing - Self.sidebarWidth)
+            let main = CGRect(x: 0, y: 0, width: mainWidth, height: height(subviews[0], width: mainWidth))
+            let sidebar = CGRect(x: mainWidth + Self.spacing, y: 0,
+                                 width: Self.sidebarWidth, height: height(subviews[1], width: Self.sidebarWidth))
+            return (main, sidebar, CGSize(width: sidebar.maxX, height: max(main.height, sidebar.height)))
+        }
+        let mainWidth = min(Self.mainMaxWidth, width)
+        let sidebar = CGRect(x: 0, y: 0, width: mainWidth, height: height(subviews[1], width: mainWidth))
+        let top = sidebar.height > 0 ? sidebar.maxY + Self.stackedSpacing : 0
+        let main = CGRect(x: 0, y: top, width: mainWidth, height: height(subviews[0], width: mainWidth))
+        return (main, sidebar, CGSize(width: mainWidth, height: main.maxY))
     }
 }
 

@@ -22,6 +22,8 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
     private var pendingReviews: [String: String] = [:]
     /// Checks rerun on each pull request, keyed by reference ID. They show as pending.
     private var rerunTargets: [String: Set<CheckRerun>] = [:]
+    /// Review requests added or removed from the detail window, in order, keyed by pull request ID.
+    private var reviewRequestChanges: [String: [(name: String, kind: PullRequestReviewer.Kind, requested: Bool)]] = [:]
 
     init(now: Date = Date(), isEmpty: Bool = false) {
         let rows = isEmpty ? [] : Self.makePullRequests().map {
@@ -109,7 +111,7 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
         let reviewAuthor = reviewRequests.rows.first { $0.id == reference.id }?.authorLogin
         let isOwn = pullRequests[reference.id] != nil || reviewAuthor == nil
         let authorLogin = isOwn ? user.login : reviewAuthor ?? user.login
-        let detail = PullRequestDetail(reference: reference,
+        var detail = PullRequestDetail(reference: reference,
                                        nodeID: nodeID,
                                        title: title,
                                        body: editedBodies[reference.id] ?? Self.detailBody,
@@ -128,6 +130,11 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
                                        isViewerAuthor: isOwn,
                                        canUpdateBranch: isOwn && !updatedBranches.contains(nodeID),
                                        updatedAt: pullRequests[reference.id]?.updatedAt)
+        detail.reviewers = (reviewRequestChanges[reference.id] ?? []).reduce(
+            Self.detailReviewers(number: reference.number, authorLogin: authorLogin)) { reviewers, change in
+            reviewers.settingRequest(name: change.name, kind: change.kind, requested: change.requested)
+        }
+        detail.canRequestReviewers = true
         let viewed = viewedFiles[nodeID] ?? []
         let files = Self.detailFiles.map { file in
             var file = file
@@ -135,6 +142,41 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
             return file
         }
         return PullRequestDetailContent(detail: detail, files: files)
+    }
+
+    /// Reviewers for the detail window, matching each pull request's review tag in the list.
+    private static func detailReviewers(number: Int, authorLogin: String) -> PullRequestReviewers {
+        typealias Review = PullRequestReviewers.Review
+        typealias Request = PullRequestReviewers.Request
+        let (decision, reviews, requests): (ReviewDecision?, [Review], [Request])
+        switch number {
+        case 101:
+            (decision, reviews, requests) = (.approved,
+                                             [Review(author: "octocat", state: "APPROVED"),
+                                              Review(author: "hubot", state: "APPROVED", onBehalfOf: ["mock/web-team"])],
+                                             [])
+        case 102:
+            // One approval in, a re-requested reviewer, and a team still to go.
+            (decision, reviews, requests) = (.reviewRequired,
+                                             [Review(author: "octocat", state: "APPROVED", onBehalfOf: ["mock/ios-team"]),
+                                              Review(author: "hubot", state: "COMMENTED"),
+                                              Review(author: "monalisa", state: "COMMENTED")],
+                                             [Request(name: "hubot", kind: .user, asCodeOwner: true),
+                                              Request(name: "mock/web-team", kind: .team)])
+        case 107:
+            (decision, reviews, requests) = (.changesRequested,
+                                             [Review(author: "hubot", state: "APPROVED"),
+                                              Review(author: "monalisa", state: "CHANGES_REQUESTED")],
+                                             [])
+        case 108:
+            (decision, reviews, requests) = (.reviewRequired, [], [])
+        case 113:
+            (decision, reviews, requests) = (.reviewRequired, [Review(author: "hubot", state: "DISMISSED")],
+                                             [Request(name: "octocat", kind: .user)])
+        default:
+            return .none
+        }
+        return PullRequestReviewers(decision: decision, reviews: reviews, requests: requests, authorLogin: authorLogin)
     }
 
     func setFileViewed(token: String, pullRequestID: String, path: String, viewed: Bool) async throws {
@@ -430,6 +472,30 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
     }
 
     /// Like GitHub, the rerun checks start over as pending.
+    func fetchReviewerCandidates(token: String, reference: PullRequestReference, query: String) async throws -> [ReviewerCandidate] {
+        let author = locked { makeDetail(reference: reference).detail.authorLogin }
+        let users = Self.reviewerCandidates.filter {
+            query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) || $0.detail?.localizedCaseInsensitiveContains(query) == true
+        }
+        return ReviewerCandidate.merged(suggested: [ReviewerCandidate(name: "octocat", kind: .user, detail: "The Octocat", isSuggested: true)],
+                                        users: users.filter { $0.kind == .user },
+                                        teams: users.filter { $0.kind == .team },
+                                        query: query, authorLogin: author)
+    }
+
+    func setReviewRequested(token: String, reference: PullRequestReference, name: String,
+                            kind: PullRequestReviewer.Kind, requested: Bool) async throws {
+        locked { reviewRequestChanges[reference.id, default: []].append((name, kind, requested)) }
+    }
+
+    private static let reviewerCandidates = [
+        ReviewerCandidate(name: "hubot", kind: .user, detail: "Hubot"),
+        ReviewerCandidate(name: "monalisa", kind: .user, detail: "Mona Lisa Octocat"),
+        ReviewerCandidate(name: "octocat", kind: .user, detail: "The Octocat"),
+        ReviewerCandidate(name: "mock/ios-team", kind: .team, detail: "iOS team"),
+        ReviewerCandidate(name: "mock/web-team", kind: .team, detail: "Web team")
+    ]
+
     func rerunChecks(token: String, repoFullName: String, rerun: CheckRerun) async throws {
         locked {
             for id in pullRequests.keys where id.hasPrefix("\(repoFullName)#") {
