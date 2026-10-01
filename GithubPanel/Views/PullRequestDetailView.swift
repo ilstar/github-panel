@@ -719,76 +719,44 @@ struct PullRequestConversationView: View {
     var onSetTask: (Int, Bool) -> Void = { _, _ in }
 
     @State private var isEditingBody = false
-    @State private var paneWidth: CGFloat = 0
-
-    /// The description and comments column, as wide as it was before the sidebar.
-    static let mainColumnMaxWidth: CGFloat = 836
-    /// GitHub's sidebar sits beside the description at a fixed width.
-    static let sidebarWidth: CGFloat = 220
-    static let sidebarSpacing: CGFloat = 28
-    static let horizontalPadding: CGFloat = 32
-    /// Below this the description would get too narrow, so the sidebar moves above it, as on GitHub's narrow layout.
-    static let minimumMainColumnWidth: CGFloat = 420
-
-    static func showsSidebar(paneWidth: CGFloat) -> Bool {
-        paneWidth >= 2 * horizontalPadding + minimumMainColumnWidth + sidebarSpacing + sidebarWidth
-    }
-
-    private var showsSidebar: Bool { Self.showsSidebar(paneWidth: paneWidth) }
-
-    private var contentMaxWidth: CGFloat {
-        2 * Self.horizontalPadding + Self.mainColumnMaxWidth + (showsSidebar ? Self.sidebarSpacing + Self.sidebarWidth : 0)
-    }
+    /// Room for the description and comments column beside GitHub's sidebar, plus the pane's side padding.
+    static let contentMaxWidth: CGFloat = 2 * 32 + SidebarLayout.mainMaxWidth + SidebarLayout.spacing + SidebarLayout.sidebarWidth
 
     var body: some View {
         ScrollView {
-            HStack(alignment: .top, spacing: Self.sidebarSpacing) {
+            SidebarLayout {
                 mainColumn
-                    .frame(maxWidth: Self.mainColumnMaxWidth, alignment: .leading)
-                if showsSidebar {
-                    sidebar
-                        .frame(width: Self.sidebarWidth)
-                }
+                PullRequestReviewersView(reviewers: detail.reviewers)
+                    .padding(.top, 4)
             }
-            .padding(.horizontal, Self.horizontalPadding)
+            .padding(.horizontal, 32)
             .padding(.top, 20)
             .padding(.bottom, 24)
-            .frame(maxWidth: contentMaxWidth, alignment: .leading)
+            .frame(maxWidth: Self.contentMaxWidth, alignment: .leading)
             .background(PageScrollAnchor())
             // Fill the pane so the scroll view, and its scroller, reach the window's right edge.
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(GeometryReader { proxy in
-            Color.clear.preference(key: ConversationPaneWidthKey.self, value: proxy.size.width)
-        })
-        .onPreferenceChange(ConversationPaneWidthKey.self) { paneWidth = $0 }
         // The comment box floats in glass over the bottom of the conversation, which scrolls under it.
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            CommentComposer(placeholder: "Leave a comment (Markdown supported)",
-                            submitTitle: "Comment",
-                            style: .floating,
-                            focusRequest: commentFocusRequest,
-                            onSubmit: onComment)
-                .frame(maxWidth: Self.mainColumnMaxWidth)
-                .padding(.leading, Self.horizontalPadding)
-                .padding(.trailing, Self.horizontalPadding + (showsSidebar ? Self.sidebarSpacing + Self.sidebarWidth : 0))
-                .padding(.bottom, 20)
-                .frame(maxWidth: contentMaxWidth, alignment: .leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            // An empty sidebar keeps the comment box in the main column, clear of the reviewers.
+            SidebarLayout {
+                CommentComposer(placeholder: "Leave a comment (Markdown supported)",
+                                submitTitle: "Comment",
+                                style: .floating,
+                                focusRequest: commentFocusRequest,
+                                onSubmit: onComment)
+                Color.clear.frame(height: 0)
+            }
+            .padding(.horizontal, 32)
+            .padding(.bottom, 20)
+            .frame(maxWidth: Self.contentMaxWidth, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-    }
-
-    private var sidebar: some View {
-        PullRequestReviewersView(reviewers: detail.reviewers)
-            .padding(.top, 4)
     }
 
     private var mainColumn: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if !showsSidebar {
-                sidebar
-            }
-
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 8) {
                     AvatarView(login: detail.authorLogin)
@@ -848,11 +816,50 @@ struct PullRequestConversationView: View {
     }
 }
 
-private struct ConversationPaneWidthKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
+/// GitHub's pull request layout: the main column with a fixed-width sidebar to its right. When the main
+/// column would get narrower than `minimumMainWidth`, the sidebar moves above it instead.
+/// Takes exactly two subviews: the main column, then the sidebar.
+struct SidebarLayout: Layout {
+    static let mainMaxWidth: CGFloat = 836
+    static let sidebarWidth: CGFloat = 220
+    static let spacing: CGFloat = 28
+    static let stackedSpacing: CGFloat = 14
+    static let minimumMainWidth: CGFloat = 420
 
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
+    static func showsSidebar(width: CGFloat) -> Bool {
+        width >= minimumMainWidth + spacing + sidebarWidth
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? Self.mainMaxWidth + Self.spacing + Self.sidebarWidth
+        return frames(width: width, subviews: subviews).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let frames = frames(width: bounds.width, subviews: subviews)
+        for (subview, frame) in zip(subviews, [frames.main, frames.sidebar]) {
+            subview.place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
+                          proposal: ProposedViewSize(frame.size))
+        }
+    }
+
+    private func frames(width: CGFloat, subviews: Subviews) -> (main: CGRect, sidebar: CGRect, size: CGSize) {
+        guard subviews.count == 2 else { return (.zero, .zero, .zero) }
+        func height(_ subview: LayoutSubview, width: CGFloat) -> CGFloat {
+            subview.sizeThatFits(ProposedViewSize(width: width, height: nil)).height
+        }
+        if Self.showsSidebar(width: width) {
+            let mainWidth = min(Self.mainMaxWidth, width - Self.spacing - Self.sidebarWidth)
+            let main = CGRect(x: 0, y: 0, width: mainWidth, height: height(subviews[0], width: mainWidth))
+            let sidebar = CGRect(x: mainWidth + Self.spacing, y: 0,
+                                 width: Self.sidebarWidth, height: height(subviews[1], width: Self.sidebarWidth))
+            return (main, sidebar, CGSize(width: sidebar.maxX, height: max(main.height, sidebar.height)))
+        }
+        let mainWidth = min(Self.mainMaxWidth, width)
+        let sidebar = CGRect(x: 0, y: 0, width: mainWidth, height: height(subviews[1], width: mainWidth))
+        let top = sidebar.height > 0 ? sidebar.maxY + Self.stackedSpacing : 0
+        let main = CGRect(x: 0, y: top, width: mainWidth, height: height(subviews[0], width: mainWidth))
+        return (main, sidebar, CGSize(width: mainWidth, height: main.maxY))
     }
 }
 
