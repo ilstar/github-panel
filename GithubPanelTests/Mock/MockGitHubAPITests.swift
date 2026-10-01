@@ -49,6 +49,22 @@ final class MockGitHubAPITests: XCTestCase {
         XCTAssertEqual(reviewers.reviewers.map(\.state), [.pending, .pending, .commented, .approved])
     }
 
+    func testMockRequestsAndRemovesReviewers() async throws {
+        let api = MockGitHubAPI()
+        let reference = PullRequestReference(repoFullName: "mock/github-panel", number: 101)
+        let candidates = try await api.fetchReviewerCandidates(token: "token", reference: reference, query: "team")
+        XCTAssertEqual(candidates.map(\.name), ["mock/ios-team", "mock/web-team"])
+
+        try await api.setReviewRequested(token: "token", reference: reference, name: "mock/ios-team", kind: .team, requested: true)
+        var detail = try await api.fetchPullRequestDetail(token: "token", reference: reference).detail
+        XCTAssertTrue(detail.canRequestReviewers)
+        XCTAssertTrue(detail.reviewers.isRequested("team:mock/ios-team"))
+
+        try await api.setReviewRequested(token: "token", reference: reference, name: "mock/ios-team", kind: .team, requested: false)
+        detail = try await api.fetchPullRequestDetail(token: "token", reference: reference).detail
+        XCTAssertFalse(detail.reviewers.isRequested("team:mock/ios-team"))
+    }
+
     func testMockEditsOwnPullRequestsOnly() async throws {
         let api = MockGitHubAPI()
         let own = PullRequestReference(repoFullName: "mock/github-panel", number: 109)

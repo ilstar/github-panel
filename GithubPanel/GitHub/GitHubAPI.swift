@@ -261,6 +261,67 @@ final class GitHubAPI: GitHubAPIClient {
         return true
     }
 
+    func fetchReviewerCandidates(token: String, reference: PullRequestReference, query: String) async throws -> [ReviewerCandidate] {
+        let (owner, name) = try repoParts(reference.repoFullName)
+        struct UsersResponse: Decodable {
+            struct User: Decodable { let login: String; let name: String? }
+            struct Suggestion: Decodable { let reviewer: User }
+            struct Author: Decodable { let login: String }
+            struct PullRequest: Decodable { let author: Author?; let suggestedReviewers: [Suggestion?] }
+            struct Users: Decodable { let nodes: [User?] }
+            struct Repository: Decodable { let pullRequest: PullRequest?; let assignableUsers: Users }
+            let repository: Repository?
+        }
+        // People with access to the repository, which is who GitHub lets you request.
+        let users = try await graphQL(UsersResponse.self, query: """
+        query($owner: String!, $name: String!, $number: Int!, $query: String!) {
+          repository(owner: $owner, name: $name) {
+            pullRequest(number: $number) { author { login } suggestedReviewers { reviewer { login name } } }
+            assignableUsers(query: $query, first: 20) { nodes { login name } }
+          }
+        }
+        """, variables: ["owner": owner, "name": name, "number": reference.number, "query": query], token: token)
+        struct TeamsResponse: Decodable {
+            struct Team: Decodable { let combinedSlug: String; let name: String }
+            struct Teams: Decodable { let nodes: [Team?] }
+            struct Organization: Decodable { let teams: Teams }
+            let organization: Organization?
+        }
+        // Only organizations have teams, and listing them can need more access than the token has, so users still show without them.
+        let teams = try? await graphQL(TeamsResponse.self, query: """
+        query($owner: String!, $query: String!) {
+          organization(login: $owner) { teams(query: $query, first: 10) { nodes { combinedSlug name } } }
+        }
+        """, variables: ["owner": owner, "query": query], token: token)
+        return ReviewerCandidate.merged(
+            suggested: (users.repository?.pullRequest?.suggestedReviewers ?? []).compactMap { $0 }.map {
+                ReviewerCandidate(name: $0.reviewer.login, kind: .user, detail: $0.reviewer.name, isSuggested: true)
+            },
+            users: (users.repository?.assignableUsers.nodes ?? []).compactMap { $0 }.map {
+                ReviewerCandidate(name: $0.login, kind: .user, detail: $0.name)
+            },
+            teams: (teams?.organization?.teams.nodes ?? []).compactMap { $0 }.map {
+                ReviewerCandidate(name: $0.combinedSlug, kind: .team, detail: $0.name)
+            },
+            query: query,
+            authorLogin: users.repository?.pullRequest?.author?.login ?? "")
+    }
+
+    func setReviewRequested(token: String, reference: PullRequestReference, name: String,
+                            kind: PullRequestReviewer.Kind, requested: Bool) async throws {
+        let (owner, repo) = try repoParts(reference.repoFullName)
+        var request = makeRequest(path: "/repos/\(owner)/\(repo)/pulls/\(reference.number)/requested_reviewers", token: token)
+        request.httpMethod = requested ? "POST" : "DELETE"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // The REST API names a team by its slug alone; the organization is the repository's.
+        let fields = kind == .team
+            ? ["team_reviewers": [String(name.split(separator: "/").last ?? Substring(name))]]
+            : ["reviewers": [name]]
+        request.httpBody = try JSONSerialization.data(withJSONObject: fields)
+        struct Updated: Decodable { let number: Int }
+        _ = try await decode(Updated.self, request: request)
+    }
+
     func fetchPullRequestDetail(token: String, reference: PullRequestReference) async throws -> PullRequestDetailContent {
         let parts = reference.repoFullName.split(separator: "/", maxSplits: 1).map(String.init)
         guard parts.count == 2 else { throw URLError(.badURL) }
@@ -283,6 +344,7 @@ final class GitHubAPI: GitHubAPIClient {
         detail.isViewerAuthor = viewer?.isAuthor ?? false
         detail.canUpdateBranch = (detail.state == .open || detail.state == .draft) && viewer?.canUpdateBranch == true
         detail.reviewers = viewer?.reviewers ?? .none
+        detail.canRequestReviewers = (detail.state == .open || detail.state == .draft) && viewer?.canRequestReviewers == true
         return PullRequestDetailContent(detail: detail,
                                         files: files.map { file in
                                             var file = file.file
@@ -646,10 +708,11 @@ final class GitHubAPI: GitHubAPIClient {
     /// GitHub reports files changed since they were viewed as `DISMISSED`, not `VIEWED`.
     /// `viewerCanUpdateBranch` is false when the branch is up to date. GitHub shows the button only when the repository
     /// suggests updating branches, or when its rules require an up-to-date branch, which makes the merge state `BEHIND`.
-    private func fetchViewerState(token: String, owner: String, name: String, number: Int) async throws -> (viewedFiles: Set<String>, canEdit: Bool, isAuthor: Bool, canUpdateBranch: Bool, reviewers: PullRequestReviewers) {
+    private func fetchViewerState(token: String, owner: String, name: String, number: Int) async throws -> (viewedFiles: Set<String>, canEdit: Bool, isAuthor: Bool, canUpdateBranch: Bool, reviewers: PullRequestReviewers, canRequestReviewers: Bool) {
         let query = """
         query($owner: String!, $name: String!, $number: Int!) {
           repository(owner: $owner, name: $name) {
+            viewerPermission
             pullRequest(number: $number) {
               viewerDidAuthor
               viewerCanUpdate
@@ -688,7 +751,8 @@ final class GitHubAPI: GitHubAPIClient {
         let suggestsUpdate = pullRequest?.baseRepository?.allowUpdateBranch == true || pullRequest?.mergeStateStatus == "BEHIND"
         let canUpdateBranch = pullRequest?.viewerCanUpdateBranch == true && suggestsUpdate
         return (Set(nodes.filter { $0.viewerViewedState == "VIEWED" }.map(\.path)), canEdit, isAuthor, canUpdateBranch,
-                pullRequest?.reviewers ?? .none)
+                pullRequest?.reviewers ?? .none,
+                ["ADMIN", "MAINTAIN", "WRITE", "TRIAGE"].contains(response.repository?.viewerPermission ?? ""))
     }
 
     private func repoParts(_ repoFullName: String) throws -> (owner: String, name: String) {
@@ -945,7 +1009,10 @@ private struct PullFileResponse: Decodable {
 }
 
 private struct ViewerStateResponse: Decodable {
-    struct Repository: Decodable { let pullRequest: PullRequest? }
+    struct Repository: Decodable {
+        var viewerPermission: String?
+        let pullRequest: PullRequest?
+    }
     struct PullRequest: Decodable {
         let viewerDidAuthor: Bool?
         let viewerCanUpdate: Bool?

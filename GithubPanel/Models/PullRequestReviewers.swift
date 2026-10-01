@@ -27,7 +27,11 @@ struct PullRequestReviewer: Identifiable, Equatable {
     /// For a re-requested reviewer, the verdict of their earlier review.
     var previousState: State?
 
-    var id: String { "\(kind == .team ? "team" : "user"):\(name.lowercased())" }
+    var id: String { Self.id(name: name, kind: kind) }
+
+    static func id(name: String, kind: Kind) -> String {
+        "\(kind == .team ? "team" : "user"):\(name.lowercased())"
+    }
 
     /// GitHub's tooltip for the reviewer's status icon.
     var helpText: String {
@@ -124,6 +128,31 @@ struct PullRequestReviewers: Equatable {
         }
     }
 
+    /// Whether the user or team has an open review request.
+    func isRequested(_ id: String) -> Bool {
+        reviewers.contains { $0.id == id && $0.state == .pending }
+    }
+
+    /// The list once GitHub accepts a new review request, or a removed one, before it reloads.
+    /// A removed request brings back the reviewer's earlier verdict, if they had one.
+    func settingRequest(name: String, kind: PullRequestReviewer.Kind, requested: Bool) -> PullRequestReviewers {
+        let id = PullRequestReviewer.id(name: name, kind: kind)
+        let existing = reviewers.first { $0.id == id }
+        var reviewers = reviewers.filter { $0.id != id }
+        if requested {
+            let previousState = existing?.state == .pending ? existing?.previousState : existing?.state
+            reviewers.append(PullRequestReviewer(name: existing?.name ?? name, kind: kind, state: .pending,
+                                                 isCodeOwner: existing?.isCodeOwner ?? false,
+                                                 previousState: previousState))
+        } else if let existing, existing.state != .pending {
+            reviewers.append(existing)
+        } else if let existing, let previousState = existing.previousState {
+            reviewers.append(PullRequestReviewer(name: existing.name, kind: kind, state: previousState))
+        }
+        return PullRequestReviewers(decision: decision,
+                                    reviewers: reviewers.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending })
+    }
+
     var approvals: Int { reviewers.filter { $0.state == .approved }.count }
     var changeRequests: Int { reviewers.filter { $0.state == .changesRequested }.count }
     var pendingCount: Int { reviewers.filter { $0.state == .pending }.count }
@@ -151,5 +180,31 @@ struct PullRequestReviewers: Equatable {
         guard count > 0 else { return nil }
         let text = "\(count) \(noun)\(count == 1 ? "" : "s")"
         return suffix.map { "\(text) \($0)" } ?? text
+    }
+}
+
+/// A user or team the reviewer picker offers.
+struct ReviewerCandidate: Identifiable, Equatable {
+    /// A login, or `org/team-slug` for a team.
+    let name: String
+    let kind: PullRequestReviewer.Kind
+    /// The user's full name or the team's display name.
+    var detail: String?
+    /// GitHub suggests them, usually because they recently changed the same files.
+    var isSuggested = false
+
+    var id: String { PullRequestReviewer.id(name: name, kind: kind) }
+
+    /// Suggestions first, then users and teams, each once, leaving out the author, who cannot review their own pull request.
+    /// Suggestions only stay when they match the search, since GitHub returns them whatever was typed.
+    static func merged(suggested: [ReviewerCandidate], users: [ReviewerCandidate], teams: [ReviewerCandidate],
+                       query: String, authorLogin: String) -> [ReviewerCandidate] {
+        let query = query.trimmingCharacters(in: .whitespaces)
+        let matching = suggested.filter { candidate in
+            query.isEmpty || candidate.name.localizedCaseInsensitiveContains(query)
+                || candidate.detail?.localizedCaseInsensitiveContains(query) == true
+        }
+        var seen: Set<String> = [PullRequestReviewer.id(name: authorLogin, kind: .user)]
+        return (matching + users + teams).filter { seen.insert($0.id).inserted }
     }
 }

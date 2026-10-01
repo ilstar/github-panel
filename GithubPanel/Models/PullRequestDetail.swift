@@ -56,6 +56,8 @@ struct PullRequestDetail: Equatable {
     var updatedAt: Date?
     /// Who was asked to review and how each reviewer responded. Empty when GitHub does not return them.
     var reviewers = PullRequestReviewers.none
+    /// Whether the viewer may request reviews: GitHub allows it with triage access or more, while the pull request is open.
+    var canRequestReviewers = false
 
     var offersUpdateBranch: Bool { isViewerAuthor && canUpdateBranch }
 }

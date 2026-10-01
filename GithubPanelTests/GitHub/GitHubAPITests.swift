@@ -546,6 +546,81 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertTrue(query.contains("... on Team { combinedSlug }"))
     }
 
+    func testFetchPullRequestDetailAllowsRequestingReviewersWithTriageAccess() async throws {
+        let cases: [(permission: String, state: String, allowed: Bool)] = [
+            ("WRITE", "open", true), ("TRIAGE", "open", true), ("ADMIN", "open", true),
+            ("READ", "open", false), ("WRITE", "closed", false)
+        ]
+        for testCase in cases {
+            let transport = MockHTTPTransport()
+            transport.enqueue(json: pullDetailResponse.replacingOccurrences(of: #""state":"open""#,
+                                                                            with: #""state":"\#(testCase.state)""#),
+                              path: pullPath)
+            transport.enqueue(json: "[]", path: filesPath)
+            transport.enqueue(json: #"{"data":{"repository":{"viewerPermission":"\#(testCase.permission)","pullRequest":{"files":{"nodes":[]}}}}}"#,
+                              path: "/graphql")
+
+            let content = try await GitHubAPI(transport: transport)
+                .fetchPullRequestDetail(token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7))
+
+            XCTAssertEqual(content.detail.canRequestReviewers, testCase.allowed, "\(testCase)")
+        }
+    }
+
+    func testFetchReviewerCandidatesMergesSuggestionsUsersAndTeams() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: #"""
+        {"data":{"repository":{
+          "pullRequest":{"author":{"login":"octocat"},"suggestedReviewers":[{"reviewer":{"login":"hubot","name":"Hubot"}}]},
+          "assignableUsers":{"nodes":[{"login":"octocat","name":null},{"login":"hubot","name":"Hubot"},{"login":"monalisa","name":"Mona"}]}
+        }}}
+        """#)
+        transport.enqueue(json: #"{"data":{"organization":{"teams":{"nodes":[{"combinedSlug":"acme/web","name":"Web"}]}}}}"#)
+
+        let candidates = try await GitHubAPI(transport: transport)
+            .fetchReviewerCandidates(token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7), query: "")
+
+        XCTAssertEqual(candidates, [
+            ReviewerCandidate(name: "hubot", kind: .user, detail: "Hubot", isSuggested: true),
+            ReviewerCandidate(name: "monalisa", kind: .user, detail: "Mona"),
+            ReviewerCandidate(name: "acme/web", kind: .team, detail: "Web")
+        ])
+        let users = try transport.graphQLBody(at: 0)
+        XCTAssertTrue(users.query.contains("assignableUsers(query: $query, first: 20)"))
+        XCTAssertEqual(users.variables["query"] as? String, "")
+        XCTAssertEqual(users.variables["number"] as? Int, 7)
+        let teams = try transport.graphQLBody(at: 1)
+        XCTAssertTrue(teams.query.contains("organization(login: $owner)"))
+        XCTAssertEqual(teams.variables["owner"] as? String, "acme")
+    }
+
+    func testFetchReviewerCandidatesKeepsUsersWhenTeamsFail() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: #"{"data":{"repository":{"pullRequest":null,"assignableUsers":{"nodes":[{"login":"hubot","name":null}]}}}}"#)
+        transport.enqueue(json: #"{"data":{"organization":null},"errors":[{"message":"Could not resolve to an Organization"}]}"#)
+
+        let candidates = try await GitHubAPI(transport: transport)
+            .fetchReviewerCandidates(token: "token", reference: PullRequestReference(repoFullName: "octocat/widgets", number: 7), query: "hu")
+
+        XCTAssertEqual(candidates.map(\.name), ["hubot"])
+    }
+
+    func testSetReviewRequestedPostsUsersAndDeletesTeamsBySlug() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: #"{"number":7}"#)
+        transport.enqueue(json: #"{"number":7}"#)
+        let api = GitHubAPI(transport: transport)
+        let reference = PullRequestReference(repoFullName: "acme/widgets", number: 7)
+
+        try await api.setReviewRequested(token: "token", reference: reference, name: "hubot", kind: .user, requested: true)
+        try await api.setReviewRequested(token: "token", reference: reference, name: "acme/web", kind: .team, requested: false)
+
+        XCTAssertEqual(transport.requests.map(\.httpMethod), ["POST", "DELETE"])
+        XCTAssertEqual(transport.requests.map { $0.url?.path }, Array(repeating: "/repos/acme/widgets/pulls/7/requested_reviewers", count: 2))
+        XCTAssertEqual(transport.requests[0].jsonBody?["reviewers"] as? [String], ["hubot"])
+        XCTAssertEqual(transport.requests[1].jsonBody?["team_reviewers"] as? [String], ["web"])
+    }
+
     func testCodeOwnersUsesBaseBranchPrecedenceAndTeamMembership() async throws {
         let transport = MockHTTPTransport()
         transport.enqueue(json: pullDetailResponse, path: pullPath)

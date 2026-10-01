@@ -616,6 +616,20 @@ final class PRMonitor: ObservableObject {
         await requireFreshRefresh(for: session)
     }
 
+    func fetchReviewerCandidates(_ reference: PullRequestReference, query: String) async throws -> [ReviewerCandidate] {
+        guard let token = loadSessionToken() else { throw MissingTokenError() }
+        return try await api.fetchReviewerCandidates(token: token, reference: reference, query: query)
+    }
+
+    /// Requests a review, or removes a request, then refreshes the list, whose review tag can change.
+    func setReviewRequested(_ name: String, kind: PullRequestReviewer.Kind, requested: Bool,
+                            on reference: PullRequestReference) async throws {
+        guard let token = loadSessionToken() else { throw MissingTokenError() }
+        let session = credentialSession
+        try await api.setReviewRequested(token: token, reference: reference, name: name, kind: kind, requested: requested)
+        await requireFreshRefresh(for: session)
+    }
+
     func fetchPullRequestChecks(_ reference: PullRequestReference) async throws -> PullRequestChecks {
         guard let token = loadSessionToken() else { throw MissingTokenError() }
         return try await api.fetchPullRequestChecks(token: token, reference: reference)

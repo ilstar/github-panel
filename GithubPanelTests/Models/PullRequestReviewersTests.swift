@@ -82,4 +82,43 @@ final class PullRequestReviewersTests: XCTestCase {
         XCTAssertEqual(PullRequestReviewer(name: "a", kind: .user, state: .commented).helpText, "a left review comments")
         XCTAssertEqual(PullRequestReviewer(name: "a", kind: .user, state: .dismissed).helpText, "a's review was dismissed")
     }
+
+    func testRequestingAddsAWaitingReviewerAndRemovingTakesItBack() {
+        let start = PullRequestReviewers(decision: .reviewRequired,
+                                         reviewers: [PullRequestReviewer(name: "hubot", kind: .user, state: .approved)])
+
+        let requested = start.settingRequest(name: "acme/web", kind: .team, requested: true)
+        XCTAssertEqual(requested.reviewers.map(\.name), ["acme/web", "hubot"])
+        XCTAssertTrue(requested.isRequested("team:acme/web"))
+        XCTAssertEqual(requested.decision, .reviewRequired)
+
+        XCTAssertEqual(requested.settingRequest(name: "acme/web", kind: .team, requested: false), start)
+    }
+
+    func testReRequestingKeepsTheEarlierVerdictAndRemovingRestoresIt() {
+        let start = PullRequestReviewers(decision: nil,
+                                         reviewers: [PullRequestReviewer(name: "hubot", kind: .user, state: .approved)])
+
+        let reRequested = start.settingRequest(name: "hubot", kind: .user, requested: true)
+        XCTAssertEqual(reRequested.reviewers, [PullRequestReviewer(name: "hubot", kind: .user, state: .pending,
+                                                                   previousState: .approved)])
+        XCTAssertEqual(reRequested.settingRequest(name: "hubot", kind: .user, requested: false), start)
+        // Removing a request nobody made leaves an earlier review alone.
+        XCTAssertEqual(start.settingRequest(name: "hubot", kind: .user, requested: false), start)
+    }
+
+    func testCandidatesPutMatchingSuggestionsFirstAndLeaveOutTheAuthorAndRepeats() {
+        let suggested = [ReviewerCandidate(name: "hubot", kind: .user, detail: "Hubot", isSuggested: true),
+                         ReviewerCandidate(name: "monalisa", kind: .user, isSuggested: true)]
+        let users = [ReviewerCandidate(name: "Hubot", kind: .user),
+                     ReviewerCandidate(name: "octocat", kind: .user),
+                     ReviewerCandidate(name: "carol", kind: .user)]
+        let teams = [ReviewerCandidate(name: "acme/hub", kind: .team)]
+
+        let merged = ReviewerCandidate.merged(suggested: suggested, users: users, teams: teams, query: "hub", authorLogin: "OCTOCAT")
+
+        XCTAssertEqual(merged.map(\.name), ["hubot", "carol", "acme/hub"])
+        XCTAssertEqual(merged.map(\.isSuggested), [true, false, false])
+        XCTAssertEqual(ReviewerCandidate.merged(suggested: suggested, users: [], teams: [], query: "", authorLogin: "x").count, 2)
+    }
 }

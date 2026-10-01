@@ -83,7 +83,13 @@ struct PullRequestDetailView: View {
                                                 onSaveBody: { body in try await viewModel.edit(body: body) },
                                                 onSetTask: { index, checked in
                                                     Task { await viewModel.setTask(index, checked: checked) }
-                                                })
+                                                },
+                                                reviewerActions: content.detail.canRequestReviewers ? ReviewerRequestActions(
+                                                    inFlight: viewModel.reviewRequestsInFlight,
+                                                    loadCandidates: { query in try await viewModel.reviewerCandidates(matching: query) },
+                                                    setRequested: { name, kind, requested in
+                                                        Task { await viewModel.setReviewRequested(name, kind: kind, requested: requested) }
+                                                    }) : nil)
                 case .files:
                     PullRequestFilesView(viewModel: viewModel,
                                          files: content.files,
@@ -717,6 +723,8 @@ struct PullRequestConversationView: View {
     let onSaveBody: (String) async throws -> Void
     /// Checks or unchecks a task item in the description: its index and the new state.
     var onSetTask: (Int, Bool) -> Void = { _, _ in }
+    /// Set when the viewer may request reviews.
+    var reviewerActions: ReviewerRequestActions?
 
     @State private var isEditingBody = false
     /// Room for the description and comments column beside GitHub's sidebar, plus the pane's side padding.
@@ -726,7 +734,7 @@ struct PullRequestConversationView: View {
         ScrollView {
             SidebarLayout {
                 mainColumn
-                PullRequestReviewersView(reviewers: detail.reviewers)
+                PullRequestReviewersView(reviewers: detail.reviewers, actions: reviewerActions)
                     .padding(.top, 4)
             }
             .padding(.horizontal, 32)

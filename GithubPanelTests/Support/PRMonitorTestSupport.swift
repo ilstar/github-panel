@@ -58,6 +58,10 @@ final class FakeGitHubAPI: GitHubAPIClient {
     private(set) var submitPendingReviewCalls: [(token: String, reviewID: String, event: PullRequestReviewEvent, body: String)] = []
     private(set) var deletePendingReviewCalls: [(token: String, reviewID: String)] = []
     var checks: PullRequestChecks = .empty
+    var reviewerCandidates: [ReviewerCandidate] = []
+    private(set) var reviewerCandidateCalls: [(token: String, reference: PullRequestReference, query: String)] = []
+    private(set) var setReviewRequestedCalls: [(token: String, reference: PullRequestReference, name: String,
+                                                kind: PullRequestReviewer.Kind, requested: Bool)] = []
     private(set) var checksCalls: [(token: String, reference: PullRequestReference)] = []
     private(set) var rerunCalls: [(token: String, repoFullName: String, rerun: CheckRerun)] = []
     var enableHandler: ((String) async -> Void)?
@@ -201,6 +205,18 @@ final class FakeGitHubAPI: GitHubAPIClient {
     func rerunChecks(token: String, repoFullName: String, rerun: CheckRerun) async throws {
         if let error { throw error }
         rerunCalls.append((token, repoFullName, rerun))
+    }
+
+    func fetchReviewerCandidates(token: String, reference: PullRequestReference, query: String) async throws -> [ReviewerCandidate] {
+        if let error { throw error }
+        reviewerCandidateCalls.append((token, reference, query))
+        return reviewerCandidates
+    }
+
+    func setReviewRequested(token: String, reference: PullRequestReference, name: String,
+                            kind: PullRequestReviewer.Kind, requested: Bool) async throws {
+        if let error { throw error }
+        setReviewRequestedCalls.append((token, reference, name, kind, requested))
     }
 }
 

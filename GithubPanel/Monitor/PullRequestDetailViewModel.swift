@@ -27,6 +27,10 @@ final class PullRequestDetailViewModel: ObservableObject {
     typealias FetchChecks = (PullRequestReference) async throws -> PullRequestChecks
     /// Runs failed checks again in the given repository.
     typealias RerunChecks = (CheckRerun, String) async throws -> Void
+    /// Users and teams the reviewer picker offers for a search.
+    typealias FetchReviewerCandidates = (PullRequestReference, String) async throws -> [ReviewerCandidate]
+    /// Requests a review from a user or team, or removes the request: its name, kind, and whether it is requested.
+    typealias SetReviewRequested = (PullRequestReference, String, PullRequestReviewer.Kind, Bool) async throws -> Void
 
     let reference: PullRequestReference
     /// The last loaded content. Kept when a reload fails so the window does not go blank.
@@ -49,6 +53,8 @@ final class PullRequestDetailViewModel: ObservableObject {
     @Published private(set) var checks: PullRequestChecks?
     /// Reruns GitHub has not answered yet, so their buttons cannot be pressed twice.
     @Published private(set) var rerunsInFlight: Set<CheckRerun> = []
+    /// Reviewers whose request is being added or removed, by `PullRequestReviewer.id`.
+    @Published private(set) var reviewRequestsInFlight: Set<String> = []
 
     private let fetch: Fetch
     private let syncViewed: SetViewed
@@ -64,6 +70,8 @@ final class PullRequestDetailViewModel: ObservableObject {
     private let sendDeletePendingReview: DeletePendingReview
     private let fetchChecks: FetchChecks
     private let sendRerun: RerunChecks
+    private let fetchCandidates: FetchReviewerCandidates
+    private let sendReviewRequest: SetReviewRequested
     /// The pending review started here, until the comments reload with it. Keeps a failed reload from starting a second one.
     private var startedReviewID: String?
     private let cache: PullRequestDetailCache?
@@ -92,6 +100,8 @@ final class PullRequestDetailViewModel: ObservableObject {
          deletePendingReview: @escaping DeletePendingReview = { _ in },
          fetchChecks: @escaping FetchChecks = { _ in .empty },
          rerunChecks: @escaping RerunChecks = { _, _ in },
+         fetchReviewerCandidates: @escaping FetchReviewerCandidates = { _, _ in [] },
+         setReviewRequested: @escaping SetReviewRequested = { _, _, _, _ in },
          cache: PullRequestDetailCache? = nil) {
         self.reference = reference
         self.fetch = fetch
@@ -108,6 +118,8 @@ final class PullRequestDetailViewModel: ObservableObject {
         self.sendDeletePendingReview = deletePendingReview
         self.fetchChecks = fetchChecks
         self.sendRerun = rerunChecks
+        self.fetchCandidates = fetchReviewerCandidates
+        self.sendReviewRequest = setReviewRequested
         self.cache = cache
         if let cached = cache?.entry(for: reference) {
             apply(cached.content)
@@ -155,6 +167,12 @@ final class PullRequestDetailViewModel: ObservableObject {
                   fetchChecks: { [monitor] reference in try await monitor.fetchPullRequestChecks(reference) },
                   rerunChecks: { [monitor] rerun, repoFullName in
                       try await monitor.rerunChecks(rerun, in: repoFullName)
+                  },
+                  fetchReviewerCandidates: { [monitor] reference, query in
+                      try await monitor.fetchReviewerCandidates(reference, query: query)
+                  },
+                  setReviewRequested: { [monitor] reference, name, kind, requested in
+                      try await monitor.setReviewRequested(name, kind: kind, requested: requested, on: reference)
                   },
                   cache: monitor.detailCache)
     }
@@ -376,6 +394,36 @@ final class PullRequestDetailViewModel: ObservableObject {
             try await reloadComments()
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    func reviewerCandidates(matching query: String) async throws -> [ReviewerCandidate] {
+        try await fetchCandidates(reference, query)
+    }
+
+    /// Requests a review from a user or team, or removes their request, like toggling them in GitHub's reviewer picker.
+    /// Shows the change once GitHub accepts it, then reloads the detail for GitHub's own view of the reviewers.
+    func setReviewRequested(_ name: String, kind: PullRequestReviewer.Kind, requested: Bool) async {
+        let id = PullRequestReviewer.id(name: name, kind: kind)
+        guard content?.detail.canRequestReviewers == true, !reviewRequestsInFlight.contains(id) else { return }
+        reviewRequestsInFlight.insert(id)
+        defer { reviewRequestsInFlight.remove(id) }
+        do {
+            try await sendReviewRequest(reference, name, kind, requested)
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
+        if let current = content {
+            var detail = current.detail
+            detail.reviewers = detail.reviewers.settingRequest(name: name, kind: kind, requested: requested)
+            content = PullRequestDetailContent(detail: detail, files: current.files)
+            cacheContent()
+        }
+        if let fresh = try? await fetch(reference) {
+            apply(fresh)
+            cacheContent()
         }
     }
 

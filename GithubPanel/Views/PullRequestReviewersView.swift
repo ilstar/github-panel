@@ -4,12 +4,36 @@ import SwiftUI
 /// their status on the right, then the overall verdict.
 struct PullRequestReviewersView: View {
     let reviewers: PullRequestReviewers
+    /// Set when the viewer may request reviews, which shows the gear that opens the picker.
+    var actions: ReviewerRequestActions?
+
+    @State private var isPicking = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Reviewers")
-                .prFont(.callout, weight: .semibold)
-                .foregroundStyle(.secondary)
+            HStack(spacing: 4) {
+                Text("Reviewers")
+                    .prFont(.callout, weight: .semibold)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 4)
+                if let actions {
+                    Button {
+                        isPicking = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(isPicking ? Color.accentColor : .secondary)
+                            .frame(width: 22, height: 22)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Request reviews")
+                    .accessibilityLabel("Request reviews")
+                    .popover(isPresented: $isPicking, arrowEdge: .bottom) {
+                        ReviewerPicker(reviewers: reviewers, actions: actions)
+                    }
+                }
+            }
 
             if reviewers.reviewers.isEmpty {
                 Text("No reviews")
@@ -127,5 +151,173 @@ struct PullRequestReviewerRow: View {
             .font(.system(size: 12, weight: .bold))
             .foregroundStyle(color)
             .frame(width: 16, height: 16)
+    }
+}
+
+/// What the reviewer picker needs from the detail window.
+struct ReviewerRequestActions {
+    /// Reviewers whose request is being added or removed, by `PullRequestReviewer.id`.
+    var inFlight: Set<String> = []
+    let loadCandidates: (String) async throws -> [ReviewerCandidate]
+    /// Requests a review from a user or team, or removes their request.
+    let setRequested: (String, PullRequestReviewer.Kind, Bool) -> Void
+}
+
+/// GitHub's "Request up to 15 reviewers" menu: a search field over suggested reviewers, people and teams.
+/// Clicking one requests a review, or removes the request when it is already checked.
+struct ReviewerPicker: View {
+    let reviewers: PullRequestReviewers
+    let actions: ReviewerRequestActions
+
+    @State private var query = ""
+    @State private var candidates: [ReviewerCandidate]?
+    @State private var error: String?
+    @FocusState private var isSearchFocused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Request up to 15 reviewers")
+                .font(.system(size: 12, weight: .semibold))
+                .padding(.horizontal, 12)
+                .padding(.top, 10)
+                .padding(.bottom, 8)
+
+            TextField("Type or choose a user", text: $query)
+                .textFieldStyle(.roundedBorder)
+                .focused($isSearchFocused)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
+
+            Divider()
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    content
+                }
+                .padding(.vertical, 4)
+            }
+            .frame(height: 260)
+        }
+        .frame(width: 300)
+        .onAppear { isSearchFocused = true }
+        // Waits for typing to pause before searching, and drops the results of a search that was typed over.
+        .task(id: query) {
+            if !query.isEmpty {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                guard !Task.isCancelled else { return }
+            }
+            do {
+                let loaded = try await actions.loadCandidates(query)
+                guard !Task.isCancelled else { return }
+                candidates = loaded
+                error = nil
+            } catch {
+                guard !Task.isCancelled else { return }
+                self.error = error.localizedDescription
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if let error {
+            message(error)
+        } else if let candidates {
+            if candidates.isEmpty {
+                message("Nobody matches \"\(query)\".")
+            }
+            let suggested = candidates.filter(\.isSuggested)
+            if !suggested.isEmpty {
+                sectionTitle("Suggestions")
+                ForEach(suggested) { row($0) }
+                sectionTitle("Everyone else")
+            }
+            ForEach(candidates.filter { !$0.isSuggested }) { row($0) }
+        } else {
+            ProgressView()
+                .controlSize(.small)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
+        }
+    }
+
+    private func row(_ candidate: ReviewerCandidate) -> some View {
+        ReviewerPickerRow(candidate: candidate,
+                          isRequested: reviewers.isRequested(candidate.id),
+                          isWorking: actions.inFlight.contains(candidate.id)) {
+            actions.setRequested(candidate.name, candidate.kind, !reviewers.isRequested(candidate.id))
+        }
+    }
+
+    private func sectionTitle(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 12)
+            .padding(.top, 6)
+            .padding(.bottom, 2)
+    }
+
+    private func message(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 12))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+    }
+}
+
+private struct ReviewerPickerRow: View {
+    let candidate: ReviewerCandidate
+    let isRequested: Bool
+    let isWorking: Bool
+    let onToggle: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: onToggle) {
+            HStack(spacing: 8) {
+                Group {
+                    if isWorking {
+                        ProgressView().controlSize(.mini)
+                    } else if isRequested {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 11, weight: .bold))
+                    }
+                }
+                .frame(width: 14)
+
+                switch candidate.kind {
+                case .user:
+                    AvatarView(login: candidate.name, size: 20)
+                case .team:
+                    Image(systemName: "person.2.fill")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 20, height: 20)
+                        .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(Color.secondary.opacity(0.14)))
+                }
+
+                Text(candidate.name)
+                    .font(.system(size: 12, weight: .semibold))
+                    .lineLimit(1)
+                if let detail = candidate.detail, !detail.isEmpty {
+                    Text(detail)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(isHovering ? Color.primary.opacity(0.06) : .clear)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isWorking)
+        .onHover { isHovering = $0 }
+        .help(isRequested ? "Remove the review request" : "Request a review")
     }
 }
