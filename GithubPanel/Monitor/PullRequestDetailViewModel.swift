@@ -5,6 +5,8 @@ import Foundation
 @MainActor
 final class PullRequestDetailViewModel: ObservableObject {
     typealias Fetch = (PullRequestReference) async throws -> PullRequestDetailContent
+    /// The files changed between two commits in a repository: its full name, the older commit, and the newer one.
+    typealias FetchChangedFiles = (String, String, String) async throws -> [PullRequestFile]
     /// Marks or unmarks one file as viewed: the pull request's node ID, the file path, and the new state.
     typealias SetViewed = (String, String, Bool) async throws -> Void
     typealias FetchComments = (PullRequestReference) async throws -> PullRequestComments
@@ -32,6 +34,14 @@ final class PullRequestDetailViewModel: ObservableObject {
     /// Requests a review from a user or team, or removes the request: its name, kind, and whether it is requested.
     typealias SetReviewRequested = (PullRequestReference, String, PullRequestReviewer.Kind, Bool) async throws -> Void
 
+    /// Which changes the Files tab shows.
+    enum FileScope: Equatable {
+        /// Every change in the pull request.
+        case all
+        /// Only what changed since the commit the viewer last reviewed, like GitHub's "Changes since your last review".
+        case sinceLastReview
+    }
+
     let reference: PullRequestReference
     /// The last loaded content. Kept when a reload fails so the window does not go blank.
     @Published private(set) var content: PullRequestDetailContent?
@@ -55,8 +65,13 @@ final class PullRequestDetailViewModel: ObservableObject {
     @Published private(set) var rerunsInFlight: Set<CheckRerun> = []
     /// Reviewers whose request is being added or removed, by `PullRequestReviewer.id`.
     @Published private(set) var reviewRequestsInFlight: Set<String> = []
+    @Published private(set) var fileScope = FileScope.all
+    /// The files changed since the viewer's last review. Nil until they load for the current head commit.
+    @Published private(set) var filesSinceLastReview: [PullRequestFile]?
+    @Published private(set) var isLoadingChangesSinceLastReview = false
 
     private let fetch: Fetch
+    private let fetchChangedFiles: FetchChangedFiles
     private let syncViewed: SetViewed
     private let fetchComments: FetchComments
     private let sendComment: PostComment
@@ -75,18 +90,29 @@ final class PullRequestDetailViewModel: ObservableObject {
     /// The pending review started here, until the comments reload with it. Keeps a failed reload from starting a second one.
     private var startedReviewID: String?
     private let cache: PullRequestDetailCache?
-    /// Presentations built so far, keyed by filename and whether whitespace changes are hidden.
+    /// Parsed diff lines for each file changed since the last review, keyed by filename.
+    private var diffLinesSinceLastReview: [String: [DiffLine]] = [:]
+    /// The commits `filesSinceLastReview` compares.
+    private var loadedReviewRange: CommitRange?
+    /// Presentations built so far, keyed by filename, scope, and whether whitespace changes are hidden.
     private var presentations: [PresentationKey: DiffPresentation] = [:]
     /// The last task box save, so quick clicks reach GitHub in order and the last one wins.
     private var taskSave: Task<Void, Error>?
 
     private struct PresentationKey: Hashable {
         let filename: String
+        let scope: FileScope
         let hideWhitespace: Bool
+    }
+
+    private struct CommitRange: Equatable {
+        let base: String
+        let head: String
     }
 
     init(reference: PullRequestReference,
          fetch: @escaping Fetch,
+         fetchChangedFiles: @escaping FetchChangedFiles = { _, _, _ in [] },
          setViewed: @escaping SetViewed = { _, _, _ in },
          fetchComments: @escaping FetchComments = { _ in .empty },
          postComment: @escaping PostComment = { _, _ in },
@@ -105,6 +131,7 @@ final class PullRequestDetailViewModel: ObservableObject {
          cache: PullRequestDetailCache? = nil) {
         self.reference = reference
         self.fetch = fetch
+        self.fetchChangedFiles = fetchChangedFiles
         self.syncViewed = setViewed
         self.fetchComments = fetchComments
         self.sendComment = postComment
@@ -133,6 +160,9 @@ final class PullRequestDetailViewModel: ObservableObject {
     convenience init(reference: PullRequestReference, monitor: PRMonitor) {
         self.init(reference: reference,
                   fetch: { [monitor] reference in try await monitor.fetchPullRequestDetail(reference) },
+                  fetchChangedFiles: { [monitor] repoFullName, baseSHA, headSHA in
+                      try await monitor.fetchChangedFiles(in: repoFullName, from: baseSHA, to: headSHA)
+                  },
                   setViewed: { [monitor] pullRequestID, path, viewed in
                       try await monitor.setFileViewed(pullRequestID: pullRequestID, path: path, viewed: viewed)
                   },
@@ -191,6 +221,9 @@ final class PullRequestDetailViewModel: ObservableObject {
         } catch {
             errorMessage = error.localizedDescription
             return
+        }
+        if fileScope == .sinceLastReview {
+            await loadChangesSinceLastReview()
         }
         do {
             let comments = try await loadedComments
@@ -254,6 +287,76 @@ final class PullRequestDetailViewModel: ObservableObject {
         presentations = [:]
         viewedFiles = Set(loaded.files.filter(\.isViewed).map(\.filename))
         content = loaded
+        if reviewRange != loadedReviewRange {
+            filesSinceLastReview = nil
+            diffLinesSinceLastReview = [:]
+            loadedReviewRange = nil
+        }
+        if loaded.detail.lastReviewedSHA == nil {
+            fileScope = .all
+        }
+    }
+
+    /// The commits from the viewer's last review to the head, when they reviewed it.
+    private var reviewRange: CommitRange? {
+        guard let detail = content?.detail, let base = detail.lastReviewedSHA else { return nil }
+        return CommitRange(base: base, head: detail.headSHA)
+    }
+
+    /// Whether the viewer reviewed the pull request before, so the Files tab can show only what changed since.
+    var canShowChangesSinceLastReview: Bool {
+        content?.detail.lastReviewedSHA != nil
+    }
+
+    /// Switches the Files tab between every change and the changes since the viewer's last review, loading those first.
+    func showFiles(_ scope: FileScope) async {
+        guard scope == .all || canShowChangesSinceLastReview else { return }
+        fileScope = scope
+        if scope == .sinceLastReview {
+            await loadChangesSinceLastReview()
+        }
+    }
+
+    private func loadChangesSinceLastReview() async {
+        guard let range = reviewRange, let files = content?.files,
+              range != loadedReviewRange, !isLoadingChangesSinceLastReview else { return }
+        guard range.base != range.head else {
+            // Nothing was pushed since the review.
+            setFilesSinceLastReview([], range: range, files: files)
+            return
+        }
+        isLoadingChangesSinceLastReview = true
+        defer { isLoadingChangesSinceLastReview = false }
+        do {
+            let changed = try await fetchChangedFiles(reference.repoFullName, range.base, range.head)
+            // A reload moved the head while this loaded; the next load compares the new one.
+            guard reviewRange == range else { return }
+            setFilesSinceLastReview(changed, range: range, files: content?.files ?? files)
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Keeps the code owners the pull request's files already loaded, since the compare API does not return them.
+    private func setFilesSinceLastReview(_ changed: [PullRequestFile], range: CommitRange, files: [PullRequestFile]) {
+        let byName = Dictionary(files.map { ($0.filename, $0) }, uniquingKeysWith: { first, _ in first })
+        let changed = changed.map { file in
+            var file = file
+            file.codeOwners = byName[file.filename]?.codeOwners ?? []
+            file.isOwnedByViewer = byName[file.filename]?.isOwnedByViewer ?? false
+            return file
+        }
+        diffLinesSinceLastReview = Dictionary(changed.map { ($0.filename, DiffParser.parse($0.patch ?? "")) },
+                                              uniquingKeysWith: { first, _ in first })
+        presentations = presentations.filter { $0.key.scope == .all }
+        loadedReviewRange = range
+        filesSinceLastReview = changed
+    }
+
+    /// The parsed diff lines of a file in the shown scope.
+    func lines(for filename: String) -> [DiffLine]? {
+        fileScope == .sinceLastReview ? diffLinesSinceLastReview[filename] : diffLines[filename]
     }
 
     private func apply(_ loaded: PullRequestComments) {
@@ -501,11 +604,11 @@ final class PullRequestDetailViewModel: ObservableObject {
         cache?.store(loaded, for: reference)
     }
 
-    /// The file's diff with word highlights, built on first use and then reused.
+    /// The file's diff in the shown scope with word highlights, built on first use and then reused.
     func presentation(for filename: String, hideWhitespace: Bool) -> DiffPresentation {
-        let key = PresentationKey(filename: filename, hideWhitespace: hideWhitespace)
+        let key = PresentationKey(filename: filename, scope: fileScope, hideWhitespace: hideWhitespace)
         if let cached = presentations[key] { return cached }
-        let presentation = DiffPresentation(lines: diffLines[filename] ?? [], hideWhitespace: hideWhitespace)
+        let presentation = DiffPresentation(lines: lines(for: filename) ?? [], hideWhitespace: hideWhitespace)
         presentations[key] = presentation
         return presentation
     }

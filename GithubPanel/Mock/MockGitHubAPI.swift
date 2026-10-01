@@ -99,6 +99,22 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
         locked { makeDetail(reference: reference) }
     }
 
+    /// Like a push after the last review: only the first file changed since.
+    func fetchChangedFiles(token: String, repoFullName: String, baseSHA: String, headSHA: String) async throws -> [PullRequestFile] {
+        [PullRequestFile(filename: "Sources/Widget.swift",
+                         previousFilename: nil,
+                         status: .modified,
+                         additions: 1,
+                         deletions: 1,
+                         patch: """
+                         @@ -20,6 +20,6 @@ struct Widget {
+                              func greet() -> String {
+                         -        return "hello world"
+                         +        return "hello claude"
+                              }
+                         """)]
+    }
+
     private func makeDetail(reference: PullRequestReference) -> PullRequestDetailContent {
         let title = editedTitles[reference.id]
             ?? pullRequests[reference.id]?.title
@@ -135,10 +151,14 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
             reviewers.settingRequest(name: change.name, kind: change.kind, requested: change.requested)
         }
         detail.canRequestReviewers = true
+        // A review request the viewer already reviewed once, then the author pushed again.
+        let isReReview = !isOwn && reviewRequests.fromMe.contains { $0.id == reference.id }
+        detail.lastReviewedSHA = isReReview ? "mock-reviewed-sha-\(reference.number)" : nil
         let viewed = viewedFiles[nodeID] ?? []
         let files = Self.detailFiles.map { file in
             var file = file
             file.isViewed = viewed.contains(file.filename)
+            file.isChangedSinceViewed = isReReview && !file.isViewed && file.filename == "Sources/Widget.swift"
             return file
         }
         return PullRequestDetailContent(detail: detail, files: files)

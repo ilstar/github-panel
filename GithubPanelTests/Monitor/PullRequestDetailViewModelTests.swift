@@ -867,6 +867,130 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         XCTAssertTrue(api.detailCalls.isEmpty)
     }
 
+    // MARK: - Changes since the last review
+
+    func testShowsOnlyTheFilesChangedSinceTheLastReview() async {
+        var compared: [(String, String, String)] = []
+        var owned = file("a.swift", patch: "@@ -1 +1 @@\n-a\n+b")
+        owned.codeOwners = ["@octocat"]
+        owned.isOwnedByViewer = true
+        let viewModel = PullRequestDetailViewModel(
+            reference: reference,
+            fetch: { [self] _ in detailContent(title: "Re-review", files: [owned, file("b.swift")], lastReviewedSHA: "old111") },
+            fetchChangedFiles: { [self] repo, base, head in
+                compared.append((repo, base, head))
+                return [file("a.swift", patch: "@@ -1 +1 @@\n-b\n+c")]
+            })
+        await viewModel.load()
+        XCTAssertTrue(viewModel.canShowChangesSinceLastReview)
+        XCTAssertEqual(viewModel.fileScope, .all)
+        XCTAssertTrue(compared.isEmpty, "The compare loads only once asked for")
+        let allLines = viewModel.presentation(for: "a.swift", hideWhitespace: false)
+
+        await viewModel.showFiles(.sinceLastReview)
+
+        XCTAssertEqual(viewModel.fileScope, .sinceLastReview)
+        XCTAssertEqual(compared.map(\.0), ["acme/widgets"])
+        XCTAssertEqual(compared.map(\.1), ["old111"])
+        XCTAssertEqual(compared.map(\.2), ["abc123"])
+        XCTAssertEqual(viewModel.filesSinceLastReview?.map(\.filename), ["a.swift"])
+        // Code owners come from the pull request's files, since the compare API does not return them.
+        XCTAssertEqual(viewModel.filesSinceLastReview?.first?.codeOwners, ["@octocat"])
+        XCTAssertEqual(viewModel.filesSinceLastReview?.first?.isOwnedByViewer, true)
+        XCTAssertEqual(viewModel.lines(for: "a.swift")?.map(\.text), ["@@ -1 +1 @@", "b", "c"])
+        XCTAssertNotEqual(viewModel.presentation(for: "a.swift", hideWhitespace: false), allLines)
+
+        await viewModel.showFiles(.all)
+        await viewModel.showFiles(.sinceLastReview)
+
+        XCTAssertEqual(viewModel.lines(for: "a.swift")?.map(\.text), ["@@ -1 +1 @@", "b", "c"])
+        XCTAssertEqual(compared.count, 1, "Switching back reuses the loaded changes")
+        await viewModel.showFiles(.all)
+        XCTAssertEqual(viewModel.lines(for: "a.swift")?.map(\.text), ["@@ -1 +1 @@", "a", "b"])
+        XCTAssertEqual(viewModel.presentation(for: "a.swift", hideWhitespace: false), allLines)
+    }
+
+    func testNoChangesSinceTheLastReviewSkipsTheCompare() async {
+        var compareCount = 0
+        let viewModel = PullRequestDetailViewModel(
+            reference: reference,
+            fetch: { [self] _ in detailContent(title: "Up to date", files: [file("a.swift")], lastReviewedSHA: "abc123") },
+            fetchChangedFiles: { _, _, _ in
+                compareCount += 1
+                return []
+            })
+        await viewModel.load()
+
+        await viewModel.showFiles(.sinceLastReview)
+
+        XCTAssertEqual(viewModel.fileScope, .sinceLastReview)
+        XCTAssertEqual(viewModel.filesSinceLastReview, [])
+        XCTAssertEqual(compareCount, 0)
+    }
+
+    func testCannotShowChangesSinceTheLastReviewWithoutOne() async {
+        let viewModel = PullRequestDetailViewModel(
+            reference: reference,
+            fetch: { [self] _ in detailContent(title: "New", files: [file("a.swift")]) })
+        await viewModel.load()
+
+        await viewModel.showFiles(.sinceLastReview)
+
+        XCTAssertFalse(viewModel.canShowChangesSinceLastReview)
+        XCTAssertEqual(viewModel.fileScope, .all)
+        XCTAssertNil(viewModel.filesSinceLastReview)
+    }
+
+    func testReloadWithANewHeadComparesAgain() async {
+        var head = "abc123"
+        var compared: [String] = []
+        let viewModel = PullRequestDetailViewModel(
+            reference: reference,
+            fetch: { [self] _ in detailContent(title: "Pushed", files: [file("a.swift")], headSHA: head, lastReviewedSHA: "old111") },
+            fetchChangedFiles: { [self] _, _, newHead in
+                compared.append(newHead)
+                return [file(newHead == "abc123" ? "a.swift" : "b.swift")]
+            })
+        await viewModel.load()
+        await viewModel.showFiles(.sinceLastReview)
+
+        head = "def456"
+        await viewModel.load()
+
+        XCTAssertEqual(compared, ["abc123", "def456"])
+        XCTAssertEqual(viewModel.filesSinceLastReview?.map(\.filename), ["b.swift"])
+    }
+
+    func testFailedCompareShowsTheError() async {
+        let viewModel = PullRequestDetailViewModel(
+            reference: reference,
+            fetch: { [self] _ in detailContent(title: "Gone", files: [file("a.swift")], lastReviewedSHA: "old111") },
+            fetchChangedFiles: { _, _, _ in throw GraphQLError(message: "No commit found") })
+        await viewModel.load()
+
+        await viewModel.showFiles(.sinceLastReview)
+
+        XCTAssertNil(viewModel.filesSinceLastReview)
+        XCTAssertNotNil(viewModel.errorMessage)
+        XCTAssertFalse(viewModel.isLoadingChangesSinceLastReview)
+    }
+
+    func testANewReviewOnTheHeadLeavesNothingToShowSinceIt() async {
+        var lastReviewed: String? = "old111"
+        let viewModel = PullRequestDetailViewModel(
+            reference: reference,
+            fetch: { [self] _ in detailContent(title: "Reviewed", files: [file("a.swift")], lastReviewedSHA: lastReviewed) },
+            fetchChangedFiles: { [self] _, _, _ in [file("a.swift")] })
+        await viewModel.load()
+        await viewModel.showFiles(.sinceLastReview)
+        XCTAssertEqual(viewModel.filesSinceLastReview?.count, 1)
+
+        lastReviewed = "abc123"
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.filesSinceLastReview, [])
+    }
+
     private func check(_ id: String, _ outcome: PullRequestCheck.Outcome, rerun: CheckRerun? = nil) -> PullRequestCheck {
         PullRequestCheck(id: id, name: id, workflowName: nil, outcome: outcome, summary: nil,
                          startedAt: nil, completedAt: nil, detailsURL: nil, rerun: rerun)
@@ -888,8 +1012,9 @@ final class PullRequestDetailViewModelTests: XCTestCase {
     }
 
     private func detailContent(title: String, body: String = "", files: [PullRequestFile] = [], canEdit: Bool = false,
-                               canUpdateBranch: Bool = false, isViewerAuthor: Bool = true) -> PullRequestDetailContent {
-        PullRequestDetailContent(
+                               canUpdateBranch: Bool = false, isViewerAuthor: Bool = true,
+                               headSHA: String = "abc123", lastReviewedSHA: String? = nil) -> PullRequestDetailContent {
+        var content = PullRequestDetailContent(
             detail: PullRequestDetail(reference: reference,
                                       nodeID: "PR_node",
                                       title: title,
@@ -898,7 +1023,7 @@ final class PullRequestDetailViewModelTests: XCTestCase {
                                       state: .open,
                                       baseRef: "main",
                                       headRef: "feature",
-                                      headSHA: "abc123",
+                                      headSHA: headSHA,
                                       htmlURL: URL(string: "https://github.com/acme/widgets/pull/7")!,
                                       createdAt: Date(timeIntervalSince1970: 0),
                                       additions: 0,
@@ -910,6 +1035,9 @@ final class PullRequestDetailViewModelTests: XCTestCase {
                                       canUpdateBranch: canUpdateBranch),
             files: files
         )
+        content = PullRequestDetailContent(detail: { var detail = content.detail; detail.lastReviewedSHA = lastReviewedSHA; return detail }(),
+                                           files: content.files)
+        return content
     }
 }
 

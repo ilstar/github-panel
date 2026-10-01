@@ -487,7 +487,8 @@ final class GitHubAPITests: XCTestCase {
                             status: .added,
                             additions: 0,
                             deletions: 0,
-                            patch: nil)
+                            patch: nil,
+                            isChangedSinceViewed: true)
         ])
 
         // The three requests run at the same time, so their order is not fixed.
@@ -505,6 +506,80 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertEqual(viewedBody.variables["owner"] as? String, "acme")
         XCTAssertEqual(viewedBody.variables["name"] as? String, "widgets")
         XCTAssertEqual(viewedBody.variables["number"] as? Int, 7)
+    }
+
+    func testFetchPullRequestDetailReadsTheCommitOfTheViewersLastReview() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: pullDetailResponse, path: pullPath)
+        transport.enqueue(json: "[]", path: filesPath)
+        transport.enqueue(json: #"""
+        {"data":{"repository":{"pullRequest":{
+          "files":{"nodes":[]},
+          "viewerReviews":{"nodes":[
+            {"viewerDidAuthor":true,"commit":null},
+            {"viewerDidAuthor":true,"commit":{"oid":"old111"}},
+            {"viewerDidAuthor":true,"commit":{"oid":"mine222"}},
+            {"viewerDidAuthor":false,"commit":{"oid":"theirs333"}}
+          ]}
+        }}}}
+        """#, path: "/graphql")
+
+        let detail = try await GitHubAPI(transport: transport)
+            .fetchPullRequestDetail(token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7)).detail
+
+        // The viewer's latest review, not someone else's.
+        XCTAssertEqual(detail.lastReviewedSHA, "mine222")
+        XCTAssertTrue(detail.hasChangesSinceLastReview)
+        let index = try XCTUnwrap(transport.requests.firstIndex { $0.url?.path == "/graphql" })
+        let query = try transport.graphQLBody(at: index).query
+        XCTAssertTrue(query.contains("viewerReviews: reviews(last: 100, states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED])"))
+        XCTAssertTrue(query.contains("nodes { viewerDidAuthor commit { oid } }"))
+    }
+
+    func testFetchPullRequestDetailHasNoLastReviewWhenTheViewerNeverReviewed() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: pullDetailResponse, path: pullPath)
+        transport.enqueue(json: "[]", path: filesPath)
+        transport.enqueue(json: viewedFilesResponse, path: "/graphql")
+
+        let detail = try await GitHubAPI(transport: transport)
+            .fetchPullRequestDetail(token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7)).detail
+
+        XCTAssertNil(detail.lastReviewedSHA)
+        XCTAssertFalse(detail.hasChangesSinceLastReview)
+    }
+
+    func testFetchChangedFilesComparesTheTwoCommits() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: #"""
+        {"status":"ahead","files":[
+          {"filename":"Sources/New.swift","previous_filename":"Sources/Old.swift","status":"renamed","additions":1,"deletions":1,"patch":"@@ -1 +1 @@\n-a\n+b"},
+          {"filename":"logo.png","status":"added","additions":0,"deletions":0}
+        ]}
+        """#)
+
+        let files = try await GitHubAPI(transport: transport)
+            .fetchChangedFiles(token: "token", repoFullName: "acme/widgets", baseSHA: "old111", headSHA: "abc123")
+
+        XCTAssertEqual(files, [
+            PullRequestFile(filename: "Sources/New.swift", previousFilename: "Sources/Old.swift", status: .renamed,
+                            additions: 1, deletions: 1, patch: "@@ -1 +1 @@\n-a\n+b"),
+            PullRequestFile(filename: "logo.png", previousFilename: nil, status: .added,
+                            additions: 0, deletions: 0, patch: nil)
+        ])
+        let request = try XCTUnwrap(transport.requests.first)
+        XCTAssertEqual(request.url?.path, "/repos/acme/widgets/compare/old111...abc123")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer token")
+    }
+
+    func testFetchChangedFilesHandlesNoFiles() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: #"{"status":"identical"}"#)
+
+        let files = try await GitHubAPI(transport: transport)
+            .fetchChangedFiles(token: "token", repoFullName: "acme/widgets", baseSHA: "abc123", headSHA: "abc123")
+
+        XCTAssertEqual(files, [])
     }
 
     func testFetchPullRequestDetailDecodesReviewers() async throws {

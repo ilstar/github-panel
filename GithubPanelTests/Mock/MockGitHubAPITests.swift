@@ -38,6 +38,28 @@ final class MockGitHubAPITests: XCTestCase {
         }
     }
 
+    func testMockReviewRequestOffersChangesSinceTheLastReview() async throws {
+        let api = MockGitHubAPI()
+        let reReview = PullRequestReference(repoFullName: "mock/github-panel", number: 301)
+        let own = PullRequestReference(repoFullName: "mock/github-panel", number: 101)
+
+        let content = try await api.fetchPullRequestDetail(token: "token", reference: reReview)
+        let ownDetail = try await api.fetchPullRequestDetail(token: "token", reference: own).detail
+        let changed = try await api.fetchChangedFiles(token: "token", repoFullName: reReview.repoFullName,
+                                                      baseSHA: try XCTUnwrap(content.detail.lastReviewedSHA),
+                                                      headSHA: content.detail.headSHA)
+
+        XCTAssertTrue(content.detail.hasChangesSinceLastReview)
+        XCTAssertEqual(content.files.filter(\.isChangedSinceViewed).map(\.filename), ["Sources/Widget.swift"])
+        XCTAssertNil(ownDetail.lastReviewedSHA)
+        XCTAssertEqual(changed.map(\.filename), ["Sources/Widget.swift"])
+        for file in changed {
+            let lines = DiffParser.parse(file.patch ?? "")
+            XCTAssertEqual(lines.filter { $0.kind == .addition }.count, file.additions)
+            XCTAssertEqual(lines.filter { $0.kind == .deletion }.count, file.deletions)
+        }
+    }
+
     func testMockDetailShowsReviewersWithPartialApproval() async throws {
         let api = MockGitHubAPI()
         let reference = PullRequestReference(repoFullName: "mock/github-panel", number: 102)

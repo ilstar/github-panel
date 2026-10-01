@@ -44,6 +44,8 @@ final class FakeGitHubAPI: GitHubAPIClient {
     private(set) var mergePullRequestCalls: [(repoFullName: String, number: Int, method: MergeMethod)] = []
     private(set) var detailCalls: [(token: String, reference: PullRequestReference)] = []
     var detailHandler: ((PullRequestReference) async throws -> PullRequestDetailContent)?
+    var changedFiles: [PullRequestFile] = []
+    private(set) var changedFilesCalls: [(token: String, repoFullName: String, baseSHA: String, headSHA: String)] = []
     private(set) var setFileViewedCalls: [(token: String, pullRequestID: String, path: String, viewed: Bool)] = []
     var comments: PullRequestComments = .empty
     private(set) var setResolvedCalls: [(token: String, threadID: String, resolved: Bool)] = []
@@ -136,6 +138,12 @@ final class FakeGitHubAPI: GitHubAPIClient {
         detailCalls.append((token, reference))
         guard let detailHandler else { throw URLError(.fileDoesNotExist) }
         return try await detailHandler(reference)
+    }
+
+    func fetchChangedFiles(token: String, repoFullName: String, baseSHA: String, headSHA: String) async throws -> [PullRequestFile] {
+        if let error { throw error }
+        changedFilesCalls.append((token, repoFullName, baseSHA, headSHA))
+        return changedFiles
     }
 
     func setFileViewed(token: String, pullRequestID: String, path: String, viewed: Bool) async throws {

@@ -58,6 +58,13 @@ struct PullRequestDetail: Equatable {
     var reviewers = PullRequestReviewers.none
     /// Whether the viewer may request reviews: GitHub allows it with triage access or more, while the pull request is open.
     var canRequestReviewers = false
+    /// The commit the viewer's latest submitted review was on. Nil when they have not reviewed the pull request.
+    var lastReviewedSHA: String?
+
+    /// Whether commits were pushed since the viewer's last review, so the files can show only what changed since then.
+    var hasChangesSinceLastReview: Bool {
+        lastReviewedSHA.map { $0 != headSHA } ?? false
+    }
 
     var offersUpdateBranch: Bool { isViewerAuthor && canUpdateBranch }
 }
@@ -83,6 +90,8 @@ struct PullRequestFile: Identifiable, Equatable {
     let patch: String?
     /// Whether the viewer marked this file as viewed on GitHub. A file changed since it was viewed is not viewed.
     var isViewed = false
+    /// Whether the viewer marked this file as viewed, but it changed since. GitHub reports it as `DISMISSED`.
+    var isChangedSinceViewed = false
     var codeOwners: [String] = []
     var isOwnedByViewer = false
 }
