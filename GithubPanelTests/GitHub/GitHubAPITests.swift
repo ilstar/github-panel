@@ -211,6 +211,35 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertTrue(body.query.contains("is:pr is:open archived:false"))
     }
 
+    func testFetchReviewRequestsFollowsEachGroupsPages() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: """
+        {"data":{"viewer":{"login":"fred"},
+          "direct":{"pageInfo":{"hasNextPage":true,"endCursor":"direct-1"},"nodes":[\(reviewRequestJSON(1))]},
+          "all":{"pageInfo":{"hasNextPage":true,"endCursor":"all-1"},"nodes":[\(reviewRequestJSON(2))]}}}
+        """)
+        transport.enqueue(json: """
+        {"data":{"page":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[\(reviewRequestJSON(3)),null]}}}
+        """)
+        transport.enqueue(json: """
+        {"data":{"page":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[\(reviewRequestJSON(4))]}}}
+        """)
+
+        let requests = try await GitHubAPI(transport: transport).fetchReviewRequests(token: "token")
+
+        XCTAssertEqual(requests.fromMe.map(\.number), [1, 3])
+        XCTAssertEqual(requests.fromMyTeams.map(\.number), [2, 4])
+        XCTAssertEqual(transport.requests.count, 3)
+        let directPage = try transport.graphQLBody(at: 1)
+        XCTAssertTrue(directPage.query.contains("page: search(query: $query, type: ISSUE, first: 100, after: $after)"))
+        XCTAssertTrue(directPage.query.contains("fragment ReviewRequestFields on PullRequest"))
+        XCTAssertEqual(directPage.variables["query"] as? String, "is:pr is:open archived:false user-review-requested:@me sort:updated-desc")
+        XCTAssertEqual(directPage.variables["after"] as? String, "direct-1")
+        let allPage = try transport.graphQLBody(at: 2)
+        XCTAssertEqual(allPage.variables["query"] as? String, "is:pr is:open archived:false review-requested:@me sort:updated-desc")
+        XCTAssertEqual(allPage.variables["after"] as? String, "all-1")
+    }
+
     func testFetchReviewRequestsDecodesChecksSizeAndWhenIWasAsked() async throws {
         let transport = MockHTTPTransport()
         let asked = """
@@ -494,7 +523,7 @@ final class GitHubAPITests: XCTestCase {
         // The three requests run at the same time, so their order is not fixed.
         XCTAssertEqual(Set(transport.requests.compactMap { $0.url?.path }), [pullPath, filesPath, "/graphql"])
         XCTAssertEqual(transport.requests.count, 4)
-        XCTAssertEqual(try transport.request(path: filesPath).url?.query, "per_page=100")
+        XCTAssertEqual(try transport.request(path: filesPath).url?.query, "per_page=100&page=1")
         XCTAssertEqual(try transport.request(path: pullPath).value(forHTTPHeaderField: "Authorization"), "Bearer token")
         let graphQLIndex = try XCTUnwrap(transport.requests.firstIndex { $0.url?.path == "/graphql" })
         let viewedBody = try transport.graphQLBody(at: graphQLIndex)
@@ -506,6 +535,103 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertEqual(viewedBody.variables["owner"] as? String, "acme")
         XCTAssertEqual(viewedBody.variables["name"] as? String, "widgets")
         XCTAssertEqual(viewedBody.variables["number"] as? Int, 7)
+    }
+
+    func testFetchPullRequestDetailFollowsFilePages() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: pullDetailResponse, path: pullPath)
+        transport.enqueue(json: pullFilesPage(names: (1...100).map { "File\($0).swift" }), path: filesPath)
+        transport.enqueue(json: pullFilesPage(names: ["Last.swift"]), path: filesPath)
+        transport.enqueue(json: viewedFilesResponse, path: "/graphql")
+
+        let content = try await GitHubAPI(transport: transport)
+            .fetchPullRequestDetail(token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7))
+
+        XCTAssertEqual(content.files.count, 101)
+        XCTAssertEqual(content.files.last?.filename, "Last.swift")
+        // A short page is the last one, so no third page is asked for.
+        XCTAssertEqual(transport.requests.filter { $0.url?.path == filesPath }.map(\.url?.query),
+                       ["per_page=100&page=1", "per_page=100&page=2"])
+    }
+
+    func testFetchPullRequestDetailReadsPatchesGitHubLeftOutFromTheRawDiff() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: pullDetailResponse, path: pullPath, accept: "application/vnd.github+json")
+        transport.enqueue(json: #"""
+        [
+          {"filename":"Sources/Big.swift","status":"modified","additions":1,"deletions":1},
+          {"filename":"logo.png","status":"added","additions":0,"deletions":0}
+        ]
+        """#, path: filesPath)
+        transport.enqueue(json: viewedFilesResponse, path: "/graphql")
+        transport.enqueue(json: """
+        diff --git a/Sources/Big.swift b/Sources/Big.swift
+        --- a/Sources/Big.swift
+        +++ b/Sources/Big.swift
+        @@ -1 +1 @@
+        -a
+        +b
+
+        """, path: pullPath, accept: "application/vnd.github.diff")
+
+        let content = try await GitHubAPI(transport: transport)
+            .fetchPullRequestDetail(token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7))
+
+        XCTAssertEqual(content.files.map(\.patch), ["@@ -1 +1 @@\n-a\n+b", nil])
+        XCTAssertEqual(transport.requests.filter { $0.value(forHTTPHeaderField: "Accept") == "application/vnd.github.diff" }.count, 1)
+    }
+
+    func testFetchPullRequestDetailSkipsTheRawDiffWhenOnlyBinaryFilesLackPatches() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: pullDetailResponse, path: pullPath)
+        transport.enqueue(json: pullFilesResponse, path: filesPath)
+        transport.enqueue(json: viewedFilesResponse, path: "/graphql")
+
+        _ = try await GitHubAPI(transport: transport)
+            .fetchPullRequestDetail(token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7))
+
+        XCTAssertFalse(transport.requests.contains { $0.value(forHTTPHeaderField: "Accept") == "application/vnd.github.diff" })
+    }
+
+    func testFetchPullRequestDetailKeepsFilesWhenTheRawDiffIsRefused() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: pullDetailResponse, path: pullPath, accept: "application/vnd.github+json")
+        transport.enqueue(json: #"[{"filename":"Sources/Big.swift","status":"modified","additions":1,"deletions":1}]"#, path: filesPath)
+        transport.enqueue(json: viewedFilesResponse, path: "/graphql")
+        transport.enqueue(json: #"{"message":"Sorry, the diff exceeded the maximum number of lines"}"#,
+                          statusCode: 406, path: pullPath, accept: "application/vnd.github.diff")
+
+        let content = try await GitHubAPI(transport: transport)
+            .fetchPullRequestDetail(token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7))
+
+        XCTAssertEqual(content.files.map(\.filename), ["Sources/Big.swift"])
+        XCTAssertNil(content.files.first?.patch)
+    }
+
+    func testFetchPullRequestDetailFollowsViewedFilePages() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: pullDetailResponse, path: pullPath)
+        transport.enqueue(json: pullFilesResponse, path: filesPath)
+        transport.enqueue(json: #"""
+        {"data":{"repository":{"pullRequest":{"files":{
+          "pageInfo":{"hasNextPage":true,"endCursor":"files-1"},
+          "nodes":[{"path":"Sources/New.swift","viewerViewedState":"VIEWED"}]}}}}}
+        """#, path: "/graphql")
+        transport.enqueue(json: #"""
+        {"data":{"repository":{"pullRequest":{"page":{
+          "pageInfo":{"hasNextPage":false,"endCursor":null},
+          "nodes":[{"path":"logo.png","viewerViewedState":"VIEWED"}]}}}}}
+        """#, path: "/graphql")
+
+        let content = try await GitHubAPI(transport: transport)
+            .fetchPullRequestDetail(token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7))
+
+        XCTAssertEqual(content.files.map(\.isViewed), [true, true])
+        let graphQLIndices = transport.requests.indices.filter { transport.requests[$0].url?.path == "/graphql" }
+        let next = try transport.graphQLBody(at: graphQLIndices[1])
+        XCTAssertTrue(next.query.contains("page: files(first: 100, after: $after)"))
+        XCTAssertEqual(next.variables["after"] as? String, "files-1")
+        XCTAssertEqual(next.variables["number"] as? Int, 7)
     }
 
     func testFetchPullRequestDetailReadsTheCommitOfTheViewersLastReview() async throws {
@@ -1083,6 +1209,69 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertEqual(body.variables["number"] as? Int, 7)
     }
 
+    func testFetchPullRequestCommentsFollowsCommentThreadAndReplyPages() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: """
+        {"data":{"repository":{"pullRequest":{
+          "comments":{"pageInfo":{"hasNextPage":true,"endCursor":"comments-1"},"nodes":[\(commentJSON("IC_1"))]},
+          "reviewThreads":{"pageInfo":{"hasNextPage":true,"endCursor":"threads-1"},"nodes":[
+            \(threadJSON("RT_1", comments: [commentJSON("RC_1")], hasMoreComments: true))]}
+        }}}}
+        """)
+        transport.enqueue(json: """
+        {"data":{"repository":{"pullRequest":{"page":{"pageInfo":{"hasNextPage":false,"endCursor":null},
+          "nodes":[\(commentJSON("IC_2"))]}}}}}
+        """)
+        transport.enqueue(json: """
+        {"data":{"repository":{"pullRequest":{"page":{"pageInfo":{"hasNextPage":false,"endCursor":null},
+          "nodes":[\(threadJSON("RT_2", comments: [commentJSON("RC_3")], hasMoreComments: false))]}}}}}
+        """)
+        transport.enqueue(json: """
+        {"data":{"node":{"page":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[\(commentJSON("RC_2"))]}}}}
+        """)
+
+        let comments = try await GitHubAPI(transport: transport)
+            .fetchPullRequestComments(token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7))
+
+        XCTAssertEqual(comments.comments.map(\.id), ["IC_1", "IC_2"])
+        XCTAssertEqual(comments.threads.map(\.id), ["RT_1", "RT_2"])
+        XCTAssertEqual(comments.threads.map { $0.comments.map(\.id) }, [["RC_1", "RC_2"], ["RC_3"]])
+        XCTAssertEqual(transport.requests.count, 4)
+        let commentPage = try transport.graphQLBody(at: 1)
+        XCTAssertTrue(commentPage.query.contains("page: comments(first: 100, after: $after)"))
+        XCTAssertTrue(commentPage.query.contains("fragment CommentFields on Comment"))
+        XCTAssertEqual(commentPage.variables["after"] as? String, "comments-1")
+        let threadPage = try transport.graphQLBody(at: 2)
+        XCTAssertTrue(threadPage.query.contains("page: reviewThreads(first: 100, after: $after)"))
+        XCTAssertEqual(threadPage.variables["after"] as? String, "threads-1")
+        let replyPage = try transport.graphQLBody(at: 3)
+        XCTAssertTrue(replyPage.query.contains("... on PullRequestReviewThread { page: comments(first: 100, after: $after)"))
+        XCTAssertEqual(replyPage.variables["id"] as? String, "RT_1")
+        XCTAssertEqual(replyPage.variables["after"] as? String, "replies-RT_1")
+    }
+
+    func testFetchPullRequestCommentsStopsAfterThePageLimit() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: """
+        {"data":{"repository":{"pullRequest":{
+          "comments":{"pageInfo":{"hasNextPage":true,"endCursor":"c0"},"nodes":[\(commentJSON("IC_0"))]},
+          "reviewThreads":{"nodes":[]}
+        }}}}
+        """)
+        for page in 1...GitHubAPI.maxListPages {
+            transport.enqueue(json: """
+            {"data":{"repository":{"pullRequest":{"page":{"pageInfo":{"hasNextPage":true,"endCursor":"c\(page)"},
+              "nodes":[\(commentJSON("IC_\(page)"))]}}}}}
+            """)
+        }
+
+        let comments = try await GitHubAPI(transport: transport)
+            .fetchPullRequestComments(token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7))
+
+        XCTAssertEqual(comments.comments.count, GitHubAPI.maxListPages)
+        XCTAssertEqual(transport.requests.count, GitHubAPI.maxListPages)
+    }
+
     func testFetchPullRequestCommentsMarksDraftsInTheViewersPendingReview() async throws {
         let transport = MockHTTPTransport()
         transport.enqueue(json: pendingCommentsResponse)
@@ -1417,6 +1606,8 @@ private final class MockHTTPTransport: HTTPTransport {
         let headers: [String: String]?
         /// Only a request to this URL path takes the response. Nil matches any request, in order.
         let path: String?
+        /// Only a request with this `Accept` header takes the response. Nil matches any.
+        var accept: String? = nil
     }
 
     /// Requests can arrive from several tasks at once, so the queues are guarded by a lock.
@@ -1429,9 +1620,9 @@ private final class MockHTTPTransport: HTTPTransport {
     }
 
     /// Queues a response. Pass `path` for requests that run at the same time, whose order is not fixed.
-    func enqueue(json: String, statusCode: Int = 200, headers: [String: String]? = nil, path: String? = nil) {
+    func enqueue(json: String, statusCode: Int = 200, headers: [String: String]? = nil, path: String? = nil, accept: String? = nil) {
         lock.withLock {
-            responses.append(QueuedResponse(data: Data(json.utf8), statusCode: statusCode, headers: headers, path: path))
+            responses.append(QueuedResponse(data: Data(json.utf8), statusCode: statusCode, headers: headers, path: path, accept: accept))
         }
     }
 
@@ -1442,7 +1633,10 @@ private final class MockHTTPTransport: HTTPTransport {
     func data(for request: URLRequest) async throws -> (Data, URLResponse) {
         let response = lock.withLock {
             recordedRequests.append(request)
-            let index = responses.firstIndex { $0.path == nil || $0.path == request.url?.path }
+            let index = responses.firstIndex {
+                ($0.path == nil || $0.path == request.url?.path)
+                    && ($0.accept == nil || $0.accept == request.value(forHTTPHeaderField: "Accept"))
+            }
             return index.map { responses.remove(at: $0) }
                 ?? QueuedResponse(data: Data(), statusCode: 200, headers: nil, path: nil)
         }
@@ -1475,6 +1669,36 @@ private func samlErrors(path: String) -> String {
     """
     "errors":[{"type":"FORBIDDEN","path":\(path),"locations":[{"line":1,"column":1}],
       "message":"Resource protected by organization SAML enforcement. You must grant your Personal Access token access to this organization."}]
+    """
+}
+
+/// A page of changed files with one-line patches.
+private func pullFilesPage(names: [String]) -> String {
+    let files = names.map {
+        #"{"filename":"\#($0)","status":"modified","additions":1,"deletions":0,"patch":"@@ -0,0 +1 @@\n+a"}"#
+    }
+    return "[\(files.joined(separator: ","))]"
+}
+
+private func commentJSON(_ id: String) -> String {
+    #"{"id":"\#(id)","databaseId":1,"body":"\#(id)","createdAt":"2026-04-10T08:00:00Z","author":{"login":"octocat"}}"#
+}
+
+/// A review thread whose replies continue after the cursor `replies-<id>` when `hasMoreComments`.
+private func threadJSON(_ id: String, comments: [String], hasMoreComments: Bool) -> String {
+    """
+    {"id":"\(id)","path":"Sources/New.swift","line":1,"startLine":null,"diffSide":"RIGHT","isResolved":false,"isOutdated":false,
+     "comments":{"pageInfo":{"hasNextPage":\(hasMoreComments),"endCursor":"replies-\(id)"},"nodes":[\(comments.joined(separator: ","))]}}
+    """
+}
+
+/// A pull request asking for review from me directly when `number` is odd, or from my team when it is even.
+private func reviewRequestJSON(_ number: Int) -> String {
+    let reviewer = number % 2 == 1 ? #"{"__typename":"User","login":"fred"}"# : #"{"__typename":"Team"}"#
+    return """
+    {"id":"PR_\(number)","title":"PR \(number)","number":\(number),"url":"https://github.com/acme/widgets/pull/\(number)",
+     "updatedAt":"2026-04-12T12:34:56Z","isDraft":false,"repository":{"nameWithOwner":"acme/widgets"},"author":null,
+     "timelineItems":{"nodes":[{"createdAt":"2026-04-01T10:00:00Z","requestedReviewer":\(reviewer)}]}}
     """
 }
 

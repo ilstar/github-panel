@@ -67,4 +67,43 @@ final class DiffParserTests: XCTestCase {
         XCTAssertEqual(DiffParser.hunkStart("@@ -0,0 +1 @@")?.new, 1)
         XCTAssertNil(DiffParser.hunkStart("@@ garbage"))
     }
+
+    func testSplitsARawDiffIntoEachFilesPatch() {
+        let rawDiff = """
+        diff --git a/Sources/Big.swift b/Sources/Big.swift
+        index 1111111..2222222 100644
+        --- a/Sources/Big.swift
+        +++ b/Sources/Big.swift
+        @@ -1,2 +1,2 @@
+         let a = 1
+        -let b = 2
+        +let b = 3
+        @@ -10 +10 @@
+        -old
+        +new
+        diff --git a/logo.png b/logo.png
+        new file mode 100644
+        index 0000000..3333333
+        Binary files /dev/null and b/logo.png differ
+        diff --git a/Old.swift b/Renamed.swift
+        similarity index 100%
+        rename from Old.swift
+        rename to Renamed.swift
+        diff --git a/Gone.swift b/Gone.swift
+        deleted file mode 100644
+        index 4444444..0000000
+        --- a/Gone.swift
+        +++ /dev/null
+        @@ -1 +0,0 @@
+        -bye
+
+        """
+
+        let patches = DiffParser.patchesByFile(rawDiff: rawDiff)
+
+        XCTAssertEqual(patches, [
+            "Sources/Big.swift": "@@ -1,2 +1,2 @@\n let a = 1\n-let b = 2\n+let b = 3\n@@ -10 +10 @@\n-old\n+new",
+            "Gone.swift": "@@ -1 +0,0 @@\n-bye"
+        ])
+    }
 }

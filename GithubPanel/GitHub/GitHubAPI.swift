@@ -132,17 +132,59 @@ final class GitHubAPI: GitHubAPIClient {
     }
 
     func fetchReviewRequests(token: String) async throws -> ReviewRequests {
+        let directSearch = "is:pr is:open archived:false user-review-requested:@me sort:updated-desc"
+        let allSearch = "is:pr is:open archived:false review-requested:@me sort:updated-desc"
+        // Both groups' first pages load together; later pages are loaded below.
         let query = """
         query {
           viewer { login }
-          direct: search(query: "is:pr is:open archived:false user-review-requested:@me sort:updated-desc", type: ISSUE, first: 50) {
+          direct: search(query: "\(directSearch)", type: ISSUE, first: 50) {
+            pageInfo { hasNextPage endCursor }
             nodes { ...ReviewRequestFields }
           }
-          all: search(query: "is:pr is:open archived:false review-requested:@me sort:updated-desc", type: ISSUE, first: 50) {
+          all: search(query: "\(allSearch)", type: ISSUE, first: 50) {
+            pageInfo { hasNextPage endCursor }
             nodes { ...ReviewRequestFields }
           }
         }
 
+        \(Self.reviewRequestFields)
+        """
+        let result = try await graphQLKeepingSSOBlockedData(ReviewRequestsResponse.self,
+                                                            query: query, variables: [:], token: token)
+        var response = result.value
+        var ssoAuthorizationURL = result.ssoAuthorizationURL
+        func remainingPages(of search: ReviewRequestsResponse.Search, query: String) async throws -> ReviewRequestsResponse.Search {
+            let pageQuery = """
+            query($query: String!, $after: String!) {
+              page: search(query: $query, type: ISSUE, first: 100, after: $after) {
+                pageInfo { hasNextPage endCursor }
+                nodes { ...ReviewRequestFields }
+              }
+            }
+
+            \(Self.reviewRequestFields)
+            """
+            struct Response: Decodable { let page: GraphQLPage<ReviewRequestsResponse.Node?> }
+            var search = search
+            search.nodes = try await allNodes(GraphQLPage(pageInfo: search.pageInfo, nodes: search.nodes)) { cursor in
+                let result = try await graphQLKeepingSSOBlockedData(Response.self, query: pageQuery,
+                                                                    variables: ["query": query, "after": cursor], token: token)
+                ssoAuthorizationURL = ssoAuthorizationURL ?? result.ssoAuthorizationURL
+                return result.value.page
+            }
+            return search
+        }
+        response.direct = try await remainingPages(of: response.direct, query: directSearch)
+        response.all = try await remainingPages(of: response.all, query: allSearch)
+        let login = response.viewer?.login
+        // A direct request's wait starts when I was asked; a team request's when a team was.
+        return ReviewRequests(direct: response.direct.rows { $0.typename == "User" && (login == nil || $0.login == login) },
+                              all: response.all.rows { $0.typename == "Team" },
+                              ssoAuthorizationURL: ssoAuthorizationURL)
+    }
+
+    private static let reviewRequestFields = """
         fragment ReviewRequestFields on PullRequest {
           id
           title
@@ -171,15 +213,6 @@ final class GitHubAPI: GitHubAPIClient {
           }
         }
         """
-        let result = try await graphQLKeepingSSOBlockedData(ReviewRequestsResponse.self,
-                                                            query: query, variables: [:], token: token)
-        let response = result.value
-        let login = response.viewer?.login
-        // A direct request's wait starts when I was asked; a team request's when a team was.
-        return ReviewRequests(direct: response.direct.rows { $0.typename == "User" && (login == nil || $0.login == login) },
-                              all: response.all.rows { $0.typename == "Team" },
-                              ssoAuthorizationURL: result.ssoAuthorizationURL)
-    }
 
     func enqueuePullRequest(token: String, pullRequestID: String) async throws {
         let query = """
@@ -329,8 +362,7 @@ final class GitHubAPI: GitHubAPIClient {
 
         // The three requests do not depend on each other, so they run at the same time.
         async let pullRequest = decode(PullResponse.self, request: makeRequest(path: pullPath, token: token))
-        // GitHub caps this at 100 files per page; later pages are not loaded yet.
-        async let fileList = decode([PullFileResponse].self, request: makeRequest(path: "\(pullPath)/files?per_page=100", token: token))
+        async let fileList = fetchPullFiles(token: token, pullPath: pullPath)
         // Viewed marks and edit rights are a nice-to-have; the diff still loads when GitHub does not return them.
         async let viewerState = try? fetchViewerState(token: token, owner: parts[0], name: parts[1], number: reference.number)
         let pull = try await pullRequest
@@ -357,6 +389,34 @@ final class GitHubAPI: GitHubAPIClient {
                                                 login: ownership?.login ?? "", email: ownership?.email, teams: ownership?.teams ?? [])
                                             return file
                                         })
+    }
+
+    /// Lists load in pages of 100, up to this many pages. GitHub stops listing a pull request's files at 3,000.
+    static let maxListPages = 30
+
+    /// GitHub leaves out the patch of a file whose diff is large; those patches are read from the raw diff instead.
+    private func fetchPullFiles(token: String, pullPath: String) async throws -> [PullFileResponse] {
+        var files: [PullFileResponse] = []
+        for page in 1...Self.maxListPages {
+            let batch = try await decode([PullFileResponse].self,
+                                         request: makeRequest(path: "\(pullPath)/files?per_page=100&page=\(page)", token: token))
+            files += batch
+            if batch.count < 100 { break }
+        }
+        // Binary files have no patch either, but they also have no added or deleted lines.
+        guard files.contains(where: { $0.patch == nil && $0.additions + $0.deletions > 0 }) else { return files }
+        var request = makeRequest(path: pullPath, token: token)
+        request.setValue("application/vnd.github.diff", forHTTPHeaderField: "Accept")
+        // GitHub refuses the raw diff too when it is very large; the files then show without those patches.
+        guard let (data, response) = try? await transport.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              let rawDiff = String(data: data, encoding: .utf8) else { return files }
+        let patches = DiffParser.patchesByFile(rawDiff: rawDiff)
+        return files.map { file in
+            var file = file
+            file.patch = file.patch ?? patches[file.filename]
+            return file
+        }
     }
 
     /// Uses the compare API, which diffs `headSHA` against its merge base with `baseSHA`, like GitHub's commit range view.
@@ -440,23 +500,12 @@ final class GitHubAPI: GitHubAPIClient {
 
     func fetchPullRequestComments(token: String, reference: PullRequestReference) async throws -> PullRequestComments {
         let (owner, name) = try repoParts(reference.repoFullName)
-        // Only the first 100 comments and threads are loaded, like the changed files.
-        let query = """
-        query($owner: String!, $name: String!, $number: Int!) {
-          repository(owner: $owner, name: $name) {
-            pullRequest(number: $number) {
-              comments(first: 100) { nodes { ...CommentFields } }
-              reviews(states: PENDING, first: 1) { nodes { id viewerDidAuthor } }
-              reviewThreads(first: 100) {
-                nodes {
-                  id path line startLine diffSide isResolved isOutdated
-                  comments(first: 100) { nodes { ...CommentFields } }
-                }
-              }
-            }
-          }
-        }
-
+        let pageInfo = "pageInfo { hasNextPage endCursor }"
+        let threadFields = """
+        id path line startLine diffSide isResolved isOutdated
+        comments(first: 100) { \(pageInfo) nodes { ...CommentFields } }
+        """
+        let commentFields = """
         fragment CommentFields on Comment {
           id
           body
@@ -466,6 +515,25 @@ final class GitHubAPI: GitHubAPIClient {
           ... on PullRequestReviewComment { databaseId url state }
         }
         """
+        // Each list loads in pages of 100; later pages are loaded below.
+        let query = """
+        query($owner: String!, $name: String!, $number: Int!) {
+          repository(owner: $owner, name: $name) {
+            pullRequest(number: $number) {
+              comments(first: 100) { \(pageInfo) nodes { ...CommentFields } }
+              reviews(states: PENDING, first: 1) { nodes { id viewerDidAuthor } }
+              reviewThreads(first: 100) {
+                \(pageInfo)
+                nodes {
+                  \(threadFields)
+                }
+              }
+            }
+          }
+        }
+
+        \(commentFields)
+        """
         let response = try await graphQL(CommentsResponse.self,
                                          query: query,
                                          variables: ["owner": owner, "name": name, "number": reference.number],
@@ -473,9 +541,38 @@ final class GitHubAPI: GitHubAPIClient {
         guard let pullRequest = response.repository?.pullRequest else {
             throw GraphQLError(message: "Pull request \(reference.id) was not found.")
         }
+        let comments = try await allNodes(pullRequest.comments) { cursor in
+            try await pullRequestPage(CommentsResponse.Comment.self,
+                                      connection: "comments(first: 100, after: $after) { \(pageInfo) nodes { ...CommentFields } }",
+                                      fragments: commentFields, owner: owner, name: name, number: reference.number,
+                                      after: cursor, token: token)
+        }
+        var threads = try await allNodes(pullRequest.reviewThreads) { cursor in
+            try await pullRequestPage(CommentsResponse.Thread.self,
+                                      connection: "reviewThreads(first: 100, after: $after) { \(pageInfo) nodes { \(threadFields) } }",
+                                      fragments: commentFields, owner: owner, name: name, number: reference.number,
+                                      after: cursor, token: token)
+        }
+        for index in threads.indices where threads[index].comments.pageInfo?.hasNextPage == true {
+            let threadID = threads[index].id
+            threads[index].comments.nodes = try await allNodes(threads[index].comments) { cursor in
+                struct Response: Decodable {
+                    struct Thread: Decodable { let page: GraphQLPage<CommentsResponse.Comment>? }
+                    let node: Thread?
+                }
+                return try await graphQL(Response.self, query: """
+                query($id: ID!, $after: String!) {
+                  node(id: $id) {
+                    ... on PullRequestReviewThread { page: comments(first: 100, after: $after) { \(pageInfo) nodes { ...CommentFields } } }
+                  }
+                }
+                \(commentFields)
+                """, variables: ["id": threadID, "after": cursor], token: token).node?.page
+            }
+        }
         return PullRequestComments(
-            comments: pullRequest.comments.nodes.map(\.comment),
-            threads: pullRequest.reviewThreads.nodes.map { thread in
+            comments: comments.map(\.comment),
+            threads: threads.map { thread in
                 ReviewThread(id: thread.id,
                              path: thread.path,
                              line: thread.line,
@@ -733,7 +830,7 @@ final class GitHubAPI: GitHubAPIClient {
               viewerCanUpdateBranch
               mergeStateStatus
               baseRepository { allowUpdateBranch }
-              files(first: 100) { nodes { path viewerViewedState } }
+              files(first: 100) { pageInfo { hasNextPage endCursor } nodes { path viewerViewedState } }
               author { login }
               reviewDecision
               latestReviews(first: 100) {
@@ -762,7 +859,14 @@ final class GitHubAPI: GitHubAPIClient {
                                          variables: ["owner": owner, "name": name, "number": number],
                                          token: token)
         let pullRequest = response.repository?.pullRequest
-        let nodes = pullRequest?.files?.nodes ?? []
+        var nodes: [ViewerStateResponse.File] = []
+        if let files = pullRequest?.files {
+            nodes = try await allNodes(files) { cursor in
+                try await pullRequestPage(ViewerStateResponse.File.self,
+                                          connection: "files(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { path viewerViewedState } }",
+                                          owner: owner, name: name, number: number, after: cursor, token: token)
+            }
+        }
         let isAuthor = pullRequest?.viewerDidAuthor == true
         let canEdit = isAuthor && pullRequest?.viewerCanUpdate == true
         let suggestsUpdate = pullRequest?.baseRepository?.allowUpdateBranch == true || pullRequest?.mergeStateStatus == "BEHIND"
@@ -773,6 +877,38 @@ final class GitHubAPI: GitHubAPIClient {
                 lastReviewedSHA, canEdit, isAuthor, canUpdateBranch,
                 pullRequest?.reviewers ?? .none,
                 ["ADMIN", "MAINTAIN", "WRITE", "TRIAGE"].contains(response.repository?.viewerPermission ?? ""))
+    }
+
+    /// The nodes of `first` and of the pages after it, until GitHub has no more or `maxListPages` pages are loaded.
+    /// `fetch` loads the page after a cursor, or returns nil when it is gone.
+    private func allNodes<Node>(_ first: GraphQLPage<Node>,
+                                fetch: (String) async throws -> GraphQLPage<Node>?) async throws -> [Node] {
+        var nodes = first.nodes
+        var pageInfo = first.pageInfo
+        for _ in 1..<Self.maxListPages {
+            guard let info = pageInfo, info.hasNextPage, let cursor = info.endCursor,
+                  let page = try await fetch(cursor) else { break }
+            nodes += page.nodes
+            pageInfo = page.pageInfo
+        }
+        return nodes
+    }
+
+    /// The page after `cursor` of the pull request connection `connection`, which selects `$after`.
+    private func pullRequestPage<Node: Decodable>(_ type: Node.Type, connection: String, fragments: String = "",
+                                                  owner: String, name: String, number: Int,
+                                                  after cursor: String, token: String) async throws -> GraphQLPage<Node>? {
+        let query = """
+        query($owner: String!, $name: String!, $number: Int!, $after: String!) {
+          repository(owner: $owner, name: $name) {
+            pullRequest(number: $number) { page: \(connection) }
+          }
+        }
+        \(fragments)
+        """
+        return try await graphQL(PullRequestPageResponse<Node>.self, query: query,
+                                 variables: ["owner": owner, "name": name, "number": number, "after": cursor],
+                                 token: token).repository?.pullRequest?.page
     }
 
     private func repoParts(_ repoFullName: String) throws -> (owner: String, name: String) {
@@ -1011,7 +1147,7 @@ private struct PullFileResponse: Decodable {
     let status: String
     let additions: Int
     let deletions: Int
-    let patch: String?
+    var patch: String?
 
     enum CodingKeys: String, CodingKey {
         case filename, status, additions, deletions, patch
@@ -1039,7 +1175,7 @@ private struct ViewerStateResponse: Decodable {
         let viewerCanUpdateBranch: Bool?
         let mergeStateStatus: String?
         let baseRepository: BaseRepository?
-        let files: Files?
+        let files: GraphQLPage<File>?
         var author: Login?
         var reviewDecision: String?
         var latestReviews: Connection<Review>?
@@ -1091,7 +1227,6 @@ private struct ViewerStateResponse: Decodable {
         let asCodeOwner: Bool?
         let requestedReviewer: Reviewer?
     }
-    struct Files: Decodable { let nodes: [File] }
     struct File: Decodable {
         let path: String
         let viewerViewedState: String
@@ -1103,8 +1238,8 @@ private struct ViewerStateResponse: Decodable {
 private struct CommentsResponse: Decodable {
     struct Repository: Decodable { let pullRequest: PullRequest? }
     struct PullRequest: Decodable {
-        let comments: Connection<Comment>
-        let reviewThreads: Connection<Thread>
+        let comments: GraphQLPage<Comment>
+        let reviewThreads: GraphQLPage<Thread>
         /// The viewer's pending review, if any.
         let reviews: Connection<Review>?
     }
@@ -1121,7 +1256,7 @@ private struct CommentsResponse: Decodable {
         let diffSide: String
         let isResolved: Bool
         let isOutdated: Bool
-        let comments: Connection<Comment>
+        var comments: GraphQLPage<Comment>
     }
     struct Comment: Decodable {
         struct Author: Decodable { let login: String }
@@ -1336,12 +1471,13 @@ private struct PullRequestNode: Decodable {
 
 private struct ReviewRequestsResponse: Decodable {
     let viewer: Author?
-    let direct: Search
-    let all: Search
+    var direct: Search
+    var all: Search
 
     struct Search: Decodable {
+        var pageInfo: GraphQLPageInfo?
         /// A pull request in an organization the token isn't SSO-authorized for comes back as null.
-        let nodes: [Node?]
+        var nodes: [Node?]
 
         /// `isMyRequest` picks the review-requested events that count as asking me.
         func rows(isMyRequest: (Reviewer) -> Bool) -> [ReviewRequestRow] {
@@ -1416,6 +1552,24 @@ private struct StatusCheckContexts: Decodable {
 }
 
 private struct AutoMergeRequest: Decodable {}
+
+/// One page of a GraphQL connection. Queries that do not page leave out `pageInfo`.
+private struct GraphQLPage<Node: Decodable>: Decodable {
+    var pageInfo: GraphQLPageInfo?
+    var nodes: [Node]
+}
+
+private struct GraphQLPageInfo: Decodable {
+    let hasNextPage: Bool
+    let endCursor: String?
+}
+
+/// A follow-up page of one of a pull request's connections, queried under the alias `page`.
+private struct PullRequestPageResponse<Node: Decodable>: Decodable {
+    struct Repository: Decodable { let pullRequest: PullRequest? }
+    struct PullRequest: Decodable { let page: GraphQLPage<Node> }
+    let repository: Repository?
+}
 
 private struct GraphQLResponse<T: Decodable>: Decodable {
     let data: T?
