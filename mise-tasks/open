@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+#MISE description="Open the Debug app, quitting the copy this checkout opened before"
+source "$MISE_PROJECT_ROOT/scripts/lib.sh"
+
+app=$(app_path Debug)
+quit_app_launched_from "$app"
+run open -n "$app"

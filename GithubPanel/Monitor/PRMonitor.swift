@@ -102,7 +102,7 @@ final class PRMonitor: ObservableObject {
     init(api: GitHubAPIClient = GitHubAPI(),
          tokenStore: TokenStoring = KeychainStore(),
          notificationPoster: NotificationPosting = NotificationManager.shared,
-         defaults: DefaultsStoring = UserDefaults.standard,
+         defaults: DefaultsStoring = AppDefaults.store,
          timerScheduler: TimerScheduling = SystemTimerScheduler(),
          dateProvider: DateProviding = SystemDateProvider(),
          hookRunner: PullRequestHookRunning = SystemPullRequestHookRunner(),

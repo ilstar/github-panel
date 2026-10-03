@@ -109,10 +109,6 @@ struct GithubPanelApp: App {
 }
 
 private extension ProcessInfo {
-    var isRunningTests: Bool {
-        environment["XCTestConfigurationFilePath"] != nil
-    }
-
     #if DEBUG
     var usesMockGitHubPRs: Bool {
         arguments.contains("--mock-github-prs")

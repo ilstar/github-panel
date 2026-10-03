@@ -24,8 +24,8 @@ final class DiffScrollPerformanceTests: XCTestCase {
     }
 
     override func tearDown() {
-        UserDefaults.standard.removeObject(forKey: PullRequestFilesView.viewModeDefaultsKey)
-        UserDefaults.standard.removeObject(forKey: PullRequestFilesView.showsFileTreeDefaultsKey)
+        AppDefaults.store.removeObject(forKey: PullRequestFilesView.viewModeDefaultsKey)
+        AppDefaults.store.removeObject(forKey: PullRequestFilesView.showsFileTreeDefaultsKey)
         super.tearDown()
     }
 
@@ -44,8 +44,8 @@ final class DiffScrollPerformanceTests: XCTestCase {
     /// The diff list's median frame time over the plain list's. The two take turns three times and each keeps its
     /// fastest run, so a burst of other work on the machine does not fail the test.
     private func scrollCostRatio(mode: DiffViewMode) async throws -> Double {
-        UserDefaults.standard.set(mode.rawValue, forKey: PullRequestFilesView.viewModeDefaultsKey)
-        UserDefaults.standard.set(false, forKey: PullRequestFilesView.showsFileTreeDefaultsKey)
+        AppDefaults.store.set(mode.rawValue, forKey: PullRequestFilesView.viewModeDefaultsKey)
+        AppDefaults.store.set(false, forKey: PullRequestFilesView.showsFileTreeDefaultsKey)
         let files = Self.files()
         let viewModel = PullRequestDetailViewModel(reference: Self.reference) { _ in Self.content(files) }
         await viewModel.load()
