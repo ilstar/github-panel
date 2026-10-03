@@ -10,7 +10,7 @@ enum PullRequestDetailTab: String, CaseIterable, Identifiable {
 }
 
 struct PullRequestDetailView: View {
-    @AppStorage(PullRequestTextSize.defaultsKey) private var prTextSize = PullRequestTextSize.defaultSize
+    @AppStorage(PullRequestTextSize.defaultsKey, store: AppDefaults.store) private var prTextSize = PullRequestTextSize.defaultSize
     @StateObject private var viewModel: PullRequestDetailViewModel
     @State private var selectedTab: PullRequestDetailTab = .conversation
     @State private var isEditingTitle = false

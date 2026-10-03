@@ -46,7 +46,7 @@ struct ContentView: View {
     @State private var reviewRowIDs: [String] = []
     @State private var mergeInFlight: Set<String> = []
     @State private var pageScroller = PageScroller()
-    @AppStorage(ListPaneLayout.widthDefaultsKey) private var listPaneWidth: Double = ListPaneLayout.defaultWidth
+    @AppStorage(ListPaneLayout.widthDefaultsKey, store: AppDefaults.store) private var listPaneWidth: Double = ListPaneLayout.defaultWidth
     private let minuteTicker = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
     private let relativeFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()

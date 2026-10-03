@@ -71,6 +71,12 @@ Build and open the app with:
 mise run build-and-open
 ```
 
+Opening the app first quits the copy this checkout opened before, so repeated runs do not pile up copies. Copies
+from other checkouts and the installed app keep running.
+
+The unit tests run inside the app, but they keep its settings in a temporary file, so a test run never reads or
+changes the settings of the app you use, and test runs in different checkouts do not affect each other.
+
 Run the unit tests with:
 
 ```bash

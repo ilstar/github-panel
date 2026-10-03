@@ -28,7 +28,7 @@ enum AppAppearance: String, CaseIterable, Identifiable {
     }
 
     /// The saved choice, or System when nothing valid is saved.
-    static func stored(in defaults: DefaultsStoring = UserDefaults.standard) -> AppAppearance {
+    static func stored(in defaults: DefaultsStoring = AppDefaults.store) -> AppAppearance {
         defaults.string(forKey: defaultsKey).flatMap(AppAppearance.init(rawValue:)) ?? .system
     }
 
