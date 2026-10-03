@@ -33,6 +33,9 @@ struct PullRequestReviewer: Identifiable, Equatable {
         "\(kind == .team ? "team" : "user"):\(name.lowercased())"
     }
 
+    /// GitHub offers "Re-request review" next to a user who already reviewed, for example after the author pushed fixes.
+    var canReRequest: Bool { kind == .user && state != .pending }
+
     /// GitHub's tooltip for the reviewer's status icon.
     var helpText: String {
         let teams = onBehalfOf.isEmpty ? "" : " on behalf of \(onBehalfOf.joined(separator: ", "))"

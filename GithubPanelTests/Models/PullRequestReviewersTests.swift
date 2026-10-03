@@ -107,6 +107,15 @@ final class PullRequestReviewersTests: XCTestCase {
         XCTAssertEqual(start.settingRequest(name: "hubot", kind: .user, requested: false), start)
     }
 
+    func testOnlyUsersWhoAlreadyReviewedCanBeReRequested() {
+        XCTAssertTrue(PullRequestReviewer(name: "a", kind: .user, state: .changesRequested).canReRequest)
+        XCTAssertTrue(PullRequestReviewer(name: "a", kind: .user, state: .approved).canReRequest)
+        XCTAssertTrue(PullRequestReviewer(name: "a", kind: .user, state: .commented).canReRequest)
+        XCTAssertTrue(PullRequestReviewer(name: "a", kind: .user, state: .dismissed).canReRequest)
+        XCTAssertFalse(PullRequestReviewer(name: "a", kind: .user, state: .pending, previousState: .changesRequested).canReRequest)
+        XCTAssertFalse(PullRequestReviewer(name: "acme/web", kind: .team, state: .pending).canReRequest)
+    }
+
     func testCandidatesPutMatchingSuggestionsFirstAndLeaveOutTheAuthorAndRepeats() {
         let suggested = [ReviewerCandidate(name: "hubot", kind: .user, detail: "Hubot", isSuggested: true),
                          ReviewerCandidate(name: "monalisa", kind: .user, isSuggested: true)]
