@@ -42,7 +42,11 @@ struct PullRequestReviewersView: View {
             } else {
                 VStack(alignment: .leading, spacing: 7) {
                     ForEach(reviewers.reviewers) { reviewer in
-                        PullRequestReviewerRow(reviewer: reviewer)
+                        PullRequestReviewerRow(reviewer: reviewer,
+                                               isReRequesting: actions?.inFlight.contains(reviewer.id) == true,
+                                               onReRequest: actions.map { actions in
+                                                   { actions.setRequested(reviewer.name, reviewer.kind, true) }
+                                               })
                     }
                 }
             }
@@ -80,6 +84,9 @@ struct PullRequestReviewersView: View {
 
 struct PullRequestReviewerRow: View {
     let reviewer: PullRequestReviewer
+    var isReRequesting = false
+    /// Set when the viewer may request reviews; shows GitHub's re-request button next to a finished review.
+    var onReRequest: (() -> Void)?
 
     var body: some View {
         HStack(spacing: 6) {
@@ -106,6 +113,22 @@ struct PullRequestReviewerRow: View {
                 }
             }
             Spacer(minLength: 6)
+            if isReRequesting {
+                ProgressView()
+                    .controlSize(.mini)
+                    .frame(width: 16, height: 16)
+            } else if let onReRequest, reviewer.canReRequest {
+                Button(action: onReRequest) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 16, height: 16)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Re-request review")
+                .accessibilityLabel("Re-request review from \(reviewer.name)")
+            }
             statusIcon
                 .accessibilityLabel(reviewer.helpText)
         }
