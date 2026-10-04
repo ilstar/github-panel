@@ -7,10 +7,6 @@
 # ignored by Git. Both use dotenv syntax: KEY="value".
 _.file = [".env", ".env.local"]
 
-[tasks.open]
-description = "Open the Debug app"
-run = "open -n build/DerivedData/Build/Products/Debug/GithubPanel.app"
-
 [tasks.run]
 description = "Run the Debug app binary so print() output appears in the terminal"
 run = "build/DerivedData/Build/Products/Debug/GithubPanel.app/Contents/MacOS/GithubPanel"

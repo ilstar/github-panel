@@ -25,9 +25,9 @@ struct PullRequestFilesView: View {
     let files: [PullRequestFile]
     let filesURL: URL
 
-    @AppStorage(viewModeDefaultsKey) private var mode: DiffViewMode = .unified
-    @AppStorage(hideWhitespaceDefaultsKey) private var hideWhitespace = false
-    @AppStorage(showsFileTreeDefaultsKey) private var showsFileTree = true
+    @AppStorage(viewModeDefaultsKey, store: AppDefaults.store) private var mode: DiffViewMode = .unified
+    @AppStorage(hideWhitespaceDefaultsKey, store: AppDefaults.store) private var hideWhitespace = false
+    @AppStorage(showsFileTreeDefaultsKey, store: AppDefaults.store) private var showsFileTree = true
     @State private var collapsed: Set<String> = []
     @State private var didCollapseViewedFiles = false
     @State private var collapsedDirectories: Set<String> = []

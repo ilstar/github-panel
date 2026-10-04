@@ -76,6 +76,22 @@ xcodebuild_app() {
   run xcodebuild "${args[@]}" "${@:2}"
 }
 
+# quit_app_launched_from <app path>: quits running copies of the app at that path and waits for them to exit.
+# Copies from other checkouts and the installed app keep running.
+quit_app_launched_from() {
+  local executable="$1/Contents/MacOS/$APP_NAME" pid
+  for pid in $(pgrep -x "$APP_NAME" || true); do
+    if [[ "$(ps -o comm= -p "$pid")" == "$executable" ]]; then
+      run kill "$pid" || true
+      dry_run && continue
+      for _ in {1..50}; do
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.1
+      done
+    fi
+  done
+}
+
 # Checked before a release build starts so a missing setting fails fast
 # instead of after notarization.
 require_distribution_signing() {

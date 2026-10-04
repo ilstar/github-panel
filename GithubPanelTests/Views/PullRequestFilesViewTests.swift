@@ -91,10 +91,8 @@ final class PullRequestFilesViewTests: XCTestCase {
         let content = PullRequestDetailContent(detail: detailContent(for: reference).detail, files: files)
         let viewModel = PullRequestDetailViewModel(reference: reference) { _ in content }
         await viewModel.load()
-        let suite = "GithubPanelTests.fileTreeSize.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defaults.set(true, forKey: PullRequestFilesView.showsFileTreeDefaultsKey)
-        defer { defaults.removePersistentDomain(forName: suite) }
+        AppDefaults.store.set(true, forKey: PullRequestFilesView.showsFileTreeDefaultsKey)
+        defer { AppDefaults.store.removeObject(forKey: PullRequestFilesView.showsFileTreeDefaultsKey) }
 
         func measurements(size: Int) throws -> (rowsHeight: CGFloat, filterSize: CGFloat) {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 600),
@@ -102,7 +100,6 @@ final class PullRequestFilesViewTests: XCTestCase {
             window.isReleasedWhenClosed = false
             let host = NSHostingView(rootView: PullRequestFilesView(viewModel: viewModel, files: files,
                                                                     filesURL: content.detail.htmlURL)
-                .defaultAppStorage(defaults)
                 .environment(\.pullRequestTextSize, size))
             window.contentView = host
             window.orderFront(nil)

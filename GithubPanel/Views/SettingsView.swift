@@ -5,9 +5,9 @@ struct SettingsView: View {
     @EnvironmentObject private var monitor: PRMonitor
     @State private var tokenInput: String = ""
     @State private var isSaving = false
-    @AppStorage(AppAppearance.defaultsKey) private var appearance: AppAppearance = .system
+    @AppStorage(AppAppearance.defaultsKey, store: AppDefaults.store) private var appearance: AppAppearance = .system
 
-    @AppStorage(PullRequestTextSize.defaultsKey) private var prTextSize = PullRequestTextSize.defaultSize
+    @AppStorage(PullRequestTextSize.defaultsKey, store: AppDefaults.store) private var prTextSize = PullRequestTextSize.defaultSize
 
     var body: some View {
         Form {
