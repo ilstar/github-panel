@@ -10,6 +10,7 @@ struct GithubPanelApp: App {
     private let updaterController: SPUStandardUpdaterController
 
     init() {
+        LegacyDefaultsMigration.runIfNeeded()
         let monitor = Self.makeMonitor()
         _monitor = StateObject(wrappedValue: monitor)
         updaterController = SPUStandardUpdaterController(startingUpdater: false,
