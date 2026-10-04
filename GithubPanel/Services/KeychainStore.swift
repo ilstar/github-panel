@@ -29,7 +29,7 @@ struct SystemSecurityClient: SecurityClient {
 }
 
 final class KeychainStore: TokenStoring {
-    private let service = "com.githubpanel.token"
+    private let service = "io.github.ilstar.github-panel.token"
     private let account = "github-token"
     private let security: SecurityClient
 

@@ -15,6 +15,16 @@ final class KeychainStoreTests: XCTestCase {
         XCTAssertEqual(security.tokenData.flatMap { String(data: $0, encoding: .utf8) }, "second")
     }
 
+    func testTokenIsStoredUnderTheAppIdentifier() {
+        let security = FakeSecurityClient()
+        let store = KeychainStore(security: security)
+
+        store.saveToken("secret")
+
+        XCTAssertEqual(security.addAttributes.first?[kSecAttrService as String] as? String,
+                       "io.github.ilstar.github-panel.token")
+    }
+
     func testLoadTokenSuccessAndHasToken() {
         let security = FakeSecurityClient()
         security.tokenData = Data("secret".utf8)
