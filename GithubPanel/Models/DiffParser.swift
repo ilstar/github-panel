@@ -66,4 +66,37 @@ enum DiffParser {
         }
         return (old, new)
     }
+
+    /// Splits a whole pull request's raw diff into each file's hunks, keyed by its new path
+    /// (its old path when deleted), in the same form as GitHub's `patch` field.
+    /// Files with no hunks, such as binary files or pure renames, are left out.
+    static func patchesByFile(rawDiff: String) -> [String: String] {
+        var patches: [String: String] = [:]
+        var oldPath: String?
+        var newPath: String?
+        var hunks: [Substring] = []
+        func finishFile() {
+            if let path = newPath ?? oldPath, !hunks.isEmpty {
+                patches[path] = hunks.joined(separator: "\n")
+            }
+            oldPath = nil
+            newPath = nil
+            hunks = []
+        }
+        for line in rawDiff.split(separator: "\n", omittingEmptySubsequences: false) {
+            if line.hasPrefix("diff --git ") {
+                finishFile()
+            } else if !hunks.isEmpty || line.hasPrefix("@@") {
+                hunks.append(line)
+            } else if line.hasPrefix("--- a/") {
+                oldPath = String(line.dropFirst("--- a/".count))
+            } else if line.hasPrefix("+++ b/") {
+                newPath = String(line.dropFirst("+++ b/".count))
+            }
+        }
+        // The diff's final newline ends its last line; it is not an empty line of the last hunk.
+        if hunks.last?.isEmpty == true { hunks.removeLast() }
+        finishFile()
+        return patches
+    }
 }
