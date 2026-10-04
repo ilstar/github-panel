@@ -13,6 +13,8 @@ enum ListPaneLayout {
     static let dividerWidth: CGFloat = 1
     /// The narrowest window that fits both panes at their minimum widths.
     static let minWindowWidth: CGFloat = minWidth + dividerWidth + minDetailWidth
+    /// The size a new main window opens at: the list at its default width with plenty of room for the pull request.
+    static let defaultWindowSize = CGSize(width: 1360, height: 880)
 
     /// Keeps the list within its limits and leaves room for the detail pane.
     static func clampedWidth(_ width: CGFloat, totalWidth: CGFloat) -> CGFloat {

@@ -37,6 +37,7 @@ struct GithubPanelApp: App {
             ContentView()
                 .environmentObject(monitor)
         }
+        .defaultSize(ListPaneLayout.defaultWindowSize)
         // The list and the pull request run up to the top edge, with the window buttons over the list.
         .windowStyle(.hiddenTitleBar)
         .commands {

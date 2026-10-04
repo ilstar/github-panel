@@ -31,4 +31,17 @@ final class ListPaneLayoutTests: XCTestCase {
         XCTAssertEqual(ListPaneLayout.clampedWidth(ListPaneLayout.defaultWidth, totalWidth: 1400),
                        ListPaneLayout.defaultWidth)
     }
+
+    func testDefaultWindowKeepsTheDefaultListWidthAndRoomForThePullRequest() {
+        let size = ListPaneLayout.defaultWindowSize
+        XCTAssertEqual(ListPaneLayout.clampedWidth(ListPaneLayout.defaultWidth, totalWidth: size.width),
+                       ListPaneLayout.defaultWidth)
+        XCTAssertGreaterThanOrEqual(size.width - ListPaneLayout.defaultWidth - ListPaneLayout.dividerWidth, 700)
+        XCTAssertGreaterThan(size.height, 500)
+    }
+
+    func testMainWindowOpensAtTheDefaultSize() throws {
+        let source = try String(contentsOf: TestPaths.url("GithubPanel/App/GithubPanelApp.swift"), encoding: .utf8)
+        XCTAssertTrue(source.contains(".environmentObject(monitor)\n        }\n        .defaultSize(ListPaneLayout.defaultWindowSize)"))
+    }
 }

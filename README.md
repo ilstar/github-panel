@@ -211,14 +211,14 @@ The mock list includes PRs for ready-to-merge, enable auto-merge, disable auto-m
 To make normal launches of the debug app use mock data:
 
 ```bash
-defaults write com.githubpanel.app GithubPanel.useMockGitHubPRs -bool true
+defaults write io.github.ilstar.github-panel GithubPanel.useMockGitHubPRs -bool true
 mise run open
 ```
 
 To turn the persistent mock setting off:
 
 ```bash
-defaults delete com.githubpanel.app GithubPanel.useMockGitHubPRs
+defaults delete io.github.ilstar.github-panel GithubPanel.useMockGitHubPRs
 ```
 
 To clean the command-line build output:
