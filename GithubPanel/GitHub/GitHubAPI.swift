@@ -433,9 +433,11 @@ final class GitHubAPI: GitHubAPIClient {
     /// Read all supported locations in one request, using the base branch and GitHub's location precedence.
     private func fetchCodeOwners(token: String, owner: String, name: String, baseRef: String,
                                  paths: [String]) async throws -> (owners: CodeOwners, login: String, email: String?, teams: Set<String>) {
+        // `viewer.email` needs the `user:email` or `read:user` scope, and asking for it without one fails the whole
+        // query, so it is only read below when an owner is an email address.
         let query = """
         query($owner: String!, $name: String!, $github: String!, $root: String!, $docs: String!) {
-          viewer { login email }
+          viewer { login }
           repository(owner: $owner, name: $name) {
             github: object(expression: $github) { ... on Blob { text } }
             root: object(expression: $root) { ... on Blob { text } }
@@ -444,7 +446,7 @@ final class GitHubAPI: GitHubAPIClient {
         }
         """
         struct Response: Decodable {
-            struct Viewer: Decodable { let login: String; let email: String? }
+            struct Viewer: Decodable { let login: String }
             struct Blob: Decodable { let text: String? }
             struct Repository: Decodable { let github: Blob?; let root: Blob?; let docs: Blob? }
             let viewer: Viewer
@@ -453,24 +455,61 @@ final class GitHubAPI: GitHubAPIClient {
         let response = try await graphQL(Response.self, query: query,
             variables: ["owner": owner, "name": name, "github": baseRef + ":.github/CODEOWNERS",
                         "root": baseRef + ":CODEOWNERS", "docs": baseRef + ":docs/CODEOWNERS"], token: token)
+        let login = response.viewer.login
         let rules = CodeOwners(response.repository?.github?.text ?? response.repository?.root?.text ?? response.repository?.docs?.text ?? "")
-        let teamOwners = Set(paths.flatMap { rules.owners(for: $0) }.filter { $0.hasPrefix("@") && $0.contains("/") })
-        let teams = await withTaskGroup(of: String?.self) { group in
-            for team in teamOwners {
+        let owners = Set(paths.flatMap { rules.owners(for: $0) })
+        let teamOwners = Set(owners.filter { $0.hasPrefix("@") && $0.contains("/") }.map { $0.lowercased() })
+        var email: String?
+        if owners.contains(where: { !$0.hasPrefix("@") }) {
+            struct EmailResponse: Decodable {
+                struct Viewer: Decodable { let email: String? }
+                let viewer: Viewer
+            }
+            email = try? await graphQL(EmailResponse.self, query: "query { viewer { email } }", variables: [:], token: token).viewer.email
+        }
+        guard !teamOwners.isEmpty else { return (rules, login, email, []) }
+        // Listing the viewer's teams works with the `repo` scope; the membership lookup below needs `read:org`.
+        let listedTeams = (try? await fetchViewerTeams(token: token)) ?? []
+        var teams = teamOwners.intersection(listedTeams)
+        // The membership lookup also counts members of child teams, which the list leaves out past one level.
+        let memberTeams = await withTaskGroup(of: String?.self) { group in
+            for team in teamOwners.subtracting(teams) {
                 group.addTask {
                     let parts = team.dropFirst().split(separator: "/").map(String.init)
                     guard parts.count == 2 else { return nil }
                     struct Membership: Decodable { let state: String }
-                    let request = self.makeRequest(path: "/orgs/\(parts[0])/teams/\(parts[1])/memberships/\(response.viewer.login)", token: token)
+                    let request = self.makeRequest(path: "/orgs/\(parts[0])/teams/\(parts[1])/memberships/\(login)", token: token)
                     let membership = try? await self.decode(Membership.self, request: request)
-                    return membership?.state == "active" ? team.lowercased() : nil
+                    return membership?.state == "active" ? team : nil
                 }
             }
             var result: Set<String> = []
             for await team in group { if let team { result.insert(team) } }
             return result
         }
-        return (rules, response.viewer.login, response.viewer.email, teams)
+        teams.formUnion(memberTeams)
+        return (rules, login, email, teams)
+    }
+
+    /// The viewer's teams and their parent teams, as lowercased `@org/slug`. Members of a child team own its parent's files.
+    private func fetchViewerTeams(token: String) async throws -> Set<String> {
+        struct Team: Decodable {
+            struct Organization: Decodable { let login: String }
+            struct Parent: Decodable { let slug: String }
+            let slug: String
+            let organization: Organization
+            let parent: Parent?
+        }
+        var teams: Set<String> = []
+        for page in 1...Self.maxListPages {
+            let batch = try await decode([Team].self, request: makeRequest(path: "/user/teams?per_page=100&page=\(page)", token: token))
+            for team in batch {
+                teams.insert("@\(team.organization.login)/\(team.slug)".lowercased())
+                if let parent = team.parent { teams.insert("@\(team.organization.login)/\(parent.slug)".lowercased()) }
+            }
+            if batch.count < 100 { break }
+        }
+        return teams
     }
 
     func setFileViewed(token: String, pullRequestID: String, path: String, viewed: Bool) async throws {

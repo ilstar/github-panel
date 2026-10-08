@@ -861,6 +861,39 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertFalse(content.files.contains(where: \.isOwnedByViewer))
     }
 
+    func testCodeOwnersUsesViewerTeamsWithoutReadOrgOrEmailScopes() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: pullDetailResponse, path: pullPath)
+        transport.enqueue(json: pullFilesResponse, path: filesPath)
+        transport.enqueue(json: viewedFilesResponse, path: "/graphql")
+        transport.enqueue(json: #"{"data":{"viewer":{"login":"alice"},"repository":{"github":{"text":"/Sources/ @Acme/Platform\n*.png @acme/design"},"root":null,"docs":null}}}"#, path: "/graphql")
+        // The viewer is in a child team of Platform; the membership lookup is refused without `read:org`.
+        transport.enqueue(json: #"[{"slug":"ios","organization":{"login":"acme"},"parent":{"slug":"platform"}}]"#, path: "/user/teams")
+        transport.enqueue(json: #"{"message":"Not Found"}"#, statusCode: 404, path: "/orgs/acme/teams/design/memberships/alice")
+
+        let content = try await GitHubAPI(transport: transport).fetchPullRequestDetail(token: "token",
+            reference: PullRequestReference(repoFullName: "acme/widgets", number: 7))
+
+        XCTAssertEqual(content.files.map(\.isOwnedByViewer), [true, false])
+        let queries = transport.requests.compactMap { $0.jsonBody?["query"] as? String }
+        XCTAssertFalse(queries.contains { $0.contains("email") })
+        XCTAssertFalse(transport.requests.contains { $0.url?.path == "/orgs/acme/teams/platform/memberships/alice" })
+    }
+
+    func testCodeOwnersReadsViewerEmailOnlyForEmailOwners() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: pullDetailResponse, path: pullPath)
+        transport.enqueue(json: pullFilesResponse, path: filesPath)
+        transport.enqueue(json: viewedFilesResponse, path: "/graphql")
+        transport.enqueue(json: #"{"data":{"viewer":{"login":"alice"},"repository":{"github":{"text":"* alice@example.com"},"root":null,"docs":null}}}"#, path: "/graphql")
+        transport.enqueue(json: #"{"data":{"viewer":{"email":"Alice@example.com"}}}"#, path: "/graphql")
+
+        let content = try await GitHubAPI(transport: transport).fetchPullRequestDetail(token: "token",
+            reference: PullRequestReference(repoFullName: "acme/widgets", number: 7))
+
+        XCTAssertTrue(content.files.allSatisfy(\.isOwnedByViewer))
+    }
+
     func testFetchPullRequestDetailLoadsFilesWhenViewedStateFails() async throws {
         let transport = MockHTTPTransport()
         transport.enqueue(json: pullDetailResponse, path: pullPath)
