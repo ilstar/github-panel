@@ -488,7 +488,8 @@ struct ContentView: View {
                 PRReviewRequestRow(pr: pr,
                                    isSelected: selectedReviewID == pr.id,
                                    relativeFormatter: relativeFormatter,
-                                   now: now)
+                                   now: now,
+                                   onHide: { monitor.hideReviewRequest(pr) })
                     .id(pr.id)
                     .onTapGesture {
                         selectedReviewID = pr.id

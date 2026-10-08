@@ -62,6 +62,86 @@ final class PRMonitorReviewRequestsTests: XCTestCase {
         XCTAssertEqual(api.fetchReviewRequestsTokens.count, 2)
     }
 
+    func testHiddenReviewRequestStaysHiddenAcrossRefreshes() async {
+        let api = FakeGitHubAPI()
+        var hidden = reviewRequestRow(number: 1)
+        hidden.headSHA = "sha-1"
+        api.reviewRequests = ReviewRequests(fromMe: [hidden], fromMyTeams: [reviewRequestRow(number: 2)])
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+        await monitor.refreshReviewRequests()
+
+        monitor.hideReviewRequest(hidden)
+        XCTAssertEqual(monitor.reviewRequests.rows.map(\.number), [2])
+
+        await monitor.refreshReviewRequests()
+        XCTAssertEqual(monitor.reviewRequests.rows.map(\.number), [2])
+    }
+
+    func testHiddenReviewRequestShowsAgainAfterNewCommits() async {
+        let api = FakeGitHubAPI()
+        var row = reviewRequestRow(number: 1)
+        row.headSHA = "sha-1"
+        api.reviewRequests = ReviewRequests(fromMe: [row], fromMyTeams: [])
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+        await monitor.refreshReviewRequests()
+        monitor.hideReviewRequest(row)
+
+        row.headSHA = "sha-2"
+        api.reviewRequests = ReviewRequests(fromMe: [row], fromMyTeams: [])
+        await monitor.refreshReviewRequests()
+
+        XCTAssertEqual(monitor.reviewRequests.rows, [row])
+    }
+
+    func testHiddenReviewRequestShowsAgainWhenReviewIsRequestedAgain() async {
+        let api = FakeGitHubAPI()
+        var row = reviewRequestRow(number: 1)
+        row.requestedAt = Date(timeIntervalSince1970: 100)
+        api.reviewRequests = ReviewRequests(fromMe: [row], fromMyTeams: [])
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+        await monitor.refreshReviewRequests()
+        monitor.hideReviewRequest(row)
+
+        row.requestedAt = Date(timeIntervalSince1970: 200)
+        api.reviewRequests = ReviewRequests(fromMe: [row], fromMyTeams: [])
+        await monitor.refreshReviewRequests()
+
+        XCTAssertEqual(monitor.reviewRequests.rows, [row])
+    }
+
+    func testHiddenReviewRequestIsForgottenOnceItLeavesTheList() async {
+        let api = FakeGitHubAPI()
+        let row = reviewRequestRow(number: 1)
+        api.reviewRequests = ReviewRequests(fromMe: [row], fromMyTeams: [])
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+        await monitor.refreshReviewRequests()
+        monitor.hideReviewRequest(row)
+
+        api.reviewRequests = .empty
+        await monitor.refreshReviewRequests()
+        api.reviewRequests = ReviewRequests(fromMe: [row], fromMyTeams: [])
+        await monitor.refreshReviewRequests()
+
+        XCTAssertEqual(monitor.reviewRequests.rows, [row])
+    }
+
+    func testHiddenReviewRequestsAreRememberedAcrossLaunches() async {
+        let api = FakeGitHubAPI()
+        var row = reviewRequestRow(number: 1)
+        row.headSHA = "sha-1"
+        row.requestedAt = Date(timeIntervalSince1970: 100)
+        api.reviewRequests = ReviewRequests(fromMe: [row, reviewRequestRow(number: 2)], fromMyTeams: [])
+        let defaults = FakeDefaults()
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"), defaults: defaults)
+        await monitor.refreshReviewRequests()
+        monitor.hideReviewRequest(row)
+
+        let relaunched = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"), defaults: defaults)
+        await relaunched.refreshReviewRequests()
+
+        XCTAssertEqual(relaunched.reviewRequests.rows.map(\.number), [2])
+    }
+
     func testClearingTokenClearsReviewRequests() async {
         let api = FakeGitHubAPI()
         api.reviewRequests = ReviewRequests(fromMe: [reviewRequestRow(number: 1)], fromMyTeams: [])

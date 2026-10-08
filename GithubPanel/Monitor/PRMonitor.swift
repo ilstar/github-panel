@@ -87,6 +87,10 @@ final class PRMonitor: ObservableObject {
     private var lastReviewStatuses: [String: PullRequestReviewStatus] = [:]
     /// Review requests seen since the token was set. Nil until the first load, so the first list posts nothing.
     private var knownReviewRequestIDs: [ReviewRequestGroup: Set<String>]?
+    /// The last review requests GitHub returned, hidden ones included.
+    private var fetchedReviewRequests: ReviewRequests = .empty
+    /// Review requests hidden from To Review, keyed by pull request ID. Also saved to defaults.
+    private var hiddenReviewRequests: [String: HiddenReviewRequest] = [:]
     /// Main windows showing the list. A clicked notification opens GitHub while there are none.
     private var listWindowCount = 0
     private var nextTimerRefreshAt: Date?
@@ -128,6 +132,8 @@ final class PRMonitor: ObservableObject {
         }
         allSucceededHookScript = defaults.string(forKey: DefaultsKeys.allSucceededHookScript) ?? ""
         anyFailuresHookScript = defaults.string(forKey: DefaultsKeys.anyFailuresHookScript) ?? ""
+        hiddenReviewRequests = defaults.string(forKey: DefaultsKeys.hiddenReviewRequests)
+            .flatMap { try? JSONDecoder().decode([String: HiddenReviewRequest].self, from: Data($0.utf8)) } ?? [:]
     }
 
     func start() {
@@ -161,6 +167,7 @@ final class PRMonitor: ObservableObject {
         setPRRows([])
         openPullRequestsSSOAuthorizationURL = nil
         setHistoryRows([])
+        fetchedReviewRequests = .empty
         setReviewRequests(.empty)
         historyPage = 1
         historyTotalCount = 0
@@ -326,7 +333,8 @@ final class PRMonitor: ObservableObject {
             let requests = try await api.fetchReviewRequests(token: token)
             guard session == credentialSession else { return }
             notifyAboutNewReviewRequests(requests)
-            setReviewRequests(requests)
+            fetchedReviewRequests = requests
+            showReviewRequests()
             lastReviewRequestsRefreshAt = dateProvider.now
         } catch {
             guard session == credentialSession else { return }
@@ -473,6 +481,30 @@ final class PRMonitor: ObservableObject {
     private func setReviewRequests(_ requests: ReviewRequests) {
         guard reviewRequests != requests else { return }
         reviewRequests = requests
+    }
+
+    /// Hides a review request from To Review until new commits are pushed or my review is requested again.
+    func hideReviewRequest(_ row: ReviewRequestRow) {
+        hiddenReviewRequests[row.id] = HiddenReviewRequest(row)
+        saveHiddenReviewRequests()
+        setReviewRequests(reviewRequests.removing { $0.id == row.id })
+    }
+
+    /// Shows the fetched review requests that are not hidden. Forgets hidden requests that changed
+    /// or are no longer waiting on me, so they show again if they come back.
+    private func showReviewRequests() {
+        let rows = Dictionary(fetchedReviewRequests.rows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let stillHidden = hiddenReviewRequests.filter { id, hidden in rows[id].map(hidden.hides) ?? false }
+        if stillHidden != hiddenReviewRequests {
+            hiddenReviewRequests = stillHidden
+            saveHiddenReviewRequests()
+        }
+        setReviewRequests(fetchedReviewRequests.removing { stillHidden[$0.id] != nil })
+    }
+
+    private func saveHiddenReviewRequests() {
+        guard let data = try? JSONEncoder().encode(hiddenReviewRequests) else { return }
+        defaults.set(String(decoding: data, as: UTF8.self), forKey: DefaultsKeys.hiddenReviewRequests)
     }
 
     private func updateNotificationsForRows(_ rows: [PullRequestRow]) {
@@ -789,6 +821,7 @@ private enum DefaultsKeys {
     static let refreshInterval = "GithubPanel.refreshInterval"
     static let allSucceededHookScript = "GithubPanel.hooks.allSucceededScript"
     static let anyFailuresHookScript = "GithubPanel.hooks.anyFailuresScript"
+    static let hiddenReviewRequests = "GithubPanel.hiddenReviewRequests"
 
     static func mergeMethod(for repoFullName: String) -> String {
         "GithubPanel.mergeMethod.\(repoFullName)"

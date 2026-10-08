@@ -192,6 +192,7 @@ final class GitHubAPI: GitHubAPIClient {
           url
           updatedAt
           isDraft
+          headRefOid
           repository { nameWithOwner }
           author { login }
           additions
@@ -1499,7 +1500,8 @@ private struct ReviewRequestsResponse: Decodable {
                                         },
                                         additions: pr.additions,
                                         deletions: pr.deletions,
-                                        requestedAt: requests.compactMap(\.createdAt).max())
+                                        requestedAt: requests.compactMap(\.createdAt).max(),
+                                        headSHA: pr.headRefOid)
             }
         }
     }
@@ -1510,6 +1512,7 @@ private struct ReviewRequestsResponse: Decodable {
         let url: URL
         let updatedAt: Date
         let isDraft: Bool
+        let headRefOid: String?
         let repository: PullRequestNode.Repository
         let author: Author?
         let additions: Int?
