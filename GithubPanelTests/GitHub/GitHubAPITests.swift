@@ -176,7 +176,7 @@ final class GitHubAPITests: XCTestCase {
         {"data":{
           "direct":{"nodes":[
             {"id":"PR_a","title":"Direct","number":4,"url":"https://github.com/acme/widgets/pull/4",
-             "updatedAt":"2026-04-12T12:34:56Z","isDraft":false,
+             "updatedAt":"2026-04-12T12:34:56Z","isDraft":false,"headRefOid":"abc123",
              "repository":{"nameWithOwner":"acme/widgets"},"author":{"login":"octocat"}}
           ]},
           "all":{"nodes":[
@@ -200,8 +200,10 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertEqual(direct.htmlURL.absoluteString, "https://github.com/acme/widgets/pull/4")
         XCTAssertEqual(direct.updatedAt, ISO8601DateFormatter().date(from: "2026-04-12T12:34:56Z"))
         XCTAssertFalse(direct.isDraft)
+        XCTAssertEqual(direct.headSHA, "abc123")
         let team = try XCTUnwrap(requests.fromMyTeams.first)
         XCTAssertNil(team.authorLogin)
+        XCTAssertNil(team.headSHA)
         XCTAssertTrue(team.isDraft)
         XCTAssertEqual(transport.requests.count, 1)
         XCTAssertEqual(transport.requests.first?.url?.path, "/graphql")
@@ -209,6 +211,7 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertTrue(body.query.contains("user-review-requested:@me"))
         XCTAssertTrue(body.query.contains(" review-requested:@me"))
         XCTAssertTrue(body.query.contains("is:pr is:open archived:false"))
+        XCTAssertTrue(body.query.contains("headRefOid"))
     }
 
     func testFetchReviewRequestsFollowsEachGroupsPages() async throws {

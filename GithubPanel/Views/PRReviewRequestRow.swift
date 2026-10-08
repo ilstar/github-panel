@@ -5,6 +5,7 @@ struct PRReviewRequestRow: View {
     let isSelected: Bool
     let relativeFormatter: RelativeDateTimeFormatter
     let now: Date
+    let onHide: () -> Void
 
     @State private var isHovering = false
 
@@ -34,6 +35,17 @@ struct PRReviewRequestRow: View {
             }
 
             Spacer(minLength: 8)
+
+            if isHovering {
+                Button(action: onHide) {
+                    Image(systemName: "eye.slash")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .help("Hide until new commits are pushed or review is requested again")
+                .accessibilityLabel("Hide")
+            }
 
             Image(systemName: "arrow.up.right")
                 .font(.caption.weight(.semibold))

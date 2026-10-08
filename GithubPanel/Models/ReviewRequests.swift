@@ -36,6 +36,29 @@ struct ReviewRequests: Equatable {
         case .fromMyTeams: return fromMyTeams
         }
     }
+
+    /// The requests without the rows `isHidden` picks.
+    func removing(where isHidden: (ReviewRequestRow) -> Bool) -> ReviewRequests {
+        ReviewRequests(fromMe: fromMe.filter { !isHidden($0) },
+                       fromMyTeams: fromMyTeams.filter { !isHidden($0) },
+                       ssoAuthorizationURL: ssoAuthorizationURL)
+    }
+}
+
+/// What a review request looked like when it was hidden. It stays hidden until new commits are pushed
+/// or my review is requested again.
+struct HiddenReviewRequest: Codable, Equatable {
+    let headSHA: String?
+    let requestedAt: Date?
+
+    init(_ row: ReviewRequestRow) {
+        headSHA = row.headSHA
+        requestedAt = row.requestedAt
+    }
+
+    func hides(_ row: ReviewRequestRow) -> Bool {
+        headSHA == row.headSHA && requestedAt == row.requestedAt
+    }
 }
 
 enum ReviewRequestGroup: CaseIterable, Identifiable {
@@ -74,6 +97,8 @@ struct ReviewRequestRow: Identifiable, Equatable {
     var deletions: Int?
     /// When my review, or my team's, was last requested. Nil when GitHub does not say.
     var requestedAt: Date?
+    /// The head commit, so a hidden request shows again after a push.
+    var headSHA: String?
 
     var reference: PullRequestReference {
         PullRequestReference(repoFullName: repoFullName, number: number)

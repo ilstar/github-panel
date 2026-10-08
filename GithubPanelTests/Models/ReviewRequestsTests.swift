@@ -18,7 +18,34 @@ final class ReviewRequestsTests: XCTestCase {
         XCTAssertEqual(ReviewRequestGroup.allCases.map(\.title), ["Requested from me", "Requested from my teams"])
     }
 
-    func testDisplayStatePrefersRowsThenErrorThenLoading() {
+    func testRemovingDropsRowsFromBothGroupsAndKeepsTheSSONote() {
+        let url = URL(string: "https://github.com/orgs/acme/sso")!
+        let requests = ReviewRequests(fromMe: [reviewRequestRow(number: 1), reviewRequestRow(number: 2)],
+                                      fromMyTeams: [reviewRequestRow(number: 3)],
+                                      ssoAuthorizationURL: url)
+
+        let remaining = requests.removing { $0.number != 2 }
+
+        XCTAssertEqual(remaining.rows.map(\.number), [2])
+        XCTAssertEqual(remaining.ssoAuthorizationURL, url)
+    }
+
+    func testHiddenRequestHidesOnlyTheSameCommitAndRequest() {
+        var row = reviewRequestRow(number: 1)
+        row.headSHA = "sha-1"
+        row.requestedAt = Date(timeIntervalSince1970: 100)
+        let hidden = HiddenReviewRequest(row)
+
+        XCTAssertTrue(hidden.hides(row))
+        var pushed = row
+        pushed.headSHA = "sha-2"
+        XCTAssertFalse(hidden.hides(pushed))
+        var reRequested = row
+        reRequested.requestedAt = Date(timeIntervalSince1970: 200)
+        XCTAssertFalse(hidden.hides(reRequested))
+    }
+
+        func testDisplayStatePrefersRowsThenErrorThenLoading() {
         let rows = ReviewRequests(fromMe: [reviewRequestRow(number: 1)], fromMyTeams: [])
 
         XCTAssertEqual(state(rows, isLoading: true, error: "boom", hasLoaded: true), .list)

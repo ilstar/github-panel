@@ -667,7 +667,8 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
                              checkState: checkState,
                              additions: additions,
                              deletions: deletions,
-                             requestedAt: now.addingTimeInterval(-hoursWaiting * 3_600))
+                             requestedAt: now.addingTimeInterval(-hoursWaiting * 3_600),
+                             headSHA: "mock-sha-\(number)")
         }
         return ReviewRequests(fromMe: [
             request(number: 301, title: "Review: tidy the settings window", author: "octocat",
