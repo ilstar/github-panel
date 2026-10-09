@@ -55,6 +55,83 @@ final class ReviewRequestsTests: XCTestCase {
         XCTAssertEqual(state(.empty, isLoading: false, error: nil, hasLoaded: true), .empty)
     }
 
+    func testPageSpansTheEndOfRequestsFromMeAndTheStartOfTeamRequests() {
+        let requests = ReviewRequests(fromMe: (1...3).map { reviewRequestRow(number: $0) },
+                                      fromMyTeams: (4...7).map { reviewRequestRow(number: $0) })
+
+        let first = ReviewRequestsPage(requests: requests, page: 1, size: 2)
+        XCTAssertEqual(first.fromMe.map(\.number), [1, 2])
+        XCTAssertEqual(first.fromMyTeams.map(\.number), [])
+        XCTAssertEqual(first.pageCount, 4)
+        XCTAssertEqual(first.rangeText, "1-2 of 7")
+        XCTAssertFalse(first.canGoToPreviousPage)
+        XCTAssertTrue(first.canGoToNextPage)
+
+        let second = ReviewRequestsPage(requests: requests, page: 2, size: 2)
+        XCTAssertEqual(second.fromMe.map(\.number), [3])
+        XCTAssertEqual(second.fromMyTeams.map(\.number), [4])
+        XCTAssertEqual(second.rows.map(\.number), [3, 4])
+        XCTAssertEqual(second.rangeText, "3-4 of 7")
+
+        let last = ReviewRequestsPage(requests: requests, page: 4, size: 2)
+        XCTAssertEqual(last.rows.map(\.number), [7])
+        XCTAssertEqual(last.rangeText, "7-7 of 7")
+        XCTAssertTrue(last.canGoToPreviousPage)
+        XCTAssertFalse(last.canGoToNextPage)
+    }
+
+    func testPageIsClampedWhenRowsGoAway() {
+        let requests = ReviewRequests(fromMe: (1...3).map { reviewRequestRow(number: $0) }, fromMyTeams: [])
+
+        XCTAssertEqual(ReviewRequestsPage(requests: requests, page: 5, size: 2).page, 2)
+        XCTAssertEqual(ReviewRequestsPage(requests: requests, page: 0, size: 2).page, 1)
+        let empty = ReviewRequestsPage(requests: .empty, page: 3, size: 2)
+        XCTAssertEqual(empty.page, 1)
+        XCTAssertEqual(empty.pageCount, 1)
+        XCTAssertFalse(empty.hasMultiplePages)
+        XCTAssertEqual(empty.rows, [])
+    }
+
+    func testOnePageWhenEverythingFits() {
+        let requests = ReviewRequests(fromMe: (1...2).map { reviewRequestRow(number: $0) },
+                                      fromMyTeams: [reviewRequestRow(number: 3)])
+
+        let page = ReviewRequestsPage(requests: requests, page: 1)
+        XCTAssertFalse(page.hasMultiplePages)
+        XCTAssertEqual(page.rows.map(\.number), [1, 2, 3])
+        XCTAssertEqual(ReviewRequestsPage.defaultSize, 10)
+    }
+
+    func testPageContainingFindsARequestInEitherGroup() {
+        let requests = ReviewRequests(fromMe: (1...3).map { reviewRequestRow(number: $0) },
+                                      fromMyTeams: (4...5).map { reviewRequestRow(number: $0) })
+
+        XCTAssertEqual(ReviewRequestsPage.page(containing: "acme/widgets#1", in: requests, size: 2), 1)
+        XCTAssertEqual(ReviewRequestsPage.page(containing: "acme/widgets#3", in: requests, size: 2), 2)
+        XCTAssertEqual(ReviewRequestsPage.page(containing: "acme/widgets#5", in: requests, size: 2), 3)
+        XCTAssertNil(ReviewRequestsPage.page(containing: "acme/widgets#9", in: requests, size: 2))
+    }
+
+    func testGroupHeadingsShowOnPagesWithTheirRowsAndEmptyGroupsAtTheirEnd() {
+        let requests = ReviewRequests(fromMe: (1...3).map { reviewRequestRow(number: $0) },
+                                      fromMyTeams: [reviewRequestRow(number: 4)])
+        let first = ReviewRequestsPage(requests: requests, page: 1, size: 2)
+        let second = ReviewRequestsPage(requests: requests, page: 2, size: 2)
+
+        XCTAssertTrue(first.showsGroup(.fromMe, in: requests))
+        XCTAssertFalse(first.showsGroup(.fromMyTeams, in: requests))
+        XCTAssertTrue(second.showsGroup(.fromMe, in: requests))
+        XCTAssertTrue(second.showsGroup(.fromMyTeams, in: requests))
+
+        let onlyTeams = ReviewRequests(fromMe: [], fromMyTeams: (1...3).map { reviewRequestRow(number: $0) })
+        XCTAssertTrue(ReviewRequestsPage(requests: onlyTeams, page: 1, size: 2).showsGroup(.fromMe, in: onlyTeams))
+        XCTAssertFalse(ReviewRequestsPage(requests: onlyTeams, page: 2, size: 2).showsGroup(.fromMe, in: onlyTeams))
+
+        let onlyMine = ReviewRequests(fromMe: (1...3).map { reviewRequestRow(number: $0) }, fromMyTeams: [])
+        XCTAssertFalse(ReviewRequestsPage(requests: onlyMine, page: 1, size: 2).showsGroup(.fromMyTeams, in: onlyMine))
+        XCTAssertTrue(ReviewRequestsPage(requests: onlyMine, page: 2, size: 2).showsGroup(.fromMyTeams, in: onlyMine))
+    }
+
     private func state(_ requests: ReviewRequests, isLoading: Bool, error: String?, hasLoaded: Bool) -> ReviewRequestsDisplayState {
         ReviewRequestsDisplayState(requests: requests, isLoading: isLoading, error: error, hasLoaded: hasLoaded)
     }

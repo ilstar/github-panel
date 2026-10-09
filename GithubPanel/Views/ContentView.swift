@@ -44,6 +44,8 @@ struct ContentView: View {
     /// The rows last seen on My PRs and To Review, to pick the row that takes a removed one's place.
     @State private var openRowIDs: [String] = []
     @State private var reviewRowIDs: [String] = []
+    /// The To Review page on screen, 1-based. `ReviewRequestsPage` clamps it when rows go away.
+    @State private var reviewPage = 1
     @State private var mergeInFlight: Set<String> = []
     @State private var pageScroller = PageScroller()
     @AppStorage(ListPaneLayout.widthDefaultsKey, store: AppDefaults.store) private var listPaneWidth: Double = ListPaneLayout.defaultWidth
@@ -428,6 +430,10 @@ struct ContentView: View {
             if selectedReviewID == nil {
                 selectedReviewID = monitor.reviewRequests.rows.first?.id
             }
+            if let selectedReviewID,
+               let page = ReviewRequestsPage.page(containing: selectedReviewID, in: monitor.reviewRequests) {
+                reviewPage = page
+            }
         }
         .onChange(of: monitor.reviewRequests.rows.map { $0.id }) { newIDs in
             selectedReviewID = ListNavigation.selection(after: selectedReviewID, oldIDs: reviewRowIDs, newIDs: newIDs)
@@ -442,38 +448,68 @@ struct ContentView: View {
                                    hasLoaded: monitor.lastReviewRequestsRefreshAt != nil)
     }
 
+    private var reviewRequestsPage: ReviewRequestsPage {
+        ReviewRequestsPage(requests: monitor.reviewRequests, page: reviewPage)
+    }
+
     private var reviewRequestsList: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 2) {
-                    ForEach(ReviewRequestGroup.allCases) { group in
-                        reviewRequestGroup(group)
+        let page = reviewRequestsPage
+        return VStack(spacing: 6) {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        ForEach(ReviewRequestGroup.allCases.filter { page.showsGroup($0, in: monitor.reviewRequests) }) { group in
+                            reviewRequestGroup(group, on: page)
+                        }
+                    }
+                    .padding(.bottom, 8)
+                }
+                .scrollIndicators(.hidden)
+                .onChange(of: selectedReviewID) { id in
+                    // Moving the selection past either end of a page, or to a notified request, turns to its page.
+                    if let id, let selectedPage = ReviewRequestsPage.page(containing: id, in: monitor.reviewRequests),
+                       selectedPage != reviewRequestsPage.page {
+                        reviewPage = selectedPage
+                        // The row is drawn once the new page is.
+                        DispatchQueue.main.async { scrollToSelection(id, with: proxy) }
+                    } else {
+                        scrollToSelection(id, with: proxy)
                     }
                 }
-                .padding(.bottom, 8)
             }
-            .scrollIndicators(.hidden)
-            .onChange(of: selectedReviewID) { id in
-                scrollToSelection(id, with: proxy)
+
+            if page.hasMultiplePages {
+                pagination(rangeText: page.rangeText,
+                           canGoToPreviousPage: page.canGoToPreviousPage,
+                           canGoToNextPage: page.canGoToNextPage,
+                           previous: { showReviewPage(page.page - 1) },
+                           next: { showReviewPage(page.page + 1) })
             }
         }
     }
 
+    /// Turns to a To Review page and selects its first row.
+    private func showReviewPage(_ number: Int) {
+        reviewPage = number
+        selectedReviewID = ReviewRequestsPage(requests: monitor.reviewRequests, page: number).rows.first?.id
+    }
+
     @ViewBuilder
-    private func reviewRequestGroup(_ group: ReviewRequestGroup) -> some View {
-        let rows = monitor.reviewRequests.rows(in: group)
+    private func reviewRequestGroup(_ group: ReviewRequestGroup, on page: ReviewRequestsPage) -> some View {
+        let rows = page.rows(in: group)
+        let total = monitor.reviewRequests.rows(in: group).count
         // A small accent heading over each group, like a sidebar section heading.
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text(group.title)
                 .font(.system(size: 12.5, weight: .semibold))
                 .foregroundStyle(Color.accentColor)
-            Text(String(rows.count))
+            Text(String(total))
                 .font(.caption.weight(.medium))
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 12)
-        .padding(.top, group == ReviewRequestGroup.allCases.first ? 4 : 16)
+        .padding(.top, group == ReviewRequestGroup.allCases.first(where: { page.showsGroup($0, in: monitor.reviewRequests) }) ? 4 : 16)
         .padding(.bottom, 2)
 
         if rows.isEmpty {
@@ -643,9 +679,21 @@ struct ContentView: View {
     }
 
     private var historyPagination: some View {
+        pagination(rangeText: monitor.historyRangeText,
+                   canGoToPreviousPage: monitor.canLoadPreviousHistoryPage,
+                   canGoToNextPage: monitor.canLoadNextHistoryPage,
+                   previous: { Task { await monitor.loadPreviousHistoryPage() } },
+                   next: { Task { await monitor.loadNextHistoryPage() } })
+    }
+
+    private func pagination(rangeText: String,
+                            canGoToPreviousPage: Bool,
+                            canGoToNextPage: Bool,
+                            previous: @escaping () -> Void,
+                            next: @escaping () -> Void) -> some View {
         HStack(spacing: 4) {
             Button {
-                Task { await monitor.loadPreviousHistoryPage() }
+                previous()
             } label: {
                 Image(systemName: "chevron.left")
                     .font(.caption.weight(.bold))
@@ -654,17 +702,17 @@ struct ContentView: View {
                     .contentShape(Capsule())
             }
             .buttonStyle(.plain)
-            .disabled(!monitor.canLoadPreviousHistoryPage)
+            .disabled(!canGoToPreviousPage)
             .help("Previous page")
 
-            Text(monitor.historyRangeText)
+            Text(rangeText)
                 .font(.caption.weight(.medium))
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
                 .frame(minWidth: 86)
 
             Button {
-                Task { await monitor.loadNextHistoryPage() }
+                next()
             } label: {
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.bold))
@@ -673,7 +721,7 @@ struct ContentView: View {
                     .contentShape(Capsule())
             }
             .buttonStyle(.plain)
-            .disabled(!monitor.canLoadNextHistoryPage)
+            .disabled(!canGoToNextPage)
             .help("Next page")
 
             Spacer()
