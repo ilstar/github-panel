@@ -124,3 +124,68 @@ enum ReviewRequestsDisplayState: Equatable {
         }
     }
 }
+
+/// One page of the To Review list. Pages run through the requests from me, then from my teams,
+/// so a page may hold the end of one group and the start of the next.
+struct ReviewRequestsPage: Equatable {
+    static let defaultSize = 10
+
+    /// 1-based, and always within `1...pageCount`.
+    let page: Int
+    let pageCount: Int
+    let totalCount: Int
+    let fromMe: [ReviewRequestRow]
+    let fromMyTeams: [ReviewRequestRow]
+    private let start: Int
+
+    /// `page` is clamped, so a page past the end shows the last one after rows go away.
+    init(requests: ReviewRequests, page: Int, size: Int = ReviewRequestsPage.defaultSize) {
+        let size = max(size, 1)
+        totalCount = requests.rows.count
+        pageCount = max(1, (totalCount + size - 1) / size)
+        self.page = min(max(page, 1), pageCount)
+        start = (self.page - 1) * size
+        let end = min(start + size, totalCount)
+        let fromMeCount = requests.fromMe.count
+        fromMe = Array(requests.fromMe[min(start, fromMeCount)..<min(end, fromMeCount)])
+        fromMyTeams = Array(requests.fromMyTeams[max(start - fromMeCount, 0)..<max(end - fromMeCount, 0)])
+    }
+
+    /// The page that shows the request with `id`, or nil when it is not in `requests`.
+    static func page(containing id: String, in requests: ReviewRequests,
+                     size: Int = ReviewRequestsPage.defaultSize) -> Int? {
+        requests.rows.firstIndex { $0.id == id }.map { $0 / max(size, 1) + 1 }
+    }
+
+    /// Rows on this page in display order.
+    var rows: [ReviewRequestRow] {
+        fromMe + fromMyTeams
+    }
+
+    func rows(in group: ReviewRequestGroup) -> [ReviewRequestRow] {
+        switch group {
+        case .fromMe: return fromMe
+        case .fromMyTeams: return fromMyTeams
+        }
+    }
+
+    /// A group's heading shows on the pages that hold its rows. An empty group shows where it would
+    /// start: requests from me on the first page, requests from my teams on the last.
+    func showsGroup(_ group: ReviewRequestGroup, in requests: ReviewRequests) -> Bool {
+        if !rows(in: group).isEmpty { return true }
+        guard requests.rows(in: group).isEmpty else { return false }
+        switch group {
+        case .fromMe: return page == 1
+        case .fromMyTeams: return page == pageCount
+        }
+    }
+
+    var hasMultiplePages: Bool { pageCount > 1 }
+    var canGoToPreviousPage: Bool { page > 1 }
+    var canGoToNextPage: Bool { page < pageCount }
+
+    var rangeText: String {
+        guard totalCount > 0 else { return "No review requests" }
+        return "\(start + 1)-\(start + rows.count) of \(totalCount)"
+    }
+}
