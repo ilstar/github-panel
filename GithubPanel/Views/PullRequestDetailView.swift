@@ -877,13 +877,29 @@ struct MarkdownView: View {
     var onSetTask: ((Int, Bool) -> Void)?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(MarkdownBlocks.parse(markdown).enumerated()), id: \.offset) { _, block in
+        MarkdownBlocksView(blocks: MarkdownBlocks.parse(markdown), onSetTask: onSetTask)
+            .prFont(.body)
+            .textSelection(.enabled)
+    }
+
+    static func inline(_ text: String) -> AttributedString {
+        let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
+    }
+}
+
+/// Parsed Markdown blocks, stacked. Centered HTML blocks nest another one of these.
+private struct MarkdownBlocksView: View {
+    let blocks: [MarkdownBlock]
+    var alignment: HorizontalAlignment = .leading
+    var onSetTask: ((Int, Bool) -> Void)?
+
+    var body: some View {
+        VStack(alignment: alignment, spacing: 10) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
                 blockView(block)
             }
         }
-        .prFont(.body)
-        .textSelection(.enabled)
     }
 
     @ViewBuilder
@@ -891,7 +907,7 @@ struct MarkdownView: View {
         switch block {
         case let .heading(level, text):
             VStack(alignment: .leading, spacing: 4) {
-                Text(Self.inline(text))
+                Text(MarkdownView.inline(text))
                     .prFont(level == 1 ? .title2 : level == 2 ? .title3 : .headline, weight: .semibold)
                 if level <= 2 {
                     Divider()
@@ -899,12 +915,12 @@ struct MarkdownView: View {
             }
             .padding(.top, 4)
         case let .paragraph(text):
-            Text(Self.inline(text))
+            Text(MarkdownView.inline(text))
         case let .listItem(marker, indent, text):
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(marker)
                     .foregroundStyle(.secondary)
-                Text(Self.inline(text))
+                Text(MarkdownView.inline(text))
             }
             .padding(.leading, CGFloat(indent) * 18)
         case let .task(index, checked, indent, text):
@@ -913,11 +929,11 @@ struct MarkdownView: View {
                     .toggleStyle(.checkbox)
                     .labelsHidden()
                     .disabled(onSetTask == nil)
-                Text(Self.inline(text))
+                Text(MarkdownView.inline(text))
             }
             .padding(.leading, CGFloat(indent) * 18)
         case let .quote(text):
-            Text(Self.inline(text))
+            Text(MarkdownView.inline(text))
                 .foregroundStyle(.secondary)
                 .padding(.leading, 12)
                 .overlay(alignment: .leading) {
@@ -940,12 +956,11 @@ struct MarkdownView: View {
             MarkdownTableView(header: header, alignments: alignments, rows: rows)
         case .rule:
             Divider()
+        case let .centered(blocks):
+            MarkdownBlocksView(blocks: blocks, alignment: .center, onSetTask: onSetTask)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
         }
-    }
-
-    static func inline(_ text: String) -> AttributedString {
-        let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
     }
 }
 
