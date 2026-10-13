@@ -140,4 +140,81 @@ final class MarkdownBlocksTests: XCTestCase {
         XCTAssertEqual(MarkdownBlocks.settingTask(0, checked: true, in: markdown),
                        markdown.replacingOccurrences(of: "- [ ] real", with: "- [x] real"))
     }
+
+    func testRendersCenteredHTMLBlockFromBotComment() {
+        let markdown = """
+        <div align="center" id="salsa-ref">
+
+        ## 🚀 Ready for Review? 🚀
+
+        Mark your PR as ready and automatically assign the right reviewers.
+
+        <br>
+        <sub><sup>Let reviewers know this PR is ready for review</sup></sub>
+
+        </div>
+        """
+
+        XCTAssertEqual(MarkdownBlocks.parse(markdown), [
+            .centered([
+                .heading(level: 2, text: "🚀 Ready for Review? 🚀"),
+                .paragraph("Mark your PR as ready and automatically assign the right reviewers."),
+                .paragraph("Let reviewers know this PR is ready for review")
+            ])
+        ])
+    }
+
+    func testHTMLBlockTagsOnOneLine() {
+        let markdown = """
+        <h3>Title</h3>
+        <p align="center"><img src="logo.png" alt="Logo"></p>
+        <details><summary>More</summary>
+        Hidden text
+        </details>
+        <hr>
+        After
+        """
+
+        XCTAssertEqual(MarkdownBlocks.parse(markdown), [
+            .heading(level: 3, text: "Title"),
+            .centered([.paragraph("Logo")]),
+            .paragraph("**More**"),
+            .paragraph("Hidden text"),
+            .rule,
+            .paragraph("After")
+        ])
+    }
+
+    func testUnclosedCenteredDivEndsWithTheText() {
+        XCTAssertEqual(MarkdownBlocks.parse("<center>\nHi"), [.centered([.paragraph("Hi")])])
+    }
+
+    func testInlineHTMLBecomesMarkdown() {
+        XCTAssertEqual(
+            MarkdownBlocks.inlineHTML(#"<b>Bold</b> <em>it</em> <a href="https://x.dev">link</a><br/>next <code>x</code>"#),
+            "**Bold** *it* [link](https://x.dev)\nnext `x`"
+        )
+        XCTAssertEqual(MarkdownBlocks.inlineHTML("<a name=\"top\"></a>Top &amp; tail&nbsp;&#128640;"),
+                       "Top & tail\u{00A0}🚀")
+    }
+
+    func testInlineHTMLLeavesCodeSpansAndUnknownTagsAlone() {
+        XCTAssertEqual(MarkdownBlocks.inlineHTML("Use `<b>` with Array<Int> & a < b"),
+                       "Use `<b>` with Array<Int> & a < b")
+    }
+
+    func testHTMLInListItemsAndTasks() {
+        XCTAssertEqual(MarkdownBlocks.parse("- <b>Bold</b> item\n- [x] <i>Done</i>"), [
+            .listItem(marker: "•", indent: 0, text: "**Bold** item"),
+            .task(index: 0, checked: true, indent: 0, text: "*Done*")
+        ])
+    }
+
+    func testSettingTaskInsideCenteredHTML() {
+        let markdown = "<div align=\"center\">\n\n- [ ] Go\n\n</div>"
+
+        XCTAssertEqual(MarkdownBlocks.parse(markdown), [.centered([.task(index: 0, checked: false, indent: 0, text: "Go")])])
+        XCTAssertEqual(MarkdownBlocks.settingTask(0, checked: true, in: markdown),
+                       "<div align=\"center\">\n\n- [x] Go\n\n</div>")
+    }
 }
