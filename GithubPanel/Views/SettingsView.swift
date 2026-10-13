@@ -7,6 +7,7 @@ struct SettingsView: View {
     @State private var isSaving = false
     @AppStorage(AppAppearance.defaultsKey, store: AppDefaults.store) private var appearance: AppAppearance = .system
 
+    @AppStorage(DetailPaneMode.defaultsKey, store: AppDefaults.store) private var detailPaneMode: DetailPaneMode = .native
     @AppStorage(PullRequestTextSize.defaultsKey, store: AppDefaults.store) private var prTextSize = PullRequestTextSize.defaultSize
 
     var body: some View {
@@ -69,6 +70,15 @@ struct SettingsView: View {
             .onChange(of: appearance) { newValue in
                 newValue.apply()
             }
+            Picker("Pull request pane", selection: $detailPaneMode) {
+                ForEach(DetailPaneMode.allCases) { option in
+                    Text(option.title).tag(option)
+                }
+            }
+            .pickerStyle(.segmented)
+            Text("GitHub.com shows the pull request's page from github.com. Sign in to GitHub in the pane the first time.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             Stepper("PR text size: \(PullRequestTextSize.clamped(prTextSize)) pt", value: Binding(
                 get: { PullRequestTextSize.clamped(prTextSize) },
                 set: { prTextSize = $0 }
