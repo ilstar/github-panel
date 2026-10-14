@@ -28,25 +28,47 @@ enum WebNavigationPolicy {
     }
 }
 
-/// The one web view the GitHub pane uses. It lives as long as the window, so switching pull requests loads a new
-/// page instead of building a new web view, and the github.com sign-in is kept in the default website data store.
+/// One web view in the GitHub pane: a pull request's conversation or its diff. Each lives in
+/// `PullRequestWebPool`, loaded before it is shown, and uses the default website data store, so the github.com
+/// sign-in is shared.
 @MainActor
 final class PullRequestWebSession: NSObject, ObservableObject {
+    static let messageHandlerName = "pullRequestPage"
+
     let webView: WKWebView
     @Published private(set) var canGoBack = false
     @Published private(set) var canGoForward = false
     @Published private(set) var isLoading = false
     @Published private(set) var progress: Double = 0
     @Published private(set) var currentURL: URL?
-    /// The page last asked for by `show(_:)`, so picking the same pull request again keeps where you navigated.
+    /// The page to load when the pool next starts this web view, or nil when nothing is waiting.
+    var pendingURL: URL?
+    /// Called when a click on the page asks for the pull request's other page, which another web view holds.
+    var onOpenPage: ((PullRequestWebPage) -> Void)?
+    /// Called when the web content process ends, so the pool can load the page again.
+    var onProcessTerminated: (() -> Void)?
+    /// The page last asked for by `load(_:completion:)`.
     private var requestedURL: URL?
+    private var pendingNavigation: WKNavigation?
+    private var loadCompletion: (() -> Void)?
     private var observations: [NSKeyValueObservation] = []
 
-    override init() {
+    /// `interceptedLinks` maps the paths of the pull request's other page to that page. Clicks on links to them
+    /// call `onOpenPage` instead of loading here.
+    init(interceptedLinks: [String: PullRequestWebPage] = [:]) {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
-        webView = WKWebView(frame: .zero, configuration: configuration)
+        let messageProxy = ScriptMessageProxy()
+        if !interceptedLinks.isEmpty {
+            configuration.userContentController.addUserScript(
+                WKUserScript(source: Self.linkInterceptionScript(for: interceptedLinks),
+                             injectionTime: .atDocumentStart, forMainFrameOnly: true))
+            configuration.userContentController.add(messageProxy, name: Self.messageHandlerName)
+        }
+        // A desktop-sized frame, so a page loaded before it is shown lays out as it will look.
+        webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 1200, height: 900), configuration: configuration)
         super.init()
+        messageProxy.session = self
         webView.navigationDelegate = self
         webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = true
@@ -75,11 +97,20 @@ final class PullRequestWebSession: NSObject, ObservableObject {
         ]
     }
 
-    /// Loads `url` unless it is already the page last asked for.
-    func show(_ url: URL) {
-        guard url != requestedURL else { return }
+    /// Loads `url`, then calls `completion` once when the load finishes or fails. A load that replaces one still
+    /// running takes over its completion's place, so the earlier completion is dropped.
+    func load(_ url: URL, completion: (() -> Void)? = nil) {
         requestedURL = url
-        webView.load(URLRequest(url: url))
+        loadCompletion = completion
+        pendingNavigation = webView.load(URLRequest(url: url))
+        if pendingNavigation == nil { endLoad() }
+    }
+
+    /// Stops loading and drops the completion, for a web view the pool no longer keeps.
+    func close() {
+        pendingNavigation = nil
+        loadCompletion = nil
+        webView.stopLoading()
     }
 
     func goBack() { webView.goBack() }
@@ -90,6 +121,73 @@ final class PullRequestWebSession: NSObject, ObservableObject {
         if let url = webView.url ?? requestedURL {
             NSWorkspace.shared.open(url)
         }
+    }
+
+    private func endLoad(_ navigation: WKNavigation? = nil) {
+        if let navigation, navigation !== pendingNavigation { return }
+        pendingNavigation = nil
+        let completion = loadCompletion
+        loadCompletion = nil
+        completion?()
+    }
+
+    fileprivate func receive(_ message: WKScriptMessage) {
+        guard message.frameInfo.isMainFrame,
+              let name = message.body as? String,
+              let page = PullRequestWebPage(scriptName: name) else { return }
+        onOpenPage?(page)
+    }
+
+    /// Catches clicks on links to the paths in `links` before GitHub's own handlers, and hands them to the app.
+    /// Clicks with a modifier key, or on links that open elsewhere, are left to the page.
+    nonisolated static func linkInterceptionScript(for links: [String: PullRequestWebPage]) -> String {
+        let pages = links.mapValues(\.scriptName)
+        let json = (try? JSONSerialization.data(withJSONObject: pages, options: [.sortedKeys, .withoutEscapingSlashes]))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+        return """
+        (function () {
+          var pages = \(json);
+          window.addEventListener('click', function (event) {
+            if (event.defaultPrevented || event.button !== 0 ||
+                event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+            var link = event.target instanceof Element ? event.target.closest('a[href]') : null;
+            if (!link || (link.target && link.target !== '_self')) return;
+            var url = new URL(link.href, location.href);
+            if (url.origin !== location.origin || url.search || url.hash) return;
+            var page = pages[url.pathname.replace(/\\/+$/, '')];
+            if (!page) return;
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            window.webkit.messageHandlers.\(messageHandlerName).postMessage(page);
+          }, true);
+        })();
+        """
+    }
+}
+
+extension PullRequestWebPage {
+    /// The name the link interception script posts for this page.
+    var scriptName: String {
+        switch self {
+        case .conversation: return "conversation"
+        case .files: return "files"
+        }
+    }
+
+    init?(scriptName: String) {
+        guard let page = Self.allCases.first(where: { $0.scriptName == scriptName }) else { return nil }
+        self = page
+    }
+}
+
+/// Passes script messages to the session without the user content controller keeping it alive.
+@MainActor
+private final class ScriptMessageProxy: NSObject, WKScriptMessageHandler {
+    weak var session: PullRequestWebSession?
+
+    func userContentController(_ userContentController: WKUserContentController,
+                               didReceive message: WKScriptMessage) {
+        session?.receive(message)
     }
 }
 
@@ -114,6 +212,24 @@ extension PullRequestWebSession: WKNavigationDelegate, WKUIDelegate {
         }
     }
 
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        endLoad(navigation)
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        endLoad(navigation)
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        endLoad(navigation)
+    }
+
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        pendingURL = webView.url ?? requestedURL
+        endLoad()
+        onProcessTerminated?()
+    }
+
     /// Links that ask for a new window: GitHub pages load in the pane, anything else opens in the browser.
     func webView(_ webView: WKWebView,
                  createWebViewWith configuration: WKWebViewConfiguration,
@@ -130,24 +246,220 @@ extension PullRequestWebSession: WKNavigationDelegate, WKUIDelegate {
     }
 }
 
-/// Holds the window's `PullRequestWebSession`, made the first time the GitHub pane asks for it, so the native pane
-/// never starts a web view.
+/// A pull request's two web views, and which one the pane shows.
 @MainActor
-final class LazyWebSession: ObservableObject {
-    private var made: PullRequestWebSession?
+final class PullRequestWebPages: ObservableObject {
+    let reference: PullRequestReference
+    let conversation: PullRequestWebSession
+    let files: PullRequestWebSession
+    @Published var visiblePage: PullRequestWebPage = .conversation
+    /// When GitHub last changed the pull request, as of the last load.
+    var version: Date?
+    /// True when GitHub changed the pull request after its pages loaded.
+    var isStale = false
 
-    var session: PullRequestWebSession {
-        if let made { return made }
-        let session = PullRequestWebSession()
-        made = session
-        return session
+    init(reference: PullRequestReference, version: Date?) {
+        self.reference = reference
+        self.version = version
+        conversation = PullRequestWebSession(interceptedLinks: Self.links(to: .files, of: reference))
+        files = PullRequestWebSession(interceptedLinks: Self.links(to: .conversation, of: reference))
+    }
+
+    func session(_ page: PullRequestWebPage) -> PullRequestWebSession {
+        switch page {
+        case .conversation: return conversation
+        case .files: return files
+        }
+    }
+
+    var visibleSession: PullRequestWebSession { session(visiblePage) }
+
+    /// The visible web view first, so it loads first.
+    var sessionsInLoadOrder: [PullRequestWebSession] {
+        visiblePage == .conversation ? [conversation, files] : [files, conversation]
+    }
+
+    private static func links(to page: PullRequestWebPage,
+                              of reference: PullRequestReference) -> [String: PullRequestWebPage] {
+        Dictionary(uniqueKeysWithValues: page.paths(for: reference).map { ($0, page) })
+    }
+}
+
+/// Keeps the GitHub pane's pull requests loaded in the background, so picking one, or switching to its diff,
+/// shows a page that is already there. It loads a few web views at a time, most wanted first, and drops the
+/// pull requests that fall out of `PullRequestWebPreload.plan`.
+@MainActor
+final class PullRequestWebPool: ObservableObject {
+    /// Background loads at once, so a long list doesn't send GitHub a burst of page loads.
+    static let maxConcurrentLoads = 2
+
+    private(set) var pages: [PullRequestReference: PullRequestWebPages] = [:]
+    /// The pull request in the pane.
+    private(set) var shown: PullRequestReference?
+    /// The kept pull requests, most wanted first.
+    private var priority: [PullRequestReference] = []
+    private var loading: Set<ObjectIdentifier> = []
+
+    var loadingCount: Int { loading.count }
+
+    /// The pull request's web views, made and queued to load the first time they are asked for.
+    func pages(for reference: PullRequestReference) -> PullRequestWebPages {
+        if let existing = pages[reference] { return existing }
+        let made = PullRequestWebPages(reference: reference, version: nil)
+        for page in PullRequestWebPage.allCases {
+            let session = made.session(page)
+            session.pendingURL = page.url(for: reference)
+            session.onOpenPage = { [weak self] page in self?.open(page, in: reference) }
+            session.onProcessTerminated = { [weak self] in self?.pump() }
+        }
+        pages[reference] = made
+        return made
+    }
+
+    /// Shows `reference` in the pane: its visible page loads now if it hasn't yet, ahead of the queue.
+    func show(_ reference: PullRequestReference) {
+        let previous = shown
+        shown = reference
+        if let previous, previous != reference, let page = pages[previous], page.isStale {
+            reloadAll(page)
+        }
+        let page = pages(for: reference)
+        let session = page.visibleSession
+        if session.pendingURL != nil {
+            start(session)
+        }
+        pump()
+    }
+
+    /// Switches the pull request's pane to `page`, loading it again if its web view went to another page.
+    func open(_ page: PullRequestWebPage, in reference: PullRequestReference) {
+        guard let pages = pages[reference] else { return }
+        pages.visiblePage = page
+        let session = pages.session(page)
+        if session.pendingURL == nil, !loading.contains(ObjectIdentifier(session)),
+           PullRequestWebPage.page(of: session.webView.url, for: reference) != page {
+            session.pendingURL = page.url(for: reference)
+        }
+        if session.pendingURL != nil {
+            start(session)
+        }
+    }
+
+    /// Keeps `candidates` loaded, in that order, and drops every other pull request except the one shown. A
+    /// pull request GitHub changed since its pages loaded loads again, once it is not in the pane. No candidates
+    /// drops everything, for when the pane shows the native views.
+    func keep(_ candidates: [PullRequestWebCandidate]) {
+        guard !candidates.isEmpty else {
+            removeAll()
+            return
+        }
+        priority = candidates.map(\.reference)
+        for candidate in candidates {
+            let page = pages(for: candidate.reference)
+            if let version = candidate.version, version != page.version {
+                page.isStale = page.version != nil
+                page.version = version
+            }
+            if page.isStale && candidate.reference != shown {
+                reloadAll(page)
+            }
+        }
+        let kept = Set(priority).union(shown.map { [$0] } ?? [])
+        for reference in pages.keys where !kept.contains(reference) {
+            remove(reference)
+        }
+        pump()
+    }
+
+    func removeAll() {
+        for reference in Array(pages.keys) {
+            remove(reference)
+        }
+        shown = nil
+        priority = []
+    }
+
+    private func remove(_ reference: PullRequestReference) {
+        guard let page = pages.removeValue(forKey: reference) else { return }
+        for session in [page.conversation, page.files] {
+            loading.remove(ObjectIdentifier(session))
+            session.close()
+        }
+    }
+
+    private func reloadAll(_ page: PullRequestWebPages) {
+        page.isStale = false
+        for kind in PullRequestWebPage.allCases {
+            page.session(kind).pendingURL = kind.url(for: page.reference)
+        }
+    }
+
+    /// Starts waiting loads, most wanted first, while fewer than `maxConcurrentLoads` are running.
+    private func pump() {
+        let order = (shown.map { [$0] } ?? []) + priority
+        for reference in order {
+            guard let page = pages[reference] else { continue }
+            for session in page.sessionsInLoadOrder where session.pendingURL != nil {
+                guard loading.count < Self.maxConcurrentLoads else { return }
+                start(session)
+            }
+        }
+    }
+
+    private func start(_ session: PullRequestWebSession) {
+        guard let url = session.pendingURL else { return }
+        session.pendingURL = nil
+        let id = ObjectIdentifier(session)
+        loading.insert(id)
+        session.load(url) { [weak self] in
+            guard let self, self.loading.remove(id) != nil else { return }
+            self.pump()
+        }
     }
 }
 
 /// The selected pull request's page on github.com, under a toolbar in the title bar strip.
 struct PullRequestWebPane: View {
     let reference: PullRequestReference
+    let pool: PullRequestWebPool
+
+    var body: some View {
+        PullRequestWebPagesView(pages: pool.pages(for: reference), pool: pool)
+            .onAppear { pool.show(reference) }
+            .onChange(of: reference) { newValue in pool.show(newValue) }
+    }
+
+    /// "acme/widgets/pull/12/files" for a github.com page, or the host and path for any other site.
+    static func pathLabel(for url: URL?) -> String? {
+        guard let url, let host = url.host else { return nil }
+        let path = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        if host.lowercased() == "github.com" {
+            return path.isEmpty ? host : path
+        }
+        return path.isEmpty ? host : "\(host)/\(path)"
+    }
+}
+
+/// Shows whichever of a pull request's web views is visible.
+private struct PullRequestWebPagesView: View {
+    @ObservedObject var pages: PullRequestWebPages
+    let pool: PullRequestWebPool
+
+    var body: some View {
+        PullRequestWebSessionView(session: pages.visibleSession,
+                                  fallbackLabel: pages.reference.id,
+                                  canGoBackToConversation: pages.visiblePage == .files,
+                                  goBackToConversation: { pool.open(.conversation, in: pages.reference) })
+    }
+}
+
+/// One web view under the pane's toolbar.
+private struct PullRequestWebSessionView: View {
     @ObservedObject var session: PullRequestWebSession
+    let fallbackLabel: String
+    /// True on the diff, where Back returns to the conversation once the diff's own history runs out.
+    let canGoBackToConversation: Bool
+    let goBackToConversation: () -> Void
     @Environment(\.titleBarHeight) private var titleBarHeight
 
     var body: some View {
@@ -166,15 +478,21 @@ struct PullRequestWebPane: View {
                 }
             }
         }
-        .onAppear { session.show(reference.webURL) }
-        .onChange(of: reference) { newValue in session.show(newValue.webURL) }
+    }
+
+    private func goBack() {
+        if session.canGoBack {
+            session.goBack()
+        } else if canGoBackToConversation {
+            goBackToConversation()
+        }
     }
 
     private var toolbar: some View {
         HStack(spacing: 10) {
             HStack(spacing: 0) {
-                toolbarButton("chevron.left", help: "Back", action: session.goBack)
-                    .disabled(!session.canGoBack)
+                toolbarButton("chevron.left", help: "Back", action: goBack)
+                    .disabled(!session.canGoBack && !canGoBackToConversation)
                 toolbarButton("chevron.right", help: "Forward", action: session.goForward)
                     .disabled(!session.canGoForward)
             }
@@ -182,7 +500,7 @@ struct PullRequestWebPane: View {
             .frame(height: 34)
             .glassSurface(.control, in: Capsule())
 
-            Text(Self.pathLabel(for: session.currentURL) ?? reference.id)
+            Text(PullRequestWebPane.pathLabel(for: session.currentURL) ?? fallbackLabel)
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -212,16 +530,6 @@ struct PullRequestWebPane: View {
         .help(help)
         .accessibilityLabel(help)
     }
-
-    /// "acme/widgets/pull/12/files" for a github.com page, or the host and path for any other site.
-    static func pathLabel(for url: URL?) -> String? {
-        guard let url, let host = url.host else { return nil }
-        let path = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        if host.lowercased() == "github.com" {
-            return path.isEmpty ? host : path
-        }
-        return path.isEmpty ? host : "\(host)/\(path)"
-    }
 }
 
 /// Puts the session's web view in the SwiftUI hierarchy without owning it, so it survives pane rebuilds.
@@ -240,7 +548,9 @@ private struct WebViewHost: NSViewRepresentable {
         }
     }
 
+    /// Puts `webView` in the container in place of the one shown before, such as another pull request's.
     private func attach(to container: NSView) {
+        container.subviews.forEach { $0.removeFromSuperview() }
         webView.removeFromSuperview()
         webView.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(webView)
