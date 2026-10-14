@@ -50,8 +50,8 @@ struct ContentView: View {
     @State private var pageScroller = PageScroller()
     @AppStorage(ListPaneLayout.widthDefaultsKey, store: AppDefaults.store) private var listPaneWidth: Double = ListPaneLayout.defaultWidth
     @AppStorage(DetailPaneMode.defaultsKey, store: AppDefaults.store) private var detailPaneMode: DetailPaneMode = .native
-    /// Made on first use of the GitHub pane, then kept so switching pull requests reuses one web view.
-    @StateObject private var webSession = LazyWebSession()
+    /// The GitHub pane's web views, loaded before they are shown. Empty while the pane shows the native views.
+    @StateObject private var webPool = PullRequestWebPool()
     private let minuteTicker = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
     private let relativeFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
@@ -96,6 +96,9 @@ struct ContentView: View {
             guard let request else { return }
             show(request)
             monitor.pullRequestToShow = nil
+        }
+        .task(id: webPreloadPlan) {
+            webPool.keep(webPreloadPlan)
         }
         .onReceive(minuteTicker) { tick in
             now = tick
@@ -177,7 +180,7 @@ struct ContentView: View {
     @ViewBuilder
     private var detailPane: some View {
         if let reference = selectedReference, detailPaneMode == .web {
-            PullRequestWebPane(reference: reference, session: webSession.session)
+            PullRequestWebPane(reference: reference, pool: webPool)
         } else if let reference = selectedReference {
             PullRequestDetailView(viewModel: PullRequestDetailViewModel(reference: reference, monitor: monitor))
             .id(reference)
@@ -203,6 +206,24 @@ struct ContentView: View {
                                        selectedOpenID: selectedPRID,
                                        selectedReviewID: selectedReviewID,
                                        selectedHistoryID: selectedHistoryID)
+    }
+
+    /// The pull requests the GitHub pane keeps loaded: My PRs and To Review, the visible tab's first. None while
+    /// the pane shows the native views.
+    private var webPreloadPlan: [PullRequestWebCandidate] {
+        guard detailPaneMode == .web else { return [] }
+        let open = monitor.prRows.map { PullRequestWebCandidate(reference: $0.reference, version: $0.updatedAt) }
+        let reviews = ReviewRequestGroup.allCases.flatMap { monitor.reviewRequests.rows(in: $0) }
+            .map { PullRequestWebCandidate(reference: $0.reference, version: $0.updatedAt) }
+        let selected = selectedReference
+        switch monitor.selectedTab {
+        case .open:
+            return PullRequestWebPreload.plan(selected: selected, visible: open, other: reviews)
+        case .reviews:
+            return PullRequestWebPreload.plan(selected: selected, visible: reviews, other: open)
+        case .history:
+            return PullRequestWebPreload.plan(selected: selected, visible: [], other: open + reviews)
+        }
     }
 
     private var mockDataBanner: some View {
