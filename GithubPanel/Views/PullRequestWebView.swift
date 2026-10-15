@@ -422,11 +422,15 @@ final class PullRequestWebPool: ObservableObject {
 struct PullRequestWebPane: View {
     let reference: PullRequestReference
     let pool: PullRequestWebPool
+    @StateObject private var find = PageFind()
 
     var body: some View {
-        PullRequestWebPagesView(pages: pool.pages(for: reference), pool: pool)
+        PullRequestWebPagesView(pages: pool.pages(for: reference), pool: pool, find: find)
             .onAppear { pool.show(reference) }
             .onChange(of: reference) { newValue in pool.show(newValue) }
+            .focusedSceneValue(\.pageFind, PageFindActions(show: find.show,
+                                                           findNext: find.findNext,
+                                                           findPrevious: find.findPrevious))
     }
 
     /// "acme/widgets/pull/12/files" for a github.com page, or the host and path for any other site.
@@ -444,9 +448,11 @@ struct PullRequestWebPane: View {
 private struct PullRequestWebPagesView: View {
     @ObservedObject var pages: PullRequestWebPages
     let pool: PullRequestWebPool
+    let find: PageFind
 
     var body: some View {
         PullRequestWebSessionView(session: pages.visibleSession,
+                                  find: find,
                                   fallbackLabel: pages.reference.id,
                                   canGoBackToConversation: pages.visiblePage == .files,
                                   goBackToConversation: { pool.open(.conversation, in: pages.reference) })
@@ -456,6 +462,7 @@ private struct PullRequestWebPagesView: View {
 /// One web view under the pane's toolbar.
 private struct PullRequestWebSessionView: View {
     @ObservedObject var session: PullRequestWebSession
+    @ObservedObject var find: PageFind
     let fallbackLabel: String
     /// True on the diff, where Back returns to the conversation once the diff's own history runs out.
     let canGoBackToConversation: Bool
@@ -468,6 +475,11 @@ private struct PullRequestWebSessionView: View {
                 .padding(.leading, 28)
                 .padding(.trailing, 20)
                 .frame(height: max(titleBarHeight ?? 0, 54))
+            if find.isVisible {
+                PageFindBar(find: find)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 8)
+            }
             ZStack(alignment: .top) {
                 WebViewHost(webView: session.webView)
                 if session.isLoading {
@@ -478,6 +490,9 @@ private struct PullRequestWebSessionView: View {
                 }
             }
         }
+        // Find searches whichever web view is in the pane.
+        .onAppear { find.finder = session.webView }
+        .onChange(of: ObjectIdentifier(session)) { _ in find.finder = session.webView }
     }
 
     private func goBack() {
@@ -524,6 +539,68 @@ private struct PullRequestWebSessionView: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .frame(width: 32, height: 28)
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .accessibilityLabel(help)
+    }
+}
+
+/// The bar under the toolbar that ⌘F opens: a search field, the previous and next buttons, and Done.
+private struct PageFindBar: View {
+    @ObservedObject var find: PageFind
+    @FocusState private var isFieldFocused: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("Find in Page", text: $find.query)
+                    .textFieldStyle(.plain)
+                    .focused($isFieldFocused)
+                    .onSubmit {
+                        if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
+                            find.findPrevious()
+                        } else {
+                            find.findNext()
+                        }
+                    }
+                    .onExitCommand { find.hide() }
+                if find.result == .notFound {
+                    Text("Not found")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize()
+                }
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 30)
+            .glassSurface(.control, in: Capsule())
+
+            HStack(spacing: 0) {
+                button("chevron.up", help: "Previous Match", action: find.findPrevious)
+                button("chevron.down", help: "Next Match", action: find.findNext)
+            }
+            .padding(.horizontal, 3)
+            .frame(height: 30)
+            .glassSurface(.control, in: Capsule())
+            .disabled(find.query.isEmpty)
+
+            Button("Done", action: find.hide)
+                .controlSize(.small)
+        }
+        .onAppear { isFieldFocused = true }
+        .onChange(of: find.focusRequest) { _ in isFieldFocused = true }
+    }
+
+    private func button(_ systemName: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 28, height: 24)
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)

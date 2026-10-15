@@ -11,6 +11,7 @@ struct AppCommands: Commands {
     @FocusedValue(\.pullRequestList) private var list
     @FocusedValue(\.pullRequestDetail) private var detail
     @FocusedValue(\.pullRequestFiles) private var files
+    @FocusedValue(\.pageFind) private var find
     @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
@@ -33,6 +34,30 @@ struct AppCommands: Commands {
             .disabled(list?.refresh == nil && detail == nil)
 
             Divider()
+        }
+
+        CommandGroup(after: .pasteboard) {
+            Divider()
+
+            // ⌘F is Filter Files on the native Files changed tab, and Find… on a github.com page. The two panes
+            // never show together, so the key moves to whichever item works.
+            Button("Find…") {
+                find?.show()
+            }
+            .keyboardShortcut(.filterFiles, if: find != nil)
+            .disabled(find == nil)
+
+            Button("Find Next") {
+                find?.findNext()
+            }
+            .keyboardShortcut(.findNext)
+            .disabled(find == nil)
+
+            Button("Find Previous") {
+                find?.findPrevious()
+            }
+            .keyboardShortcut(.findPrevious)
+            .disabled(find == nil)
         }
 
         CommandMenu("Pull Request") {
@@ -117,7 +142,7 @@ struct AppCommands: Commands {
             Button("Filter Files") {
                 files?.focusFilter()
             }
-            .keyboardShortcut(.filterFiles)
+            .keyboardShortcut(.filterFiles, if: find == nil)
             .disabled(files == nil)
 
             Button(files?.showsFileTree == false ? "Show File Tree" : "Hide File Tree") {

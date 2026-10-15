@@ -53,6 +53,13 @@ struct PullRequestFilesActions {
     let toggleMode: () -> Void
 }
 
+/// What the GitHub pane's find bar offers the menus. Only there while the pane shows a github.com page.
+struct PageFindActions {
+    let show: () -> Void
+    let findNext: () -> Void
+    let findPrevious: () -> Void
+}
+
 private struct PullRequestListActionsKey: FocusedValueKey {
     typealias Value = PullRequestListActions
 }
@@ -63,6 +70,10 @@ private struct PullRequestDetailActionsKey: FocusedValueKey {
 
 private struct PullRequestFilesActionsKey: FocusedValueKey {
     typealias Value = PullRequestFilesActions
+}
+
+private struct PageFindActionsKey: FocusedValueKey {
+    typealias Value = PageFindActions
 }
 
 extension FocusedValues {
@@ -79,6 +90,11 @@ extension FocusedValues {
     var pullRequestFiles: PullRequestFilesActions? {
         get { self[PullRequestFilesActionsKey.self] }
         set { self[PullRequestFilesActionsKey.self] = newValue }
+    }
+
+    var pageFind: PageFindActions? {
+        get { self[PageFindActionsKey.self] }
+        set { self[PageFindActionsKey.self] = newValue }
     }
 }
 
