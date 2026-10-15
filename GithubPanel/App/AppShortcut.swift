@@ -19,6 +19,9 @@ enum AppShortcut: CaseIterable {
     case previousDetailTab
     case nextDetailTab
 
+    case findNext
+    case findPrevious
+
     case filterFiles
     case toggleFileTree
     case nextFile
@@ -47,6 +50,9 @@ enum AppShortcut: CaseIterable {
         // ⇧⌘[ and ⇧⌘]. Menus match the typed character, and Shift turns [ into {, so the menu needs {.
         case .previousDetailTab: return KeyboardShortcut("{", modifiers: .command)
         case .nextDetailTab: return KeyboardShortcut("}", modifiers: .command)
+        case .findNext: return KeyboardShortcut("g", modifiers: .command)
+        case .findPrevious: return KeyboardShortcut("g", modifiers: [.shift, .command])
+        // Also Find… while the GitHub.com pane is showing, where there is no file filter.
         case .filterFiles: return KeyboardShortcut("f", modifiers: .command)
         case .toggleFileTree: return KeyboardShortcut("s", modifiers: [.control, .command])
         case .nextFile: return KeyboardShortcut(.downArrow, modifiers: [.option, .command])
@@ -78,6 +84,8 @@ enum AppShortcut: CaseIterable {
         case .reviewChanges: return "Approve, comment, or request changes"
         case .previousDetailTab: return "Previous tab (Conversation / Files changed / Checks)"
         case .nextDetailTab: return "Next tab (Conversation / Files changed / Checks)"
+        case .findNext: return "Find the next match"
+        case .findPrevious: return "Find the previous match"
         case .filterFiles: return "Filter files"
         case .toggleFileTree: return "Show or hide the file tree"
         case .nextFile: return "Next file"
@@ -124,6 +132,16 @@ enum AppShortcut: CaseIterable {
 extension View {
     func keyboardShortcut(_ shortcut: AppShortcut) -> some View {
         keyboardShortcut(shortcut.keyboardShortcut)
+    }
+
+    /// The shortcut only while `condition` holds, for a key two menu items take turns with.
+    @ViewBuilder
+    func keyboardShortcut(_ shortcut: AppShortcut, if condition: Bool) -> some View {
+        if condition {
+            keyboardShortcut(shortcut.keyboardShortcut)
+        } else {
+            self
+        }
     }
 }
 
@@ -174,6 +192,13 @@ enum ShortcutHelp {
             Entry(.reviewChanges),
             Entry(.previousDetailTab),
             Entry(.nextDetailTab),
+        ]),
+        Section(title: "GitHub.com pane", entries: [
+            Entry(AppShortcut.filterFiles.symbols, "Find in the page"),
+            Entry(.findNext),
+            Entry(.findPrevious),
+            Entry("↩  or  ⇧↩", "Next or previous match, in the find bar"),
+            Entry("Esc", "Close the find bar"),
         ]),
         Section(title: "Files changed", entries: [
             Entry(.filterFiles),

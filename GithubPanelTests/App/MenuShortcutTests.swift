@@ -50,6 +50,18 @@ final class MenuShortcutTests: XCTestCase {
         }
     }
 
+    /// Find sits in Edit, like Safari's. Until a github.com page is showing, ⌘F stays with Filter Files.
+    func testEditMenuHasFind() async throws {
+        let titles = try await submenuTitles("Edit")
+        XCTAssertTrue(titles.contains("Find…"))
+        XCTAssertTrue(titles.contains("Find Next"))
+        XCTAssertTrue(titles.contains("Find Previous"))
+
+        let menu = try await mainMenu()
+        let diff = try XCTUnwrap(menu.item(withTitle: "Diff")?.submenu)
+        XCTAssertEqual(diff.item(withTitle: "Filter Files")?.keyEquivalent, "f")
+    }
+
     /// Shift+⌘+[ types {, so the Previous Tab item has to match { for the keys to work.
     func testShiftBracketReachesTheTabItems() {
         for (shortcut, character) in [(AppShortcut.previousDetailTab, "{"), (.nextDetailTab, "}")] {
@@ -80,7 +92,8 @@ final class MenuShortcutTests: XCTestCase {
         let appTitles = Set(PullRequestTab.allCases.map(\.title) + ["Refresh"])
         let menu = try await mainMenu()
         let view = (menu.item(withTitle: "View")?.submenu?.items ?? []).filter { appTitles.contains($0.title) }
-        return view + menu.items
+        let find = (menu.item(withTitle: "Edit")?.submenu?.items ?? []).filter { $0.title.hasPrefix("Find") }
+        return view + find + menu.items
             .filter { ["Pull Request", "Diff", "Help"].contains($0.title) }
             .flatMap { $0.submenu?.items ?? [] }
     }
