@@ -31,11 +31,12 @@ enum PullRequestWebPage: Equatable, CaseIterable {
         return allCases.first { $0.paths(for: reference).contains(path) }
     }
 
-    /// True when a web view at `url` whose last response had `statusCode` shows this page of `reference`. A
-    /// redirect to GitHub's sign-in page lands on another URL, and an error such as the 404 GitHub gives a private
-    /// pull request when signed out keeps the URL, so both are checked.
-    func isShown(at url: URL?, statusCode: Int?, for reference: PullRequestReference) -> Bool {
-        guard Self.page(of: url, for: reference) == self else { return false }
+    /// True when a web view at `url` whose last response had `statusCode` shows this page of `reference`, signed
+    /// in. A redirect to GitHub's sign-in page lands on another URL, a private pull request gives a 404 at its own
+    /// URL when signed out, and a public one gives a 200 with the signed-out page, so all three are checked.
+    /// `isSignedIn` nil means unknown, such as a page without GitHub's sign-in meta tag.
+    func isShown(at url: URL?, statusCode: Int?, isSignedIn: Bool?, for reference: PullRequestReference) -> Bool {
+        guard Self.page(of: url, for: reference) == self, isSignedIn != false else { return false }
         guard let statusCode else { return true }
         return (200..<300).contains(statusCode)
     }

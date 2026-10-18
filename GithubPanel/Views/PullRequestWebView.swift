@@ -43,6 +43,9 @@ final class PullRequestWebSession: NSObject, ObservableObject {
     @Published private(set) var currentURL: URL?
     /// The HTTP status of the page's last main-frame response, or nil when it had none, such as for loaded HTML.
     private(set) var statusCode: Int?
+    /// Whether GitHub served the page signed in, read from its `user-login` meta tag once it loads, or nil when
+    /// the page has no such tag or hasn't finished loading.
+    private(set) var isSignedIn: Bool?
     /// The page to load when the pool next starts this web view, or nil when nothing is waiting.
     var pendingURL: URL?
     /// Called when a click on the page asks for the pull request's other page, which another web view holds.
@@ -219,12 +222,22 @@ extension PullRequestWebSession: WKNavigationDelegate, WKUIDelegate {
                  decisionHandler: @escaping @MainActor (WKNavigationResponsePolicy) -> Void) {
         if navigationResponse.isForMainFrame {
             statusCode = (navigationResponse.response as? HTTPURLResponse)?.statusCode
+            isSignedIn = nil
         }
         decisionHandler(.allow)
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        readSignIn()
         endLoad(navigation)
+    }
+
+    /// GitHub leaves the `user-login` meta tag empty on a page served signed out.
+    private func readSignIn() {
+        let script = "(document.querySelector('meta[name=\"user-login\"]') || {}).content ?? null"
+        webView.evaluateJavaScript(script) { [weak self] result, _ in
+            Task { @MainActor in self?.isSignedIn = (result as? String).map { !$0.isEmpty } }
+        }
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
@@ -347,11 +360,13 @@ final class PullRequestWebPool: ObservableObject {
     }
 
     /// Starts `page` loading now if it is waiting to, or if its web view isn't showing it: it went to another
-    /// page, or GitHub answered with its sign-in page or an error, such as when the sign-in expired.
+    /// page, or GitHub answered with its sign-in page, an error, or the page as seen signed out, such as when the
+    /// sign-in expired.
     private func loadIfNeeded(_ page: PullRequestWebPage, of pages: PullRequestWebPages) {
         let session = pages.session(page)
         if session.pendingURL == nil, !loading.contains(ObjectIdentifier(session)),
-           !page.isShown(at: session.webView.url, statusCode: session.statusCode, for: pages.reference) {
+           !page.isShown(at: session.webView.url, statusCode: session.statusCode,
+                         isSignedIn: session.isSignedIn, for: pages.reference) {
             session.pendingURL = page.url(for: pages.reference)
         }
         if session.pendingURL != nil {
