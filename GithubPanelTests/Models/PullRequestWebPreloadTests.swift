@@ -31,6 +31,22 @@ final class PullRequestWebPreloadTests: XCTestCase {
         XCTAssertNil(PullRequestWebPage.page(of: nil, for: reference))
     }
 
+    func testAPageIsShownOnlyAtItsURLWithASuccessfulSignedInResponse() {
+        let url = URL(string: "https://github.com/acme/widgets/pull/12/changes")
+
+        XCTAssertTrue(PullRequestWebPage.files.isShown(at: url, statusCode: 200, isSignedIn: true, for: reference))
+        XCTAssertTrue(PullRequestWebPage.files.isShown(at: url, statusCode: nil, isSignedIn: nil, for: reference))
+        XCTAssertTrue(PullRequestWebPage.files.isShown(at: url, statusCode: 200, isSignedIn: nil, for: reference))
+        XCTAssertFalse(PullRequestWebPage.files.isShown(at: url, statusCode: 200, isSignedIn: false, for: reference))
+        XCTAssertFalse(PullRequestWebPage.files.isShown(at: url, statusCode: 404, isSignedIn: true, for: reference))
+        XCTAssertFalse(PullRequestWebPage.files.isShown(at: url, statusCode: 500, isSignedIn: true, for: reference))
+        XCTAssertFalse(PullRequestWebPage.conversation.isShown(at: url, statusCode: 200, isSignedIn: true, for: reference))
+        XCTAssertFalse(PullRequestWebPage.conversation.isShown(
+            at: URL(string: "https://github.com/login?return_to=%2Facme%2Fwidgets%2Fpull%2F12"),
+            statusCode: 200, isSignedIn: true, for: reference))
+        XCTAssertFalse(PullRequestWebPage.conversation.isShown(at: nil, statusCode: nil, isSignedIn: nil, for: reference))
+    }
+
     func testPlanStartsAtTheSelectionAndWorksOutwardBelowFirst() {
         let rows = candidates(1...5)
 

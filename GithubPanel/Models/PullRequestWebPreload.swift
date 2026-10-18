@@ -30,6 +30,16 @@ enum PullRequestWebPage: Equatable, CaseIterable {
         while path.count > 1 && path.hasSuffix("/") { path.removeLast() }
         return allCases.first { $0.paths(for: reference).contains(path) }
     }
+
+    /// True when a web view at `url` whose last response had `statusCode` shows this page of `reference`, signed
+    /// in. A redirect to GitHub's sign-in page lands on another URL, a private pull request gives a 404 at its own
+    /// URL when signed out, and a public one gives a 200 with the signed-out page, so all three are checked.
+    /// `isSignedIn` nil means unknown, such as a page without GitHub's sign-in meta tag.
+    func isShown(at url: URL?, statusCode: Int?, isSignedIn: Bool?, for reference: PullRequestReference) -> Bool {
+        guard Self.page(of: url, for: reference) == self, isSignedIn != false else { return false }
+        guard let statusCode else { return true }
+        return (200..<300).contains(statusCode)
+    }
 }
 
 /// A pull request the GitHub pane keeps loaded, with the time GitHub last changed it, so a page loaded before a
