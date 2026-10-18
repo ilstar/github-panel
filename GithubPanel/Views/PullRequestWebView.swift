@@ -11,12 +11,15 @@ enum WebNavigationDecision: Equatable {
 }
 
 enum WebNavigationPolicy {
+    /// The scheme of an extension's own pages, which extensions may open in the pane.
+    static let extensionScheme = "webkit-extension"
+
     /// GitHub pages stay in the pane. Clicked links to other sites open in the default browser, but redirects and
     /// form posts load in the pane, so sign-in through an organization's SSO provider works.
     static func decision(for url: URL?, isLinkClick: Bool) -> WebNavigationDecision {
         guard let url, let scheme = url.scheme?.lowercased() else { return .allow }
         guard scheme == "http" || scheme == "https" else {
-            return scheme == "about" || scheme == "blob" || scheme == "data" ? .allow : .openExternally
+            return ["about", "blob", "data", extensionScheme].contains(scheme) ? .allow : .openExternally
         }
         if isGitHubHost(url.host) { return .allow }
         return isLinkClick ? .openExternally : .allow
@@ -58,6 +61,7 @@ final class PullRequestWebSession: NSObject, ObservableObject {
     init(interceptedLinks: [String: PullRequestWebPage] = [:]) {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
+        WebExtensions.shared.configure(configuration)
         let messageProxy = ScriptMessageProxy()
         if !interceptedLinks.isEmpty {
             configuration.userContentController.addUserScript(
@@ -95,6 +99,7 @@ final class PullRequestWebSession: NSObject, ObservableObject {
                 Task { @MainActor in self?.currentURL = value }
             },
         ]
+        WebExtensions.shared.didOpen(self)
     }
 
     /// Loads `url`, then calls `completion` once when the load finishes or fails. A load that replaces one still
@@ -111,6 +116,7 @@ final class PullRequestWebSession: NSObject, ObservableObject {
         pendingNavigation = nil
         loadCompletion = nil
         webView.stopLoading()
+        WebExtensions.shared.didClose(self)
     }
 
     func goBack() { webView.goBack() }
@@ -468,6 +474,7 @@ private struct PullRequestWebSessionView: View {
     let canGoBackToConversation: Bool
     let goBackToConversation: () -> Void
     @Environment(\.titleBarHeight) private var titleBarHeight
+    @ObservedObject private var extensions = WebExtensions.shared
 
     var body: some View {
         VStack(spacing: 0) {
@@ -491,8 +498,14 @@ private struct PullRequestWebSessionView: View {
             }
         }
         // Find searches whichever web view is in the pane.
-        .onAppear { find.finder = session.webView }
-        .onChange(of: ObjectIdentifier(session)) { _ in find.finder = session.webView }
+        .onAppear {
+            find.finder = session.webView
+            extensions.didActivate(session)
+        }
+        .onChange(of: ObjectIdentifier(session)) { _ in
+            find.finder = session.webView
+            extensions.didActivate(session)
+        }
     }
 
     private func goBack() {
@@ -523,6 +536,13 @@ private struct PullRequestWebSessionView: View {
 
             Spacer(minLength: 12)
 
+            if !extensions.actionExtensions.isEmpty {
+                extensionsMenu
+                    .padding(.horizontal, 3)
+                    .frame(height: 34)
+                    .glassSurface(.control, in: Capsule())
+            }
+
             HStack(spacing: 0) {
                 toolbarButton("arrow.clockwise", help: "Reload", action: session.reload)
                 toolbarButton("safari", help: "Open in Browser", action: session.openInBrowser)
@@ -531,6 +551,34 @@ private struct PullRequestWebSessionView: View {
             .frame(height: 34)
             .glassSurface(.control, in: Capsule())
         }
+    }
+
+    /// The toolbar buttons of the extensions that have one, as a menu.
+    private var extensionsMenu: some View {
+        Menu {
+            ForEach(extensions.actionExtensions) { item in
+                Button {
+                    extensions.performAction(for: item.id, in: session)
+                } label: {
+                    if let icon = extensions.statuses[item.id]?.icon {
+                        Label { Text(item.name) } icon: { Image(nsImage: icon) }
+                    } else {
+                        Text(item.name)
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "puzzlepiece.extension")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 32, height: 28)
+                .contentShape(Capsule())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Extensions")
+        .accessibilityLabel("Extensions")
     }
 
     private func toolbarButton(_ systemName: String, help: String, action: @escaping () -> Void) -> some View {
