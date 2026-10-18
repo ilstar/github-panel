@@ -18,6 +18,8 @@ struct GithubPanelApp: App {
 
         if !ProcessInfo.processInfo.isRunningTests {
             AppAppearance.stored().apply()
+            // Loads the GitHub.com pane's extensions before its first page.
+            _ = WebExtensions.shared
             NotificationManager.shared.configure()
             NotificationManager.shared.openPullRequest = { [monitor] reference in
                 monitor.showPullRequest(reference)

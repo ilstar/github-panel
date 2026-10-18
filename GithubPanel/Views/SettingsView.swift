@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 import KeyboardShortcuts
 
 struct SettingsView: View {
@@ -14,6 +15,7 @@ struct SettingsView: View {
         Form {
             tokenSection
             appearanceSection
+            WebExtensionsSection()
             notificationsSection
             refreshSection
             hooksSection
@@ -188,5 +190,121 @@ struct SettingsView: View {
     private func clearToken() {
         tokenInput = ""
         monitor.clearToken()
+    }
+}
+
+/// The extensions that run in the GitHub.com pane: add, turn on or off, open options, remove.
+private struct WebExtensionsSection: View {
+    @ObservedObject private var extensions = WebExtensions.shared
+    @State private var installError: String?
+    @State private var isInstalling = false
+
+    var body: some View {
+        Section {
+            if WebExtensions.isSupported {
+                if extensions.installed.isEmpty {
+                    Text("No extensions added.")
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(extensions.installed) { item in
+                    row(item)
+                }
+                HStack {
+                    if let installError {
+                        Text(installError)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer()
+                    Button(isInstalling ? "Adding…" : "Add Extension…", action: chooseExtension)
+                        .disabled(isInstalling)
+                }
+            } else {
+                Text("Extensions need macOS 15.4 or later.")
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("GitHub.com Extensions")
+        } footer: {
+            Text("Add a Chrome extension as an unpacked folder, a .zip, or a .crx file. Extensions run in the GitHub.com pane and get the permissions they ask for. Features only Chrome has, such as side panels, don't work.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func row(_ item: InstalledWebExtension) -> some View {
+        let status = extensions.statuses[item.id]
+        return HStack(spacing: 10) {
+            Group {
+                if let icon = status?.icon {
+                    Image(nsImage: icon).resizable()
+                } else {
+                    Image(systemName: "puzzlepiece.extension").foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 24, height: 24)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.name)
+                if let version = item.version {
+                    Text("Version \(version)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if let error = status?.error {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if let warning = status?.warning {
+                    Text(warning)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer()
+            if item.isEnabled, status?.hasOptionsPage == true {
+                Button("Options") { extensions.openOptions(for: item.id) }
+                    .buttonStyle(.borderless)
+            }
+            Toggle("Enabled", isOn: Binding(
+                get: { item.isEnabled },
+                set: { newValue in Task { await extensions.setEnabled(newValue, for: item.id) } }
+            ))
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            Button {
+                extensions.remove(id: item.id)
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+            .help("Remove \(item.name)")
+            .accessibilityLabel("Remove \(item.name)")
+        }
+    }
+
+    private func chooseExtension() {
+        let panel = NSOpenPanel()
+        panel.message = "Choose an unpacked extension folder, a .zip, or a .crx file."
+        panel.prompt = "Add"
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.folder, .zip, UTType(filenameExtension: "crx") ?? .data]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        isInstalling = true
+        installError = nil
+        Task {
+            do {
+                try await extensions.install(from: url)
+            } catch {
+                installError = error.localizedDescription
+            }
+            isInstalling = false
+        }
     }
 }

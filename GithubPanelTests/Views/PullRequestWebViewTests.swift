@@ -27,6 +27,8 @@ final class PullRequestWebViewTests: XCTestCase {
         XCTAssertEqual(WebNavigationPolicy.decision(for: URL(string: "mailto:someone@example.com"),
                                                     isLinkClick: true), .openExternally)
         XCTAssertEqual(WebNavigationPolicy.decision(for: URL(string: "about:blank"), isLinkClick: false), .allow)
+        XCTAssertEqual(WebNavigationPolicy.decision(for: URL(string: "webkit-extension://abc/options.html"),
+                                                    isLinkClick: true), .allow)
         XCTAssertEqual(WebNavigationPolicy.decision(for: nil, isLinkClick: false), .allow)
     }
 
