@@ -30,6 +30,15 @@ enum PullRequestWebPage: Equatable, CaseIterable {
         while path.count > 1 && path.hasSuffix("/") { path.removeLast() }
         return allCases.first { $0.paths(for: reference).contains(path) }
     }
+
+    /// True when a web view at `url` whose last response had `statusCode` shows this page of `reference`. A
+    /// redirect to GitHub's sign-in page lands on another URL, and an error such as the 404 GitHub gives a private
+    /// pull request when signed out keeps the URL, so both are checked.
+    func isShown(at url: URL?, statusCode: Int?, for reference: PullRequestReference) -> Bool {
+        guard Self.page(of: url, for: reference) == self else { return false }
+        guard let statusCode else { return true }
+        return (200..<300).contains(statusCode)
+    }
 }
 
 /// A pull request the GitHub pane keeps loaded, with the time GitHub last changed it, so a page loaded before a

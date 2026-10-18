@@ -41,6 +41,8 @@ final class PullRequestWebSession: NSObject, ObservableObject {
     @Published private(set) var isLoading = false
     @Published private(set) var progress: Double = 0
     @Published private(set) var currentURL: URL?
+    /// The HTTP status of the page's last main-frame response, or nil when it had none, such as for loaded HTML.
+    private(set) var statusCode: Int?
     /// The page to load when the pool next starts this web view, or nil when nothing is waiting.
     var pendingURL: URL?
     /// Called when a click on the page asks for the pull request's other page, which another web view holds.
@@ -212,6 +214,15 @@ extension PullRequestWebSession: WKNavigationDelegate, WKUIDelegate {
         }
     }
 
+    func webView(_ webView: WKWebView,
+                 decidePolicyFor navigationResponse: WKNavigationResponse,
+                 decisionHandler: @escaping @MainActor (WKNavigationResponsePolicy) -> Void) {
+        if navigationResponse.isForMainFrame {
+            statusCode = (navigationResponse.response as? HTTPURLResponse)?.statusCode
+        }
+        decisionHandler(.allow)
+    }
+
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         endLoad(navigation)
     }
@@ -324,10 +335,7 @@ final class PullRequestWebPool: ObservableObject {
             reloadAll(page)
         }
         let page = pages(for: reference)
-        let session = page.visibleSession
-        if session.pendingURL != nil {
-            start(session)
-        }
+        loadIfNeeded(page.visiblePage, of: page)
         pump()
     }
 
@@ -335,10 +343,16 @@ final class PullRequestWebPool: ObservableObject {
     func open(_ page: PullRequestWebPage, in reference: PullRequestReference) {
         guard let pages = pages[reference] else { return }
         pages.visiblePage = page
+        loadIfNeeded(page, of: pages)
+    }
+
+    /// Starts `page` loading now if it is waiting to, or if its web view isn't showing it: it went to another
+    /// page, or GitHub answered with its sign-in page or an error, such as when the sign-in expired.
+    private func loadIfNeeded(_ page: PullRequestWebPage, of pages: PullRequestWebPages) {
         let session = pages.session(page)
         if session.pendingURL == nil, !loading.contains(ObjectIdentifier(session)),
-           PullRequestWebPage.page(of: session.webView.url, for: reference) != page {
-            session.pendingURL = page.url(for: reference)
+           !page.isShown(at: session.webView.url, statusCode: session.statusCode, for: pages.reference) {
+            session.pendingURL = page.url(for: pages.reference)
         }
         if session.pendingURL != nil {
             start(session)

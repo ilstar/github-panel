@@ -31,6 +31,20 @@ final class PullRequestWebPreloadTests: XCTestCase {
         XCTAssertNil(PullRequestWebPage.page(of: nil, for: reference))
     }
 
+    func testAPageIsShownOnlyAtItsURLWithASuccessfulResponse() {
+        let url = URL(string: "https://github.com/acme/widgets/pull/12/changes")
+
+        XCTAssertTrue(PullRequestWebPage.files.isShown(at: url, statusCode: 200, for: reference))
+        XCTAssertTrue(PullRequestWebPage.files.isShown(at: url, statusCode: nil, for: reference))
+        XCTAssertFalse(PullRequestWebPage.files.isShown(at: url, statusCode: 404, for: reference))
+        XCTAssertFalse(PullRequestWebPage.files.isShown(at: url, statusCode: 500, for: reference))
+        XCTAssertFalse(PullRequestWebPage.conversation.isShown(at: url, statusCode: 200, for: reference))
+        XCTAssertFalse(PullRequestWebPage.conversation.isShown(
+            at: URL(string: "https://github.com/login?return_to=%2Facme%2Fwidgets%2Fpull%2F12"),
+            statusCode: 200, for: reference))
+        XCTAssertFalse(PullRequestWebPage.conversation.isShown(at: nil, statusCode: nil, for: reference))
+    }
+
     func testPlanStartsAtTheSelectionAndWorksOutwardBelowFirst() {
         let rows = candidates(1...5)
 

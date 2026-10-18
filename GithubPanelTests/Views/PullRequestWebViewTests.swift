@@ -146,6 +146,46 @@ final class PullRequestWebViewTests: XCTestCase {
     }
 
     @MainActor
+    func testShowingAPullRequestLeftOnTheSignInPageLoadsItAgain() async throws {
+        let pool = PullRequestWebPool()
+        let reference = PullRequestReference(repoFullName: "acme/widgets", number: 12)
+        let session = try await loadedSession(in: pool, for: reference,
+                                              at: URL(string: "https://github.com/login?return_to=%2Facme")!)
+
+        pool.show(reference)
+
+        XCTAssertEqual(pool.loadingCount, 1)
+        XCTAssertNil(session.pendingURL)
+        pool.removeAll()
+    }
+
+    @MainActor
+    func testShowingAPullRequestOnItsOwnPageKeepsIt() async throws {
+        let pool = PullRequestWebPool()
+        let reference = PullRequestReference(repoFullName: "acme/widgets", number: 12)
+        _ = try await loadedSession(in: pool, for: reference, at: reference.webURL)
+
+        pool.show(reference)
+
+        XCTAssertEqual(pool.loadingCount, 0)
+        pool.removeAll()
+    }
+
+    /// The pull request's conversation web view, finished loading at `url` as if the pool had loaded it there,
+    /// with nothing else waiting to load.
+    @MainActor
+    private func loadedSession(in pool: PullRequestWebPool, for reference: PullRequestReference,
+                               at url: URL) async throws -> PullRequestWebSession {
+        let pages = pool.pages(for: reference)
+        pages.conversation.pendingURL = nil
+        pages.files.pendingURL = nil
+        let session = pages.conversation
+        session.webView.loadHTMLString("<p>page</p>", baseURL: url)
+        try await waitUntil { !session.webView.isLoading && session.webView.url != nil }
+        return session
+    }
+
+    @MainActor
     func testClickingTheOtherPagesTabAsksForItsWebView() async throws {
         let reference = PullRequestReference(repoFullName: "acme/widgets", number: 12)
         let session = PullRequestWebSession(interceptedLinks: ["/acme/widgets/pull/12/files": .files])
