@@ -146,6 +146,63 @@ final class PullRequestWebViewTests: XCTestCase {
     }
 
     @MainActor
+    func testShowingAPullRequestLeftOnTheSignInPageLoadsItAgain() async throws {
+        let pool = PullRequestWebPool()
+        let reference = PullRequestReference(repoFullName: "acme/widgets", number: 12)
+        let session = try await loadedSession(in: pool, for: reference,
+                                              at: URL(string: "https://github.com/login?return_to=%2Facme")!)
+
+        pool.show(reference)
+
+        XCTAssertEqual(pool.loadingCount, 1)
+        XCTAssertNil(session.pendingURL)
+        pool.removeAll()
+    }
+
+    @MainActor
+    func testShowingAPullRequestLoadedSignedOutLoadsItAgain() async throws {
+        let pool = PullRequestWebPool()
+        let reference = PullRequestReference(repoFullName: "acme/widgets", number: 12)
+        let session = try await loadedSession(in: pool, for: reference, at: reference.webURL, userLogin: "")
+        try await waitUntil { session.isSignedIn != nil }
+
+        pool.show(reference)
+
+        XCTAssertEqual(session.isSignedIn, false)
+        XCTAssertEqual(pool.loadingCount, 1)
+        pool.removeAll()
+    }
+
+    @MainActor
+    func testShowingAPullRequestOnItsOwnPageSignedInKeepsIt() async throws {
+        let pool = PullRequestWebPool()
+        let reference = PullRequestReference(repoFullName: "acme/widgets", number: 12)
+        let session = try await loadedSession(in: pool, for: reference, at: reference.webURL, userLogin: "octocat")
+        try await waitUntil { session.isSignedIn != nil }
+
+        pool.show(reference)
+
+        XCTAssertEqual(session.isSignedIn, true)
+        XCTAssertEqual(pool.loadingCount, 0)
+        pool.removeAll()
+    }
+
+    /// The pull request's conversation web view, finished loading at `url` as if the pool had loaded it there,
+    /// with nothing else waiting to load. `userLogin` fills GitHub's sign-in meta tag, left out when nil.
+    @MainActor
+    private func loadedSession(in pool: PullRequestWebPool, for reference: PullRequestReference,
+                               at url: URL, userLogin: String? = nil) async throws -> PullRequestWebSession {
+        let pages = pool.pages(for: reference)
+        pages.conversation.pendingURL = nil
+        pages.files.pendingURL = nil
+        let session = pages.conversation
+        let meta = userLogin.map { "<meta name=\"user-login\" content=\"\($0)\">" } ?? ""
+        session.webView.loadHTMLString("\(meta)<p>page</p>", baseURL: url)
+        try await waitUntil { !session.webView.isLoading && session.webView.url != nil }
+        return session
+    }
+
+    @MainActor
     func testClickingTheOtherPagesTabAsksForItsWebView() async throws {
         let reference = PullRequestReference(repoFullName: "acme/widgets", number: 12)
         let session = PullRequestWebSession(interceptedLinks: ["/acme/widgets/pull/12/files": .files])
