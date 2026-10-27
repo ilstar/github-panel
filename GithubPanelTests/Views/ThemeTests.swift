@@ -67,14 +67,14 @@ final class ThemeTests: XCTestCase {
         XCTAssertEqual(SidebarGradient.washOpacity(strength: 150, isDark: true), 0.20, accuracy: 0.001)
     }
 
-    func testConversationCardsHaveOpaqueSurfacesAndVisibleBordersInBothAppearances() throws {
+    func testActivityCardsHaveOpaqueSurfacesAndVisibleBordersInBothAppearances() throws {
         for name in [NSAppearance.Name.aqua, .darkAqua] {
             let fill = NSColor(Theme.conversationCardFill)
-            let border = NSColor(Theme.conversationCardBorder)
+            let border = NSColor(Theme.activityCardBorder)
             XCTAssertEqual(try resolvedAlpha(fill, in: name), 1, accuracy: 0.001)
             XCTAssertEqual(try resolvedAlpha(border, in: name), 1, accuracy: 0.001)
             let difference = abs(try resolvedWhite(fill, in: name) - resolvedWhite(border, in: name))
-            XCTAssertGreaterThan(difference, 0.15)
+            XCTAssertGreaterThan(difference, 0.08)
         }
     }
 

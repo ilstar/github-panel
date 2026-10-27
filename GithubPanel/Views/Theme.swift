@@ -29,11 +29,9 @@ enum Theme {
     /// A soft fill for cards such as the description, comments and the token form.
     static let cardFill = Color(light: NSColor(white: 1, alpha: 0.72),
                                 dark: NSColor(white: 1, alpha: 0.05))
-    /// Opaque reading surfaces with a visible edge against the PR pane.
+    /// Opaque reading surfaces, such as comments, against the PR pane.
     static let conversationCardFill = Color(light: .white,
                                              dark: NSColor(white: 0.17, alpha: 1))
-    static let conversationCardBorder = Color(light: NSColor(white: 0.74, alpha: 1),
-                                               dark: NSColor(white: 0.35, alpha: 1))
     static let hairline = Color.primary.opacity(0.08)
     /// The lighter edge around comments in the Activity list.
     static let activityCardBorder = Color(light: NSColor(white: 0.88, alpha: 1),
@@ -41,6 +39,11 @@ enum Theme {
     /// Fenced code blocks in Markdown.
     static let codeBlockFill = Color(light: NSColor(red: 0.965, green: 0.969, blue: 0.976, alpha: 1),
                                      dark: NSColor(white: 1, alpha: 0.05))
+    /// `Inline code` in Markdown: a soft gray fill, with the text a touch darker than body text.
+    static let inlineCodeFill = Color(light: NSColor(red: 0.506, green: 0.545, blue: 0.596, alpha: 0.16),
+                                      dark: NSColor(red: 0.431, green: 0.463, blue: 0.506, alpha: 0.4))
+    static let inlineCodeText = Color(light: NSColor(red: 0.141, green: 0.161, blue: 0.184, alpha: 1),
+                                      dark: NSColor(red: 0.902, green: 0.929, blue: 0.953, alpha: 1))
     /// The selected tab over the pull request, and a tab under the pointer.
     static let tabSelection = Color.primary.opacity(0.07)
     static let tabHover = Color.primary.opacity(0.04)

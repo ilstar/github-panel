@@ -4,7 +4,6 @@ import AppKit
 enum PullRequestDetailTab: String, CaseIterable, Identifiable {
     case conversation
     case files
-    case checks
 
     var id: String { rawValue }
 }
@@ -72,7 +71,7 @@ struct PullRequestDetailView: View {
                         .padding(.bottom, 10)
                 }
 
-                // The conversation flows on from the header; the diff and checks get a line above them.
+                // The conversation flows on from the header; the diff gets a line above it.
                 if selectedTab != .conversation {
                     Rectangle()
                         .fill(Theme.hairline)
@@ -85,7 +84,9 @@ struct PullRequestDetailView: View {
                     PullRequestConversationView(detail: content.detail,
                                                 comments: viewModel.comments?.comments,
                                                 checks: viewModel.checks,
-                                                onShowChecks: { selectedTab = .checks },
+                                                rerunsInFlight: viewModel.rerunsInFlight,
+                                                onRerunCheck: { rerun in Task { await viewModel.rerun(rerun) } },
+                                                onRerunFailedChecks: { Task { await viewModel.rerunFailedChecks() } },
                                                 commentFocusRequest: commentFocusRequest,
                                                 onComment: { body in try await viewModel.post(.general(body: body)) },
                                                 onSaveBody: { body in try await viewModel.edit(body: body) },
@@ -102,11 +103,6 @@ struct PullRequestDetailView: View {
                     PullRequestFilesView(viewModel: viewModel,
                                          files: content.files,
                                          filesURL: content.detail.htmlURL.appendingPathComponent("files"))
-                case .checks:
-                    PullRequestChecksView(checks: viewModel.checks,
-                                          rerunsInFlight: viewModel.rerunsInFlight,
-                                          onRerun: { rerun in Task { await viewModel.rerun(rerun) } },
-                                          onRerunFailed: { Task { await viewModel.rerunFailedChecks() } })
                 }
             } else if let error = viewModel.errorMessage {
                 VStack(spacing: 12) {
@@ -131,21 +127,13 @@ struct PullRequestDetailView: View {
 
     private func tabs(for detail: PullRequestDetail) -> [PullRequestDetailTabBar.Tab] {
         [.init(value: .conversation, title: "Conversation", badge: Self.conversationBadge(viewModel.comments?.comments.count)),
-         .init(value: .files, title: "Files changed", badge: .diff(additions: detail.additions, deletions: detail.deletions)),
-         .init(value: .checks, title: "Checks", badge: Self.checksBadge(viewModel.checks))]
+         .init(value: .files, title: "Files changed", badge: .diff(additions: detail.additions, deletions: detail.deletions))]
     }
 
     /// The comment count after Conversation, left off when there are none yet.
     static func conversationBadge(_ commentCount: Int?) -> PullRequestDetailTabBar.Badge? {
         guard let commentCount, commentCount > 0 else { return nil }
         return .count(commentCount)
-    }
-
-    /// A red "2 failing" after Checks so a failure shows before the tab is opened, else the number of checks.
-    static func checksBadge(_ checks: PullRequestChecks?) -> PullRequestDetailTabBar.Badge? {
-        guard let checks, !checks.checks.isEmpty else { return nil }
-        let failing = checks.count(.failure)
-        return failing > 0 ? .failing(failing) : .count(checks.checks.count)
     }
 
     private var navigationTitle: String {
@@ -188,7 +176,7 @@ struct PullRequestDetailView: View {
     }
 }
 
-/// The row over the pull request: the Conversation / Files changed / Checks tabs on the left and the
+/// The row over the pull request: the Conversation / Files changed tabs on the left and the
 /// Reload, Open on GitHub, Update branch and Review buttons on the right. Edit title sits by the title instead.
 struct PullRequestDetailToolbar: View {
     @Binding var selectedTab: PullRequestDetailTab
@@ -335,8 +323,8 @@ struct DetailToolbarButtonStyle: ButtonStyle {
     }
 }
 
-/// The Conversation / Files changed / Checks tabs: flat labels, the selected one on a soft rounded fill,
-/// each with an optional count, diff size or failing badge after its title.
+/// The Conversation / Files changed tabs: flat labels, the selected one on a soft rounded fill,
+/// each with an optional count or diff size after its title.
 struct PullRequestDetailTabBar: View {
     struct Tab: Identifiable {
         let value: PullRequestDetailTab
@@ -348,7 +336,6 @@ struct PullRequestDetailTabBar: View {
     enum Badge: Equatable {
         case count(Int)
         case diff(additions: Int, deletions: Int)
-        case failing(Int)
     }
 
     @Binding var selection: PullRequestDetailTab
@@ -411,14 +398,6 @@ struct PullRequestDetailTabBar: View {
                 }
                 .font(.system(size: 12, weight: .semibold))
                 .monospacedDigit()
-            case let .failing(count):
-                Text("\(count) failing")
-                    .font(.system(size: 11, weight: .semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(Theme.red)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 1)
-                    .background(Capsule().fill(Theme.red.opacity(0.12)))
             }
         }
     }
@@ -846,8 +825,10 @@ struct PullRequestConversationView: View {
     let comments: [PullRequestComment]?
     /// The head commit's checks for the sidebar. Nil while they load.
     var checks: PullRequestChecks?
-    /// Opens the Checks tab.
-    var onShowChecks: () -> Void = {}
+    /// Check reruns GitHub has not answered yet.
+    var rerunsInFlight: Set<CheckRerun> = []
+    var onRerunCheck: (CheckRerun) -> Void = { _ in }
+    var onRerunFailedChecks: () -> Void = {}
     /// Goes up by one each time the comment box should take focus.
     var commentFocusRequest = 0
     let onComment: (String) async throws -> Void
@@ -871,7 +852,10 @@ struct PullRequestConversationView: View {
                     VStack(alignment: .leading, spacing: 14) {
                         PullRequestChangesSection(detail: detail)
                         PullRequestReviewersView(reviewers: detail.reviewers, actions: reviewerActions)
-                        PullRequestChecksSection(checks: checks, onShowAll: onShowChecks)
+                        PullRequestChecksSection(checks: checks,
+                                                 rerunsInFlight: rerunsInFlight,
+                                                 onRerun: onRerunCheck,
+                                                 onRerunFailed: onRerunFailedChecks)
                     }
                     .padding(.top, 4)
                 }
@@ -1029,8 +1013,29 @@ struct MarkdownView: View {
 
     static func inline(_ text: String) -> AttributedString {
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
+        let parsed = (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
+        return highlightingCode(parsed)
     }
+
+    /// Puts `inline code` on a soft fill, like GitHub, with a thin space inside each end so the fill
+    /// does not hug the letters.
+    static func highlightingCode(_ text: AttributedString) -> AttributedString {
+        var result = AttributedString()
+        for run in text.runs {
+            var part = AttributedString(text[run.range])
+            if run.inlinePresentationIntent?.contains(.code) == true {
+                part = AttributedString(inlineCodePadding, attributes: part.runs.first?.attributes ?? .init())
+                    + part
+                    + AttributedString(inlineCodePadding, attributes: part.runs.first?.attributes ?? .init())
+                part.backgroundColor = Theme.inlineCodeFill
+                part.foregroundColor = Theme.inlineCodeText
+            }
+            result += part
+        }
+        return result
+    }
+
+    static let inlineCodePadding = "\u{2009}"
 }
 
 /// Parsed Markdown blocks, stacked. Centered HTML blocks nest another one of these.
@@ -1222,13 +1227,6 @@ enum DiffColors {
 }
 
 extension View {
-    /// The soft rounded card behind the checks list.
-    func conversationCard() -> some View {
-        let shape = RoundedRectangle(cornerRadius: Theme.cardCornerRadius, style: .continuous)
-        return background(shape.fill(Theme.conversationCardFill))
-            .overlay(shape.strokeBorder(Theme.conversationCardBorder, lineWidth: 1))
-    }
-
     /// The tighter card behind each comment and the comment box in the Activity list.
     func activityCard() -> some View {
         let shape = RoundedRectangle(cornerRadius: Theme.activityCardCornerRadius, style: .continuous)
