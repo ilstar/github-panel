@@ -1007,7 +1007,6 @@ struct MarkdownView: View {
 
     var body: some View {
         MarkdownBlocksView(blocks: MarkdownBlocks.parse(markdown), onSetTask: onSetTask)
-            .inlineCodeRendering()
             .prFont(.body)
             .textSelection(.enabled)
     }
@@ -1035,8 +1034,8 @@ struct MarkdownView: View {
         return result
     }
 
-    /// Inline Markdown as a `Text`, with `inline code` on a soft rounded fill like GitHub's. Needs
-    /// ``InlineCodeRenderer`` above it to round the fill; before macOS 15 the fill is square.
+    /// Inline Markdown as a `Text`, with `inline code` marked for ``InlineCodeRenderer`` to fill. Before
+    /// macOS 15 the code gets a square background instead.
     static func inlineText(_ markdown: String) -> Text {
         let text = inline(markdown)
         var result = Text(verbatim: "")
@@ -1063,6 +1062,31 @@ struct MarkdownView: View {
     static let inlineCodePadding = "\u{202F}"
 }
 
+/// One line or paragraph of inline Markdown, with `inline code` on a soft rounded fill like GitHub's.
+/// Selectable text on macOS skips custom text renderers, so the fills are drawn by a copy of the text
+/// laid out the same way behind it, which is not selectable and draws only the fills.
+struct InlineMarkdownText: View {
+    let markdown: String
+
+    var body: some View {
+        let text = MarkdownView.inlineText(markdown)
+        if #available(macOS 15.0, *), Self.hasInlineCode(markdown) {
+            text.background {
+                text
+                    .textRenderer(InlineCodeRenderer())
+                    .textSelection(.disabled)
+                    .accessibilityHidden(true)
+            }
+        } else {
+            text
+        }
+    }
+
+    static func hasInlineCode(_ markdown: String) -> Bool {
+        MarkdownView.inline(markdown).runs.contains { $0.inlinePresentationIntent?.contains(.code) == true }
+    }
+}
+
 /// Parsed Markdown blocks, stacked. Centered HTML blocks nest another one of these.
 private struct MarkdownBlocksView: View {
     let blocks: [MarkdownBlock]
@@ -1082,7 +1106,7 @@ private struct MarkdownBlocksView: View {
         switch block {
         case let .heading(level, text):
             VStack(alignment: .leading, spacing: 4) {
-                MarkdownView.inlineText(text)
+                InlineMarkdownText(markdown: text)
                     .prFont(level == 1 ? .title2 : level == 2 ? .title3 : .headline, weight: .semibold)
                 if level <= 2 {
                     Divider()
@@ -1090,12 +1114,12 @@ private struct MarkdownBlocksView: View {
             }
             .padding(.top, 4)
         case let .paragraph(text):
-            MarkdownView.inlineText(text)
+            InlineMarkdownText(markdown: text)
         case let .listItem(marker, indent, text):
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(marker)
                     .foregroundStyle(.secondary)
-                MarkdownView.inlineText(text)
+                InlineMarkdownText(markdown: text)
             }
             .padding(.leading, CGFloat(indent) * 18)
         case let .task(index, checked, indent, text):
@@ -1104,11 +1128,11 @@ private struct MarkdownBlocksView: View {
                     .toggleStyle(.checkbox)
                     .labelsHidden()
                     .disabled(onSetTask == nil)
-                MarkdownView.inlineText(text)
+                InlineMarkdownText(markdown: text)
             }
             .padding(.leading, CGFloat(indent) * 18)
         case let .quote(text):
-            MarkdownView.inlineText(text)
+            InlineMarkdownText(markdown: text)
                 .foregroundStyle(.secondary)
                 .padding(.leading, 12)
                 .overlay(alignment: .leading) {
@@ -1177,7 +1201,7 @@ private struct MarkdownTableView: View {
 
     private func cell(_ text: String, column: Int) -> some View {
         let alignment = column < alignments.count ? alignments[column] : .leading
-        return MarkdownView.inlineText(text)
+        return InlineMarkdownText(markdown: text)
             .multilineTextAlignment(alignment.textAlignment)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
@@ -1264,7 +1288,8 @@ extension View {
 @available(macOS 15.0, *)
 struct InlineCodeAttribute: TextAttribute {}
 
-/// Draws a rounded fill behind each stretch of `inline code` on a line, then the text over it.
+/// Draws only a rounded fill behind each stretch of `inline code` on a line; ``InlineMarkdownText`` puts
+/// the selectable text over it.
 @available(macOS 15.0, *)
 struct InlineCodeRenderer: TextRenderer {
     static let cornerRadius: CGFloat = 4
@@ -1276,7 +1301,6 @@ struct InlineCodeRenderer: TextRenderer {
                 context.fill(Path(roundedRect: rect, cornerRadius: Self.cornerRadius, style: .continuous),
                              with: .color(Theme.inlineCodeFill))
             }
-            context.draw(line)
         }
     }
 
@@ -1295,17 +1319,5 @@ struct InlineCodeRenderer: TextRenderer {
         }
         if let current { rects.append(current) }
         return rects
-    }
-}
-
-extension View {
-    /// Rounds the fill behind `inline code` in Markdown text below. Needs macOS 15.
-    @ViewBuilder
-    func inlineCodeRendering() -> some View {
-        if #available(macOS 15.0, *) {
-            textRenderer(InlineCodeRenderer())
-        } else {
-            self
-        }
     }
 }

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import XCTest
 @testable import GithubPanel
@@ -36,5 +37,39 @@ final class MarkdownInlineCodeTests: XCTestCase {
         let text = MarkdownView.inline("Plain **bold** words")
         XCTAssertEqual(String(text.characters), "Plain bold words")
         XCTAssertTrue(text.runs.allSatisfy { $0.foregroundColor == nil })
+    }
+
+    /// Markdown text is selectable, and selectable text skips custom text renderers, so the fill has to be
+    /// drawn another way. Counts the fill's gray pixels against the same words without code.
+    @MainActor
+    func testSelectableMarkdownStillDrawsTheCodeFill() throws {
+        guard #available(macOS 15.0, *) else { throw XCTSkip("Rounded fills need macOS 15") }
+        XCTAssertTrue(InlineMarkdownText.hasInlineCode("a `b` c"))
+        XCTAssertFalse(InlineMarkdownText.hasInlineCode("a b c"))
+
+        let withCode = grayPixels(MarkdownView(markdown: "aa `optional:` bb"))
+        let withoutCode = grayPixels(MarkdownView(markdown: "aa optional: bb"))
+        XCTAssertGreaterThan(withCode - withoutCode, 1_000)
+    }
+
+    @MainActor
+    private func grayPixels(_ view: some View) -> Int {
+        let host = NSHostingView(rootView: view.padding(10).background(Color.white).environment(\.colorScheme, .light))
+        host.appearance = NSAppearance(named: .aqua)
+        host.frame = NSRect(x: 0, y: 0, width: 300, height: 60)
+        host.layoutSubtreeIfNeeded()
+        guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return 0 }
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        var count = 0
+        for x in 0..<bitmap.pixelsWide {
+            for y in 0..<bitmap.pixelsHigh {
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                if color.redComponent > 0.8, color.redComponent < 0.97,
+                   abs(color.redComponent - color.blueComponent) < 0.06 {
+                    count += 1
+                }
+            }
+        }
+        return count
     }
 }
