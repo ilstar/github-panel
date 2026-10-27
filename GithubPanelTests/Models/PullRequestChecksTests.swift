@@ -73,12 +73,35 @@ final class PullRequestChecksTests: XCTestCase {
         XCTAssertEqual(check("lint", .success).displayName, "lint")
     }
 
-    func testChecksTabTitleCallsOutFailures() {
-        XCTAssertEqual(PullRequestDetailView.checksTitle(nil), "Checks")
-        XCTAssertEqual(PullRequestDetailView.checksTitle(.empty), "Checks")
-        XCTAssertEqual(PullRequestDetailView.checksTitle(PullRequestChecks(checks: [check("a", .success), check("b", .pending)])),
-                       "Checks 2")
-        XCTAssertEqual(PullRequestDetailView.checksTitle(PullRequestChecks(checks: [check("a", .success), check("b", .failure)])),
-                       "Checks 1 failing")
+    func testChecksTabBadgeCallsOutFailures() {
+        XCTAssertNil(PullRequestDetailView.checksBadge(nil))
+        XCTAssertNil(PullRequestDetailView.checksBadge(.empty))
+        XCTAssertEqual(PullRequestDetailView.checksBadge(PullRequestChecks(checks: [check("a", .success), check("b", .pending)])),
+                       .count(2))
+        XCTAssertEqual(PullRequestDetailView.checksBadge(PullRequestChecks(checks: [check("a", .success), check("b", .failure)])),
+                       .failing(1))
+    }
+
+    func testConversationTabBadgeCountsComments() {
+        XCTAssertNil(PullRequestDetailView.conversationBadge(nil))
+        XCTAssertNil(PullRequestDetailView.conversationBadge(0))
+        XCTAssertEqual(PullRequestDetailView.conversationBadge(3), .count(3))
+    }
+
+    func testSidebarChecksShowTheFirstFewFailingFirst() {
+        let many = PullRequestChecks(checks: (0..<8).map { check("ok\($0)", .success) } + [check("bad", .failure)])
+        let visible = PullRequestChecksSection.visibleChecks(many)
+        XCTAssertEqual(visible.count, PullRequestChecksSection.visibleLimit)
+        XCTAssertEqual(visible.first?.name, "bad")
+        XCTAssertEqual(PullRequestChecksSection.showAllTitle(many), "Show all 9 checks")
+
+        let few = PullRequestChecks(checks: [check("a", .success), check("b", .pending)])
+        XCTAssertEqual(PullRequestChecksSection.visibleChecks(few).map(\.name), ["b", "a"])
+        XCTAssertEqual(PullRequestChecksSection.showAllTitle(few), "View all checks")
+    }
+
+    func testSidebarChangesLabelCountsFiles() {
+        XCTAssertEqual(PullRequestChangesSection.filesLabel(1), "1 file")
+        XCTAssertEqual(PullRequestChangesSection.filesLabel(3), "3 files")
     }
 }

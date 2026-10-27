@@ -35,6 +35,15 @@ enum Theme {
     static let conversationCardBorder = Color(light: NSColor(white: 0.74, alpha: 1),
                                                dark: NSColor(white: 0.35, alpha: 1))
     static let hairline = Color.primary.opacity(0.08)
+    /// The lighter edge around comments in the Activity list.
+    static let activityCardBorder = Color(light: NSColor(white: 0.88, alpha: 1),
+                                          dark: NSColor(white: 0.27, alpha: 1))
+    /// Fenced code blocks in Markdown.
+    static let codeBlockFill = Color(light: NSColor(red: 0.965, green: 0.969, blue: 0.976, alpha: 1),
+                                     dark: NSColor(white: 1, alpha: 0.05))
+    /// The selected tab over the pull request, and a tab under the pointer.
+    static let tabSelection = Color.primary.opacity(0.07)
+    static let tabHover = Color.primary.opacity(0.04)
     /// The Merge and Add to queue buttons: a flat green that keeps white text readable.
     static let mergeFill = Color(red: 0.122, green: 0.498, blue: 0.239)
 
@@ -56,6 +65,7 @@ enum Theme {
 
     static let rowCornerRadius: CGFloat = 14
     static let cardCornerRadius: CGFloat = 18
+    static let activityCardCornerRadius: CGFloat = 12
     static let sidebarCornerRadius: CGFloat = 20
     /// The gap between the floating sidebar and the window edges.
     static let sidebarInset: CGFloat = 8
