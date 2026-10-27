@@ -57,184 +57,56 @@ final class PullRequestWebViewTests: XCTestCase {
     }
 
     @MainActor
-    func testPoolLoadsAFewPagesAtATimeInPlanOrder() {
-        let pool = PullRequestWebPool()
-        let plan = candidates(1...3)
-
-        pool.keep(plan)
-
-        XCTAssertEqual(Set(pool.pages.keys), Set(plan.map(\.reference)))
-        XCTAssertEqual(pool.loadingCount, PullRequestWebPool.maxConcurrentLoads)
-        let first = pool.pages[plan[0].reference]!
-        XCTAssertNil(first.conversation.pendingURL)
-        XCTAssertNil(first.files.pendingURL)
-        XCTAssertNotNil(pool.pages[plan[2].reference]!.conversation.pendingURL)
-        pool.removeAll()
-    }
-
-    @MainActor
-    func testShowingAPullRequestLoadsItsPageAheadOfTheQueue() {
-        let pool = PullRequestWebPool()
-        let plan = candidates(1...3)
-        pool.keep(plan)
-
-        pool.show(plan[2].reference)
-
-        XCTAssertEqual(pool.shown, plan[2].reference)
-        XCTAssertNil(pool.pages[plan[2].reference]!.conversation.pendingURL)
-        pool.removeAll()
-    }
-
-    @MainActor
-    func testPoolDropsPullRequestsOutOfThePlanButKeepsTheShownOne() {
-        let pool = PullRequestWebPool()
-        let plan = candidates(1...3)
-        pool.keep(plan)
-        pool.show(plan[2].reference)
-
-        pool.keep([plan[0]])
-
-        XCTAssertEqual(Set(pool.pages.keys), [plan[0].reference, plan[2].reference])
-        XCTAssertLessThanOrEqual(pool.loadingCount, 2 * pool.pages.count)
-        pool.removeAll()
-    }
-
-    @MainActor
-    func testAnEmptyPlanDropsEverything() {
-        let pool = PullRequestWebPool()
-        pool.keep(candidates(1...2))
-        pool.show(candidates(1...1)[0].reference)
-
-        pool.keep([])
-
-        XCTAssertTrue(pool.pages.isEmpty)
-        XCTAssertNil(pool.shown)
-        XCTAssertEqual(pool.loadingCount, 0)
-    }
-
-    @MainActor
-    func testAPullRequestChangedOnGitHubLoadsAgainOnlyOnceItLeavesThePane() {
-        let pool = PullRequestWebPool()
-        let shown = candidates(1...1)[0]
-        let hidden = candidates(2...2)[0]
-        pool.keep([shown, hidden])
-        pool.show(shown.reference)
-        let later = Date(timeIntervalSince1970: 1_000)
-
-        pool.keep([PullRequestWebCandidate(reference: shown.reference, version: later),
-                   PullRequestWebCandidate(reference: hidden.reference, version: later)])
-
-        XCTAssertTrue(pool.pages[shown.reference]!.isStale)
-        XCTAssertFalse(pool.pages[hidden.reference]!.isStale)
-
-        pool.show(hidden.reference)
-
-        XCTAssertFalse(pool.pages[shown.reference]!.isStale)
-        XCTAssertEqual(pool.pages[shown.reference]!.version, later)
-        pool.removeAll()
-    }
-
-    @MainActor
-    func testOpeningTheDiffShowsItsWebView() {
-        let pool = PullRequestWebPool()
-        let reference = candidates(1...1)[0].reference
-        pool.show(reference)
-
-        pool.open(.files, in: reference)
-
-        XCTAssertEqual(pool.pages[reference]!.visiblePage, .files)
-        XCTAssertTrue(pool.pages[reference]!.visibleSession === pool.pages[reference]!.files)
-        pool.removeAll()
-    }
-
-    @MainActor
-    func testShowingAPullRequestLeftOnTheSignInPageLoadsItAgain() async throws {
-        let pool = PullRequestWebPool()
+    func testShowingAPullRequestLoadsItsPage() {
+        let session = PullRequestWebSession()
+        defer { session.close() }
         let reference = PullRequestReference(repoFullName: "acme/widgets", number: 12)
-        let session = try await loadedSession(in: pool, for: reference,
-                                              at: URL(string: "https://github.com/login?return_to=%2Facme")!)
 
-        pool.show(reference)
+        session.show(reference.webURL)
 
-        XCTAssertEqual(pool.loadingCount, 1)
-        XCTAssertNil(session.pendingURL)
-        pool.removeAll()
+        XCTAssertEqual(session.requestedURL, reference.webURL)
+        XCTAssertTrue(session.webView.isLoading)
     }
 
     @MainActor
-    func testShowingAPullRequestLoadedSignedOutLoadsItAgain() async throws {
-        let pool = PullRequestWebPool()
+    func testShowingTheSamePullRequestAgainKeepsWhereYouNavigated() async throws {
+        let session = PullRequestWebSession()
+        defer { session.close() }
         let reference = PullRequestReference(repoFullName: "acme/widgets", number: 12)
-        let session = try await loadedSession(in: pool, for: reference, at: reference.webURL, userLogin: "")
-        try await waitUntil { session.isSignedIn != nil }
+        let elsewhere = URL(string: "https://github.com/acme/widgets/pull/12/commits")!
+        session.show(reference.webURL)
+        session.webView.loadHTMLString("<p>commits</p>", baseURL: elsewhere)
+        try await waitUntil { !session.webView.isLoading && session.webView.url == elsewhere }
 
-        pool.show(reference)
+        session.show(reference.webURL)
 
-        XCTAssertEqual(session.isSignedIn, false)
-        XCTAssertEqual(pool.loadingCount, 1)
-        pool.removeAll()
+        XCTAssertFalse(session.webView.isLoading)
+        XCTAssertEqual(session.webView.url, elsewhere)
     }
 
     @MainActor
-    func testShowingAPullRequestOnItsOwnPageSignedInKeepsIt() async throws {
-        let pool = PullRequestWebPool()
-        let reference = PullRequestReference(repoFullName: "acme/widgets", number: 12)
-        let session = try await loadedSession(in: pool, for: reference, at: reference.webURL, userLogin: "octocat")
-        try await waitUntil { session.isSignedIn != nil }
+    func testShowingAnotherPullRequestLoadsItInTheSameWebView() {
+        let session = PullRequestWebSession()
+        defer { session.close() }
+        let webView = session.webView
+        let first = PullRequestReference(repoFullName: "acme/widgets", number: 12)
+        let second = PullRequestReference(repoFullName: "acme/widgets", number: 13)
+        session.show(first.webURL)
 
-        pool.show(reference)
+        session.show(second.webURL)
 
-        XCTAssertEqual(session.isSignedIn, true)
-        XCTAssertEqual(pool.loadingCount, 0)
-        pool.removeAll()
-    }
-
-    /// The pull request's conversation web view, finished loading at `url` as if the pool had loaded it there,
-    /// with nothing else waiting to load. `userLogin` fills GitHub's sign-in meta tag, left out when nil.
-    @MainActor
-    private func loadedSession(in pool: PullRequestWebPool, for reference: PullRequestReference,
-                               at url: URL, userLogin: String? = nil) async throws -> PullRequestWebSession {
-        let pages = pool.pages(for: reference)
-        pages.conversation.pendingURL = nil
-        pages.files.pendingURL = nil
-        let session = pages.conversation
-        let meta = userLogin.map { "<meta name=\"user-login\" content=\"\($0)\">" } ?? ""
-        session.webView.loadHTMLString("\(meta)<p>page</p>", baseURL: url)
-        try await waitUntil { !session.webView.isLoading && session.webView.url != nil }
-        return session
+        XCTAssertTrue(session.webView === webView)
+        XCTAssertEqual(session.requestedURL, second.webURL)
     }
 
     @MainActor
-    func testClickingTheOtherPagesTabAsksForItsWebView() async throws {
-        let reference = PullRequestReference(repoFullName: "acme/widgets", number: 12)
-        let session = PullRequestWebSession(interceptedLinks: ["/acme/widgets/pull/12/files": .files])
-        var opened: [PullRequestWebPage] = []
-        session.onOpenPage = { opened.append($0) }
-        session.webView.loadHTMLString("""
-            <a id="files" href="/acme/widgets/pull/12/files">Files changed</a>
-            <a id="commits" href="/acme/widgets/pull/12/commits">Commits</a>
-            """, baseURL: reference.webURL)
-        try await waitUntil { !session.webView.isLoading && session.webView.url != nil }
+    func testTheWebViewIsMadeOnlyWhenTheGitHubPaneAsksForIt() {
+        let lazy = LazyWebSession()
 
-        _ = try await session.webView.evaluateJavaScript("document.getElementById('files').click(); true")
-        try await waitUntil { !opened.isEmpty }
+        let session = lazy.session
+        defer { session.close() }
 
-        XCTAssertEqual(opened, [.files])
-        XCTAssertEqual(session.webView.url, reference.webURL)
-    }
-
-    func testInterceptionScriptListsTheOtherPagesPaths() {
-        let script = PullRequestWebSession.linkInterceptionScript(for: ["/acme/widgets/pull/12/files": .files])
-
-        XCTAssertTrue(script.contains(#"{"\/acme\/widgets\/pull\/12\/files":"files"}"#)
-                      || script.contains(#"{"/acme/widgets/pull/12/files":"files"}"#), script)
-    }
-
-    private func candidates(_ numbers: ClosedRange<Int>) -> [PullRequestWebCandidate] {
-        numbers.map {
-            PullRequestWebCandidate(reference: PullRequestReference(repoFullName: "acme/widgets", number: $0),
-                                    version: Date(timeIntervalSince1970: TimeInterval($0)))
-        }
+        XCTAssertTrue(lazy.session === session)
     }
 
     @MainActor
