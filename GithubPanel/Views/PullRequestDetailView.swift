@@ -932,7 +932,6 @@ struct PullRequestConversationView: View {
                         .foregroundStyle(.secondary)
                 } else {
                     MarkdownView(markdown: detail.body, onSetTask: detail.canEdit ? onSetTask : nil)
-                        .lineSpacing(3)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1057,6 +1056,36 @@ struct MarkdownView: View {
         return result
     }
 
+    /// Extra room between wrapped lines of body text, for a line height of about 1.55, like GitHub.
+    static func lineSpacing(em: CGFloat) -> CGFloat {
+        (em * 0.55).rounded()
+    }
+
+    /// The list bullet's size, rounded to a half point so it draws crisply.
+    static func bulletDiameter(em: CGFloat) -> CGFloat {
+        (em * 0.42 * 2).rounded() / 2
+    }
+
+    /// The width a list marker takes before its text: the bullet sits centered in it, about 1.1em in.
+    static func markerColumnWidth(em: CGFloat) -> CGFloat {
+        (em * 2.2).rounded()
+    }
+
+    /// The gap above a block: list items in a run sit closer than paragraphs, and a heading gets room above
+    /// it to start a new section.
+    static func spacing(before block: MarkdownBlock, after previous: MarkdownBlock, em: CGFloat) -> CGFloat {
+        switch (previous, block) {
+        case (.listItem, .listItem), (.listItem, .task), (.task, .listItem), (.task, .task):
+            return (em * 0.75).rounded()
+        case (_, .heading):
+            return (em * 1.8).rounded()
+        case (.heading, _):
+            return (em * 0.9).rounded()
+        default:
+            return (em * 1.1).rounded()
+        }
+    }
+
     /// A narrow no-break space: a thin space would let a line wrap between it and the code, leaving an
     /// empty patch of fill at the end of one line and the code on the next.
     static let inlineCodePadding = "\u{202F}"
@@ -1092,12 +1121,41 @@ private struct MarkdownBlocksView: View {
     let blocks: [MarkdownBlock]
     var alignment: HorizontalAlignment = .leading
     var onSetTask: ((Int, Bool) -> Void)?
+    @Environment(\.pullRequestTextSize) private var textSize
+
+    /// The body text's point size, which the spacing and list markers scale with.
+    private var em: CGFloat { PullRequestTextSize.scaled(13, setting: textSize) }
 
     var body: some View {
-        VStack(alignment: alignment, spacing: 10) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+        VStack(alignment: alignment, spacing: 0) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
                 blockView(block)
+                    .padding(.top, index == 0 ? 0 : MarkdownView.spacing(before: block, after: blocks[index - 1], em: em))
             }
+        }
+    }
+
+    /// Gap between a list marker and its text, and how far each nesting level steps in.
+    private var markerColumnWidth: CGFloat { MarkdownView.markerColumnWidth(em: em) }
+
+    @ViewBuilder
+    private func marker(_ marker: String) -> some View {
+        if marker == "•" {
+            // A solid dot centered on the x-height of the first line, like GitHub's bullets.
+            Circle()
+                .fill(Theme.listBullet)
+                .frame(width: MarkdownView.bulletDiameter(em: em), height: MarkdownView.bulletDiameter(em: em))
+                .frame(width: markerColumnWidth)
+                .alignmentGuide(.firstTextBaseline) { dimensions in
+                    dimensions[VerticalAlignment.center] + em * 0.27
+                }
+                .accessibilityHidden(true)
+        } else {
+            Text(marker)
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .frame(minWidth: markerColumnWidth - em * 0.5, alignment: .trailing)
+                .padding(.trailing, em * 0.5)
         }
     }
 
@@ -1105,23 +1163,19 @@ private struct MarkdownBlocksView: View {
     private func blockView(_ block: MarkdownBlock) -> some View {
         switch block {
         case let .heading(level, text):
-            VStack(alignment: .leading, spacing: 4) {
-                InlineMarkdownText(markdown: text)
-                    .prFont(level == 1 ? .title2 : level == 2 ? .title3 : .headline, weight: .semibold)
-                if level <= 2 {
-                    Divider()
-                }
-            }
-            .padding(.top, 4)
+            InlineMarkdownText(markdown: text)
+                .prFont(level == 1 ? .title2 : level == 2 ? .title3 : .headline, weight: .semibold)
+                .lineSpacing(MarkdownView.lineSpacing(em: em) / 2)
         case let .paragraph(text):
             InlineMarkdownText(markdown: text)
+                .lineSpacing(MarkdownView.lineSpacing(em: em))
         case let .listItem(marker, indent, text):
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(marker)
-                    .foregroundStyle(.secondary)
+            HStack(alignment: .firstTextBaseline, spacing: 0) {
+                self.marker(marker)
                 InlineMarkdownText(markdown: text)
+                    .lineSpacing(MarkdownView.lineSpacing(em: em))
             }
-            .padding(.leading, CGFloat(indent) * 18)
+            .padding(.leading, CGFloat(indent) * markerColumnWidth)
         case let .task(index, checked, indent, text):
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Toggle("", isOn: Binding(get: { checked }, set: { onSetTask?(index, $0) }))
@@ -1129,10 +1183,12 @@ private struct MarkdownBlocksView: View {
                     .labelsHidden()
                     .disabled(onSetTask == nil)
                 InlineMarkdownText(markdown: text)
+                    .lineSpacing(MarkdownView.lineSpacing(em: em))
             }
-            .padding(.leading, CGFloat(indent) * 18)
+            .padding(.leading, CGFloat(indent) * markerColumnWidth)
         case let .quote(text):
             InlineMarkdownText(markdown: text)
+                .lineSpacing(MarkdownView.lineSpacing(em: em))
                 .foregroundStyle(.secondary)
                 .padding(.leading, 12)
                 .overlay(alignment: .leading) {
