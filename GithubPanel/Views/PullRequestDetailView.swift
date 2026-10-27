@@ -1007,6 +1007,7 @@ struct MarkdownView: View {
 
     var body: some View {
         MarkdownBlocksView(blocks: MarkdownBlocks.parse(markdown), onSetTask: onSetTask)
+            .inlineCodeRendering()
             .prFont(.body)
             .textSelection(.enabled)
     }
@@ -1017,8 +1018,8 @@ struct MarkdownView: View {
         return highlightingCode(parsed)
     }
 
-    /// Puts `inline code` on a soft fill, like GitHub, with a thin space inside each end so the fill
-    /// does not hug the letters.
+    /// Colors `inline code` and pads each end with a narrow space so its fill does not hug the letters.
+    /// ``inlineText(_:)`` draws the fill.
     static func highlightingCode(_ text: AttributedString) -> AttributedString {
         var result = AttributedString()
         for run in text.runs {
@@ -1027,7 +1028,6 @@ struct MarkdownView: View {
                 part = AttributedString(inlineCodePadding, attributes: part.runs.first?.attributes ?? .init())
                     + part
                     + AttributedString(inlineCodePadding, attributes: part.runs.first?.attributes ?? .init())
-                part.backgroundColor = Theme.inlineCodeFill
                 part.foregroundColor = Theme.inlineCodeText
             }
             result += part
@@ -1035,7 +1035,32 @@ struct MarkdownView: View {
         return result
     }
 
-    static let inlineCodePadding = "\u{2009}"
+    /// Inline Markdown as a `Text`, with `inline code` on a soft rounded fill like GitHub's. Needs
+    /// ``InlineCodeRenderer`` above it to round the fill; before macOS 15 the fill is square.
+    static func inlineText(_ markdown: String) -> Text {
+        let text = inline(markdown)
+        var result = Text(verbatim: "")
+        for run in text.runs {
+            var part = AttributedString(text[run.range])
+            let segment: Text
+            if run.inlinePresentationIntent?.contains(.code) == true {
+                if #available(macOS 15.0, *) {
+                    segment = Text(part).customAttribute(InlineCodeAttribute())
+                } else {
+                    part.backgroundColor = Theme.inlineCodeFill
+                    segment = Text(part)
+                }
+            } else {
+                segment = Text(part)
+            }
+            result = Text("\(result)\(segment)")
+        }
+        return result
+    }
+
+    /// A narrow no-break space: a thin space would let a line wrap between it and the code, leaving an
+    /// empty patch of fill at the end of one line and the code on the next.
+    static let inlineCodePadding = "\u{202F}"
 }
 
 /// Parsed Markdown blocks, stacked. Centered HTML blocks nest another one of these.
@@ -1057,7 +1082,7 @@ private struct MarkdownBlocksView: View {
         switch block {
         case let .heading(level, text):
             VStack(alignment: .leading, spacing: 4) {
-                Text(MarkdownView.inline(text))
+                MarkdownView.inlineText(text)
                     .prFont(level == 1 ? .title2 : level == 2 ? .title3 : .headline, weight: .semibold)
                 if level <= 2 {
                     Divider()
@@ -1065,12 +1090,12 @@ private struct MarkdownBlocksView: View {
             }
             .padding(.top, 4)
         case let .paragraph(text):
-            Text(MarkdownView.inline(text))
+            MarkdownView.inlineText(text)
         case let .listItem(marker, indent, text):
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(marker)
                     .foregroundStyle(.secondary)
-                Text(MarkdownView.inline(text))
+                MarkdownView.inlineText(text)
             }
             .padding(.leading, CGFloat(indent) * 18)
         case let .task(index, checked, indent, text):
@@ -1079,11 +1104,11 @@ private struct MarkdownBlocksView: View {
                     .toggleStyle(.checkbox)
                     .labelsHidden()
                     .disabled(onSetTask == nil)
-                Text(MarkdownView.inline(text))
+                MarkdownView.inlineText(text)
             }
             .padding(.leading, CGFloat(indent) * 18)
         case let .quote(text):
-            Text(MarkdownView.inline(text))
+            MarkdownView.inlineText(text)
                 .foregroundStyle(.secondary)
                 .padding(.leading, 12)
                 .overlay(alignment: .leading) {
@@ -1152,7 +1177,7 @@ private struct MarkdownTableView: View {
 
     private func cell(_ text: String, column: Int) -> some View {
         let alignment = column < alignments.count ? alignments[column] : .leading
-        return Text(MarkdownView.inline(text))
+        return MarkdownView.inlineText(text)
             .multilineTextAlignment(alignment.textAlignment)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
@@ -1232,5 +1257,55 @@ extension View {
         let shape = RoundedRectangle(cornerRadius: Theme.activityCardCornerRadius, style: .continuous)
         return background(shape.fill(Theme.conversationCardFill))
             .overlay(shape.strokeBorder(Theme.activityCardBorder, lineWidth: 1))
+    }
+}
+
+/// Marks the runs of `inline code` in a `Text` so ``InlineCodeRenderer`` can draw their fill.
+@available(macOS 15.0, *)
+struct InlineCodeAttribute: TextAttribute {}
+
+/// Draws a rounded fill behind each stretch of `inline code` on a line, then the text over it.
+@available(macOS 15.0, *)
+struct InlineCodeRenderer: TextRenderer {
+    static let cornerRadius: CGFloat = 4
+
+    func draw(layout: Text.Layout, in context: inout GraphicsContext) {
+        for line in layout {
+            let runs = line.map { (bounds: $0.typographicBounds.rect, isCode: $0[InlineCodeAttribute.self] != nil) }
+            for rect in Self.codeRects(runs) {
+                context.fill(Path(roundedRect: rect, cornerRadius: Self.cornerRadius, style: .continuous),
+                             with: .color(Theme.inlineCodeFill))
+            }
+            context.draw(line)
+        }
+    }
+
+    /// One rect per stretch of neighboring code runs on a line, so a span split into several runs
+    /// still gets a single rounded fill.
+    static func codeRects(_ runs: [(bounds: CGRect, isCode: Bool)]) -> [CGRect] {
+        var rects: [CGRect] = []
+        var current: CGRect?
+        for run in runs {
+            if run.isCode {
+                current = current.map { $0.union(run.bounds) } ?? run.bounds
+            } else if let rect = current {
+                rects.append(rect)
+                current = nil
+            }
+        }
+        if let current { rects.append(current) }
+        return rects
+    }
+}
+
+extension View {
+    /// Rounds the fill behind `inline code` in Markdown text below. Needs macOS 15.
+    @ViewBuilder
+    func inlineCodeRendering() -> some View {
+        if #available(macOS 15.0, *) {
+            textRenderer(InlineCodeRenderer())
+        } else {
+            self
+        }
     }
 }
