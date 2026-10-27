@@ -4,7 +4,6 @@ import AppKit
 enum PullRequestDetailTab: String, CaseIterable, Identifiable {
     case conversation
     case files
-    case checks
 
     var id: String { rawValue }
 }
@@ -28,7 +27,7 @@ struct PullRequestDetailView: View {
         VStack(alignment: .leading, spacing: 0) {
             if let content = viewModel.content {
                 PullRequestDetailToolbar(selectedTab: $selectedTab,
-                                         segments: tabSegments(fileCount: content.files.count),
+                                         tabs: tabs(for: content.detail),
                                          htmlURL: content.detail.htmlURL,
                                          isLoading: viewModel.isLoading,
                                          onRefresh: reload,
@@ -44,15 +43,18 @@ struct PullRequestDetailView: View {
                                          onDiscardReview: viewModel.isReviewPending ? {
                                              try await viewModel.discardPendingReview()
                                          } : nil)
-                    .padding(.leading, 28)
-                    .padding(.trailing, 20)
+                    .padding(.leading, 24)
+                    .padding(.trailing, 16)
                     .frame(height: max(titleBarHeight ?? 0, 54))
+                    .overlay(alignment: .bottom) {
+                        Rectangle().fill(Theme.hairline).frame(height: 1)
+                    }
 
                 PullRequestDetailHeader(detail: content.detail,
                                         isEditingTitle: $isEditingTitle,
                                         onSaveTitle: { title in try await viewModel.edit(title: title) })
                     .padding(.horizontal, 32)
-                    .padding(.top, 14)
+                    .padding(.top, 24)
                     .padding(.bottom, 16)
 
                 if let error = viewModel.errorMessage {
@@ -69,15 +71,22 @@ struct PullRequestDetailView: View {
                         .padding(.bottom, 10)
                 }
 
-                Rectangle()
-                    .fill(Theme.hairline)
-                    .frame(height: 1)
-                    .padding(.horizontal, 32)
+                // The conversation flows on from the header; the diff gets a line above it.
+                if selectedTab != .conversation {
+                    Rectangle()
+                        .fill(Theme.hairline)
+                        .frame(height: 1)
+                        .padding(.horizontal, 32)
+                }
 
                 switch selectedTab {
                 case .conversation:
                     PullRequestConversationView(detail: content.detail,
                                                 comments: viewModel.comments?.comments,
+                                                checks: viewModel.checks,
+                                                rerunsInFlight: viewModel.rerunsInFlight,
+                                                onRerunCheck: { rerun in Task { await viewModel.rerun(rerun) } },
+                                                onRerunFailedChecks: { Task { await viewModel.rerunFailedChecks() } },
                                                 commentFocusRequest: commentFocusRequest,
                                                 onComment: { body in try await viewModel.post(.general(body: body)) },
                                                 onSaveBody: { body in try await viewModel.edit(body: body) },
@@ -94,11 +103,6 @@ struct PullRequestDetailView: View {
                     PullRequestFilesView(viewModel: viewModel,
                                          files: content.files,
                                          filesURL: content.detail.htmlURL.appendingPathComponent("files"))
-                case .checks:
-                    PullRequestChecksView(checks: viewModel.checks,
-                                          rerunsInFlight: viewModel.rerunsInFlight,
-                                          onRerun: { rerun in Task { await viewModel.rerun(rerun) } },
-                                          onRerunFailed: { Task { await viewModel.rerunFailedChecks() } })
                 }
             } else if let error = viewModel.errorMessage {
                 VStack(spacing: 12) {
@@ -121,22 +125,15 @@ struct PullRequestDetailView: View {
         }
     }
 
-    private func tabSegments(fileCount: Int) -> [GlassSegmentedControl<PullRequestDetailTab>.Segment] {
-        [.init(value: .conversation, title: conversationTitle),
-         .init(value: .files, title: "Files changed \(fileCount)"),
-         .init(value: .checks, title: Self.checksTitle(viewModel.checks))]
+    private func tabs(for detail: PullRequestDetail) -> [PullRequestDetailTabBar.Tab] {
+        [.init(value: .conversation, title: "Conversation", badge: Self.conversationBadge(viewModel.comments?.comments.count)),
+         .init(value: .files, title: "Files changed", badge: .diff(additions: detail.additions, deletions: detail.deletions))]
     }
 
-    /// "Checks", "Checks 12", or "Checks 2 failing" so a red X shows before the tab is opened.
-    static func checksTitle(_ checks: PullRequestChecks?) -> String {
-        guard let checks, !checks.checks.isEmpty else { return "Checks" }
-        let failing = checks.count(.failure)
-        return failing > 0 ? "Checks \(failing) failing" : "Checks \(checks.checks.count)"
-    }
-
-    private var conversationTitle: String {
-        guard let count = viewModel.comments?.comments.count, count > 0 else { return "Conversation" }
-        return "Conversation \(count)"
+    /// The comment count after Conversation, left off when there are none yet.
+    static func conversationBadge(_ commentCount: Int?) -> PullRequestDetailTabBar.Badge? {
+        guard let commentCount, commentCount > 0 else { return nil }
+        return .count(commentCount)
     }
 
     private var navigationTitle: String {
@@ -179,11 +176,11 @@ struct PullRequestDetailView: View {
     }
 }
 
-/// The row over the pull request: the Conversation / Files changed / Checks switcher on the left and the
-/// Reload, Update branch, Review and Open on GitHub buttons in glass capsules on the right. Edit title sits by the title instead.
+/// The row over the pull request: the Conversation / Files changed tabs on the left and the
+/// Reload, Open on GitHub, Update branch and Review buttons on the right. Edit title sits by the title instead.
 struct PullRequestDetailToolbar: View {
     @Binding var selectedTab: PullRequestDetailTab
-    let segments: [GlassSegmentedControl<PullRequestDetailTab>.Segment]
+    let tabs: [PullRequestDetailTabBar.Tab]
     let htmlURL: URL
     let isLoading: Bool
     let onRefresh: () -> Void
@@ -200,22 +197,32 @@ struct PullRequestDetailToolbar: View {
     var onDiscardReview: (() async throws -> Void)?
 
     var body: some View {
-        HStack(spacing: 10) {
-            GlassSegmentedControl(selection: $selectedTab, segments: segments)
+        HStack(spacing: 6) {
+            PullRequestDetailTabBar(selection: $selectedTab, tabs: tabs)
                 .fixedSize()
 
             Spacer(minLength: 12)
 
             Button(action: onRefresh) {
-                toolbarIcon("arrow.clockwise")
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(width: 16)
             }
+            .buttonStyle(DetailToolbarButtonStyle(isIconOnly: true))
             .disabled(isLoading)
             .help("Reload")
             .accessibilityLabel("Reload")
-            .buttonStyle(.plain)
-            .padding(.horizontal, 3)
-            .frame(height: 34)
-            .glassSurface(.control, in: Capsule())
+
+            Button {
+                NSWorkspace.shared.open(htmlURL)
+            } label: {
+                HStack(spacing: 6) {
+                    Text("Open on GitHub")
+                    Image(systemName: "arrow.up.right")
+                        .font(.system(size: 10, weight: .semibold))
+                }
+            }
+            .buttonStyle(DetailToolbarButtonStyle())
 
             if let onUpdateBranch {
                 Button(action: onUpdateBranch) {
@@ -224,14 +231,9 @@ struct PullRequestDetailToolbar: View {
                             .font(.system(size: 12, weight: .semibold))
                         Text(isUpdatingBranch ? "Updating..." : "Update branch")
                     }
-                    .font(.system(size: 13, weight: .medium))
-                    .padding(.horizontal, 14)
-                    .frame(height: 34)
-                    .contentShape(Capsule())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(DetailToolbarButtonStyle(isBordered: true))
                 .disabled(isUpdatingBranch)
-                .glassSurface(.control, in: Capsule())
                 .help("Merge the latest changes from the base branch into this branch")
             }
 
@@ -249,17 +251,12 @@ struct PullRequestDetailToolbar: View {
                                 .monospacedDigit()
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 1)
-                                .background(Capsule().fill(Color.accentColor.opacity(0.2)))
+                                .background(Capsule().fill(Theme.contentBackground.opacity(0.25)))
                                 .accessibilityLabel(ReviewComposer.pendingSummary(pendingCommentCount))
                         }
                     }
-                    .font(.system(size: 13, weight: .medium))
-                    .padding(.horizontal, 14)
-                    .frame(height: 34)
-                    .contentShape(Capsule())
                 }
-                .buttonStyle(.plain)
-                .glassSurface(.control, in: Capsule())
+                .buttonStyle(DetailToolbarButtonStyle(isProminent: true))
                 .help("Approve, comment, or request changes (\(AppShortcut.reviewChanges.symbols))")
                 .popover(isPresented: $isReviewing, arrowEdge: .bottom) {
                     ReviewComposer(pendingCommentCount: pendingCommentCount,
@@ -276,32 +273,133 @@ struct PullRequestDetailToolbar: View {
                                    })
                 }
             }
+        }
+    }
+}
 
-            Button {
-                NSWorkspace.shared.open(htmlURL)
-            } label: {
-                HStack(spacing: 6) {
-                    Text("Open on GitHub")
-                    Image(systemName: "arrow.up.right")
-                        .font(.system(size: 11, weight: .semibold))
-                }
-                .font(.system(size: 13, weight: .medium))
-                .padding(.leading, 16)
-                .padding(.trailing, 14)
-                .frame(height: 34)
-                .contentShape(Capsule())
+/// The toolbar's buttons: quiet text that gets a soft fill on hover, a hairline-bordered variant, and a
+/// prominent dark one for the main action.
+struct DetailToolbarButtonStyle: ButtonStyle {
+    var isIconOnly = false
+    var isBordered = false
+    var isProminent = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        ToolbarButton(configuration: configuration, style: self)
+    }
+
+    private struct ToolbarButton: View {
+        let configuration: ButtonStyle.Configuration
+        let style: DetailToolbarButtonStyle
+        @Environment(\.isEnabled) private var isEnabled
+        @State private var isHovering = false
+
+        var body: some View {
+            let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
+            configuration.label
+                .font(.system(size: 13, weight: style.isProminent ? .semibold : .medium))
+                .foregroundStyle(foreground)
+                .padding(.horizontal, style.isIconOnly ? 7 : 12)
+                .frame(height: 30)
+                .background(shape.fill(fill))
+                .overlay(shape.strokeBorder(Theme.hairline, lineWidth: style.isBordered ? 1 : 0))
+                .contentShape(shape)
+                .opacity(isEnabled ? 1 : 0.45)
+                .onHover { isHovering = $0 }
+                .animation(.easeOut(duration: 0.12), value: isHovering)
+        }
+
+        private var foreground: Color {
+            if style.isProminent { return Theme.contentBackground }
+            return style.isIconOnly && !(isHovering && isEnabled) ? .secondary : .primary
+        }
+
+        private var fill: Color {
+            if style.isProminent {
+                return Color.primary.opacity(configuration.isPressed ? 0.75 : isHovering && isEnabled ? 0.85 : 1)
             }
-            .buttonStyle(.plain)
-            .glassSurface(.control, in: Capsule())
+            return Color.primary.opacity(configuration.isPressed ? 0.1 : isHovering && isEnabled ? 0.06 : 0)
+        }
+    }
+}
+
+/// The Conversation / Files changed tabs: flat labels, the selected one on a soft rounded fill,
+/// each with an optional count or diff size after its title.
+struct PullRequestDetailTabBar: View {
+    struct Tab: Identifiable {
+        let value: PullRequestDetailTab
+        let title: String
+        var badge: Badge?
+        var id: PullRequestDetailTab { value }
+    }
+
+    enum Badge: Equatable {
+        case count(Int)
+        case diff(additions: Int, deletions: Int)
+    }
+
+    @Binding var selection: PullRequestDetailTab
+    let tabs: [Tab]
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(tabs) { tab in
+                TabButton(tab: tab, isSelected: tab.value == selection) {
+                    selection = tab.value
+                }
+            }
         }
     }
 
-    private func toolbarIcon(_ systemName: String) -> some View {
-        Image(systemName: systemName)
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(.secondary)
-            .frame(width: 32, height: 28)
-            .contentShape(Capsule())
+    private struct TabButton: View {
+        let tab: Tab
+        let isSelected: Bool
+        let action: () -> Void
+        @State private var isHovering = false
+
+        var body: some View {
+            let shape = RoundedRectangle(cornerRadius: 7, style: .continuous)
+            Button(action: action) {
+                HStack(spacing: 6) {
+                    Text(tab.title)
+                        .font(.system(size: 13, weight: isSelected ? .semibold : .medium))
+                        .foregroundStyle(isSelected || isHovering ? Color.primary : Color.secondary)
+                    if let badge = tab.badge {
+                        BadgeView(badge: badge)
+                    }
+                }
+                .lineLimit(1)
+                .padding(.horizontal, 11)
+                .frame(height: 28)
+                .background(shape.fill(isSelected ? Theme.tabSelection : isHovering ? Theme.tabHover : Color.clear))
+                .contentShape(shape)
+            }
+            .buttonStyle(.plain)
+            .focusEffectDisabledIfAvailable()
+            .onHover { isHovering = $0 }
+            .accessibilityAddTraits(isSelected ? .isSelected : [])
+        }
+    }
+
+    private struct BadgeView: View {
+        let badge: Badge
+
+        var body: some View {
+            switch badge {
+            case let .count(count):
+                Text("\(count)")
+                    .font(.system(size: 12, weight: .medium))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            case let .diff(additions, deletions):
+                HStack(spacing: 4) {
+                    Text("+\(additions)").foregroundStyle(DiffColors.additionText)
+                    Text("−\(deletions)").foregroundStyle(DiffColors.deletionText)
+                }
+                .font(.system(size: 12, weight: .semibold))
+                .monospacedDigit()
+            }
+        }
     }
 }
 
@@ -314,6 +412,17 @@ struct PullRequestDetailHeader: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                PullRequestStateBadge(state: detail.state)
+                Text(detail.reference.repoFullName)
+                    .lineLimit(1)
+                Text("#\(String(detail.reference.number))")
+                    .monospacedDigit()
+                    .textSelection(.enabled)
+            }
+            .prFont(.callout)
+            .foregroundStyle(.secondary)
+
             if isEditingTitle {
                 PullRequestTitleEditor(title: detail.title,
                                        onCancel: { isEditingTitle = false },
@@ -322,11 +431,8 @@ struct PullRequestDetailHeader: View {
                                            isEditingTitle = false
                                        })
             } else {
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
                     titleText
-                    Text("#\(String(detail.reference.number))")
-                        .prFont(size: 26, weight: .regular)
-                        .foregroundStyle(.tertiary)
                     if Self.showsEditTitleButton(for: detail) {
                         editTitleButton
                     }
@@ -334,30 +440,18 @@ struct PullRequestDetailHeader: View {
                 }
             }
 
-            HStack(spacing: 8) {
-                PullRequestStateBadge(state: detail.state)
-
+            HStack(spacing: 6) {
+                AvatarView(login: detail.authorLogin, size: 20)
                 summary
-                    .prFont(.callout)
-                    .foregroundStyle(.secondary)
-                    .padding(.leading, 2)
-
                 if copiedBranchNotice {
                     Text("Copied")
                         .prFont(.caption1, weight: .medium)
                         .foregroundStyle(.secondary)
                         .transition(.opacity)
                 }
-
-                Spacer(minLength: 12)
-
-                Text("+\(detail.additions)")
-                    .foregroundStyle(DiffColors.additionText)
-                Text("−\(detail.deletions)")
-                    .foregroundStyle(DiffColors.deletionText)
+                Spacer(minLength: 0)
             }
             .prFont(.callout)
-            .monospacedDigit()
         }
     }
 
@@ -372,9 +466,9 @@ struct PullRequestDetailHeader: View {
             isEditingTitle = true
         } label: {
             Image(systemName: "pencil")
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.tertiary)
-                .frame(width: 28, height: 28)
+                .frame(width: 26, height: 26)
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
@@ -386,8 +480,8 @@ struct PullRequestDetailHeader: View {
     @ViewBuilder
     private var titleText: some View {
         let title = Text(detail.title)
-            .prFont(size: 26, weight: .bold)
-            .tracking(-0.5)
+            .prFont(size: 22, weight: .semibold)
+            .tracking(-0.3)
         if detail.canEdit {
             title
                 .onTapGesture(count: 2) { isEditingTitle = true }
@@ -398,26 +492,39 @@ struct PullRequestDetailHeader: View {
         }
     }
 
-    /// "octocat wants to merge 2 commits into [main] from [feature] · owner/repo", with each branch
-    /// as a tag that copies its name, like GitHub.
+    /// "octocat wants to merge 2 commits · 3 days ago · [feature] → [main]", with each branch as a tag that
+    /// copies its name, like GitHub.
     private var summary: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 6) {
+            Text(detail.authorLogin)
+                .fontWeight(.medium)
+                .lineLimit(1)
+                .layoutPriority(3)
             Text(Self.summaryLead(for: detail))
+                .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .layoutPriority(2)
-            BranchTag(name: detail.baseRef, onCopy: showCopiedBranch)
-            Text("from")
-                .fixedSize()
+            Text("·")
+                .foregroundStyle(.tertiary)
+            Text(detail.createdAt.formatted(.relative(presentation: .named)))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .help(detail.createdAt.formatted(date: .abbreviated, time: .shortened))
+            Text("·")
+                .foregroundStyle(.tertiary)
             BranchTag(name: detail.headRef, onCopy: showCopiedBranch)
                 .layoutPriority(1)
-            Text("· \(detail.reference.repoFullName)")
-                .lineLimit(1)
+            Image(systemName: "arrow.right")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.tertiary)
+                .accessibilityLabel("into")
+            BranchTag(name: detail.baseRef, onCopy: showCopiedBranch)
         }
     }
 
     static func summaryLead(for detail: PullRequestDetail) -> String {
         let commits = detail.commits == 1 ? "1 commit" : "\(detail.commits) commits"
-        return "\(detail.authorLogin) wants to merge \(commits) into"
+        return "wants to merge \(commits)"
     }
 
     private func showCopiedBranch() {
@@ -716,6 +823,12 @@ struct PullRequestConversationView: View {
     let detail: PullRequestDetail
     /// General comments, oldest first. Nil while they load.
     let comments: [PullRequestComment]?
+    /// The head commit's checks for the sidebar. Nil while they load.
+    var checks: PullRequestChecks?
+    /// Check reruns GitHub has not answered yet.
+    var rerunsInFlight: Set<CheckRerun> = []
+    var onRerunCheck: (CheckRerun) -> Void = { _ in }
+    var onRerunFailedChecks: () -> Void = {}
     /// Goes up by one each time the comment box should take focus.
     var commentFocusRequest = 0
     let onComment: (String) async throws -> Void
@@ -729,96 +842,111 @@ struct PullRequestConversationView: View {
     @State private var isEditingBody = false
     /// Room for the description and comments column beside GitHub's sidebar, plus the pane's side padding.
     static let contentMaxWidth: CGFloat = 2 * 32 + SidebarLayout.mainMaxWidth + SidebarLayout.spacing + SidebarLayout.sidebarWidth
+    private static let composerID = "comment-composer"
 
     var body: some View {
-        ScrollView {
-            SidebarLayout {
-                mainColumn
-                PullRequestReviewersView(reviewers: detail.reviewers, actions: reviewerActions)
+        ScrollViewReader { proxy in
+            ScrollView {
+                SidebarLayout {
+                    mainColumn
+                    VStack(alignment: .leading, spacing: 14) {
+                        PullRequestChangesSection(detail: detail)
+                        PullRequestReviewersView(reviewers: detail.reviewers, actions: reviewerActions)
+                        PullRequestChecksSection(checks: checks,
+                                                 rerunsInFlight: rerunsInFlight,
+                                                 onRerun: onRerunCheck,
+                                                 onRerunFailed: onRerunFailedChecks)
+                    }
                     .padding(.top, 4)
+                }
+                .padding(.horizontal, 32)
+                .padding(.top, 8)
+                .padding(.bottom, 32)
+                .frame(maxWidth: Self.contentMaxWidth, alignment: .leading)
+                .background(PageScrollAnchor())
+                // Fill the pane so the scroll view, and its scroller, reach the window's right edge.
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.horizontal, 32)
-            .padding(.top, 20)
-            .padding(.bottom, 24)
-            .frame(maxWidth: Self.contentMaxWidth, alignment: .leading)
-            .background(PageScrollAnchor())
-            // Fill the pane so the scroll view, and its scroller, reach the window's right edge.
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        // The comment box floats in glass over the bottom of the conversation, which scrolls under it.
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            // An empty sidebar keeps the comment box in the main column, clear of the reviewers.
-            SidebarLayout {
-                CommentComposer(placeholder: "Leave a comment (Markdown supported)",
-                                submitTitle: "Comment",
-                                style: .floating,
-                                focusRequest: commentFocusRequest,
-                                onSubmit: onComment)
-                Color.clear.frame(height: 0)
+            .onChange(of: commentFocusRequest) { _ in
+                withAnimation(.easeOut(duration: 0.2)) {
+                    proxy.scrollTo(Self.composerID, anchor: .bottom)
+                }
             }
-            .padding(.horizontal, 32)
-            .padding(.bottom, 20)
-            .frame(maxWidth: Self.contentMaxWidth, alignment: .leading)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
     private var mainColumn: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 8) {
-                    AvatarView(login: detail.authorLogin)
-                    Text(detail.authorLogin)
-                        .prFont(.callout, weight: .semibold)
-                    Text("opened this pull request \(detail.createdAt.formatted(.relative(presentation: .named)))")
-                        .prFont(.callout)
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 8)
-                    if detail.canEdit && !isEditingBody {
-                        Button {
-                            isEditingBody = true
-                        } label: {
-                            Image(systemName: "pencil")
-                        }
-                        .buttonStyle(QuietButtonStyle())
-                        .help("Edit description")
+        VStack(alignment: .leading, spacing: 0) {
+            description
+                .padding(.top, 6)
+
+            Rectangle()
+                .fill(Theme.hairline)
+                .frame(height: 1)
+                .padding(.top, 14)
+                .padding(.bottom, 20)
+
+            Text("Activity")
+                .prFont(.headline, weight: .semibold)
+                .padding(.bottom, 12)
+
+            VStack(alignment: .leading, spacing: 8) {
+                if let comments {
+                    ForEach(comments) { comment in
+                        PullRequestCommentView(comment: comment)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 14)
+                            .activityCard()
                     }
+                } else {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
                 }
 
-                Group {
-                    if isEditingBody {
-                        PullRequestBodyEditor(body: detail.body,
-                                              onCancel: { isEditingBody = false },
-                                              onSave: { body in
-                                                  try await onSaveBody(body)
-                                                  isEditingBody = false
-                                              })
-                    } else if detail.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        Text("No description provided.")
-                            .italic()
-                            .foregroundStyle(.secondary)
-                    } else {
-                        MarkdownView(markdown: detail.body, onSetTask: detail.canEdit ? onSetTask : nil)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                CommentComposer(placeholder: "Leave a comment (Markdown supported)",
+                                submitTitle: "Comment",
+                                style: .bar,
+                                focusRequest: commentFocusRequest,
+                                onSubmit: onComment)
+                    .id(Self.composerID)
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 16)
-            .padding(.bottom, 18)
-            .conversationCard()
+        }
+    }
 
-            if let comments {
-                ForEach(comments) { comment in
-                    PullRequestCommentView(comment: comment)
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 15)
-                        .conversationCard()
+    /// The description as plain reading text, with Edit under it for the author.
+    private var description: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Group {
+                if isEditingBody {
+                    PullRequestBodyEditor(body: detail.body,
+                                          onCancel: { isEditingBody = false },
+                                          onSave: { body in
+                                              try await onSaveBody(body)
+                                              isEditingBody = false
+                                          })
+                } else if detail.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text("No description provided.")
+                        .italic()
+                        .foregroundStyle(.secondary)
+                } else {
+                    MarkdownView(markdown: detail.body, onSetTask: detail.canEdit ? onSetTask : nil)
                 }
-            } else {
-                ProgressView()
-                    .controlSize(.small)
-                    .frame(maxWidth: .infinity)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if detail.canEdit && !isEditingBody {
+                HStack {
+                    Spacer(minLength: 0)
+                    Button {
+                        isEditingBody = true
+                    } label: {
+                        Label("Edit", systemImage: "pencil")
+                    }
+                    .buttonStyle(QuietButtonStyle())
+                    .help("Edit description")
+                }
             }
         }
     }
@@ -884,7 +1012,107 @@ struct MarkdownView: View {
 
     static func inline(_ text: String) -> AttributedString {
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
+        let parsed = (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
+        return highlightingCode(parsed)
+    }
+
+    /// Colors `inline code` and pads each end with a narrow space so its fill does not hug the letters.
+    /// ``inlineText(_:)`` draws the fill.
+    static func highlightingCode(_ text: AttributedString) -> AttributedString {
+        var result = AttributedString()
+        for run in text.runs {
+            var part = AttributedString(text[run.range])
+            if run.inlinePresentationIntent?.contains(.code) == true {
+                part = AttributedString(inlineCodePadding, attributes: part.runs.first?.attributes ?? .init())
+                    + part
+                    + AttributedString(inlineCodePadding, attributes: part.runs.first?.attributes ?? .init())
+                part.foregroundColor = Theme.inlineCodeText
+            }
+            result += part
+        }
+        return result
+    }
+
+    /// Inline Markdown as a `Text`, with `inline code` marked for ``InlineCodeRenderer`` to fill. Before
+    /// macOS 15 the code gets a square background instead.
+    static func inlineText(_ markdown: String) -> Text {
+        let text = inline(markdown)
+        var result = Text(verbatim: "")
+        for run in text.runs {
+            var part = AttributedString(text[run.range])
+            let segment: Text
+            if run.inlinePresentationIntent?.contains(.code) == true {
+                if #available(macOS 15.0, *) {
+                    segment = Text(part).customAttribute(InlineCodeAttribute())
+                } else {
+                    part.backgroundColor = Theme.inlineCodeFill
+                    segment = Text(part)
+                }
+            } else {
+                segment = Text(part)
+            }
+            result = Text("\(result)\(segment)")
+        }
+        return result
+    }
+
+    /// Extra room between wrapped lines of body text, for a line height of about 1.55, like GitHub.
+    static func lineSpacing(em: CGFloat) -> CGFloat {
+        (em * 0.55).rounded()
+    }
+
+    /// The list bullet's size, rounded to a half point so it draws crisply.
+    static func bulletDiameter(em: CGFloat) -> CGFloat {
+        (em * 0.42 * 2).rounded() / 2
+    }
+
+    /// The width a list marker takes before its text: the bullet sits centered in it, about 1.1em in.
+    static func markerColumnWidth(em: CGFloat) -> CGFloat {
+        (em * 2.2).rounded()
+    }
+
+    /// The gap above a block: list items in a run sit closer than paragraphs, and a heading gets room above
+    /// it to start a new section.
+    static func spacing(before block: MarkdownBlock, after previous: MarkdownBlock, em: CGFloat) -> CGFloat {
+        switch (previous, block) {
+        case (.listItem, .listItem), (.listItem, .task), (.task, .listItem), (.task, .task):
+            return (em * 0.75).rounded()
+        case (_, .heading):
+            return (em * 1.8).rounded()
+        case (.heading, _):
+            return (em * 0.9).rounded()
+        default:
+            return (em * 1.1).rounded()
+        }
+    }
+
+    /// A narrow no-break space: a thin space would let a line wrap between it and the code, leaving an
+    /// empty patch of fill at the end of one line and the code on the next.
+    static let inlineCodePadding = "\u{202F}"
+}
+
+/// One line or paragraph of inline Markdown, with `inline code` on a soft rounded fill like GitHub's.
+/// Selectable text on macOS skips custom text renderers, so the fills are drawn by a copy of the text
+/// laid out the same way behind it, which is not selectable and draws only the fills.
+struct InlineMarkdownText: View {
+    let markdown: String
+
+    var body: some View {
+        let text = MarkdownView.inlineText(markdown)
+        if #available(macOS 15.0, *), Self.hasInlineCode(markdown) {
+            text.background {
+                text
+                    .textRenderer(InlineCodeRenderer())
+                    .textSelection(.disabled)
+                    .accessibilityHidden(true)
+            }
+        } else {
+            text
+        }
+    }
+
+    static func hasInlineCode(_ markdown: String) -> Bool {
+        MarkdownView.inline(markdown).runs.contains { $0.inlinePresentationIntent?.contains(.code) == true }
     }
 }
 
@@ -893,12 +1121,41 @@ private struct MarkdownBlocksView: View {
     let blocks: [MarkdownBlock]
     var alignment: HorizontalAlignment = .leading
     var onSetTask: ((Int, Bool) -> Void)?
+    @Environment(\.pullRequestTextSize) private var textSize
+
+    /// The body text's point size, which the spacing and list markers scale with.
+    private var em: CGFloat { PullRequestTextSize.scaled(13, setting: textSize) }
 
     var body: some View {
-        VStack(alignment: alignment, spacing: 10) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+        VStack(alignment: alignment, spacing: 0) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
                 blockView(block)
+                    .padding(.top, index == 0 ? 0 : MarkdownView.spacing(before: block, after: blocks[index - 1], em: em))
             }
+        }
+    }
+
+    /// Gap between a list marker and its text, and how far each nesting level steps in.
+    private var markerColumnWidth: CGFloat { MarkdownView.markerColumnWidth(em: em) }
+
+    @ViewBuilder
+    private func marker(_ marker: String) -> some View {
+        if marker == "•" {
+            // A solid dot centered on the x-height of the first line, like GitHub's bullets.
+            Circle()
+                .fill(Theme.listBullet)
+                .frame(width: MarkdownView.bulletDiameter(em: em), height: MarkdownView.bulletDiameter(em: em))
+                .frame(width: markerColumnWidth)
+                .alignmentGuide(.firstTextBaseline) { dimensions in
+                    dimensions[VerticalAlignment.center] + em * 0.27
+                }
+                .accessibilityHidden(true)
+        } else {
+            Text(marker)
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .frame(minWidth: markerColumnWidth - em * 0.5, alignment: .trailing)
+                .padding(.trailing, em * 0.5)
         }
     }
 
@@ -906,34 +1163,32 @@ private struct MarkdownBlocksView: View {
     private func blockView(_ block: MarkdownBlock) -> some View {
         switch block {
         case let .heading(level, text):
-            VStack(alignment: .leading, spacing: 4) {
-                Text(MarkdownView.inline(text))
-                    .prFont(level == 1 ? .title2 : level == 2 ? .title3 : .headline, weight: .semibold)
-                if level <= 2 {
-                    Divider()
-                }
-            }
-            .padding(.top, 4)
+            InlineMarkdownText(markdown: text)
+                .prFont(level == 1 ? .title2 : level == 2 ? .title3 : .headline, weight: .semibold)
+                .lineSpacing(MarkdownView.lineSpacing(em: em) / 2)
         case let .paragraph(text):
-            Text(MarkdownView.inline(text))
+            InlineMarkdownText(markdown: text)
+                .lineSpacing(MarkdownView.lineSpacing(em: em))
         case let .listItem(marker, indent, text):
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(marker)
-                    .foregroundStyle(.secondary)
-                Text(MarkdownView.inline(text))
+            HStack(alignment: .firstTextBaseline, spacing: 0) {
+                self.marker(marker)
+                InlineMarkdownText(markdown: text)
+                    .lineSpacing(MarkdownView.lineSpacing(em: em))
             }
-            .padding(.leading, CGFloat(indent) * 18)
+            .padding(.leading, CGFloat(indent) * markerColumnWidth)
         case let .task(index, checked, indent, text):
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Toggle("", isOn: Binding(get: { checked }, set: { onSetTask?(index, $0) }))
                     .toggleStyle(.checkbox)
                     .labelsHidden()
                     .disabled(onSetTask == nil)
-                Text(MarkdownView.inline(text))
+                InlineMarkdownText(markdown: text)
+                    .lineSpacing(MarkdownView.lineSpacing(em: em))
             }
-            .padding(.leading, CGFloat(indent) * 18)
+            .padding(.leading, CGFloat(indent) * markerColumnWidth)
         case let .quote(text):
-            Text(MarkdownView.inline(text))
+            InlineMarkdownText(markdown: text)
+                .lineSpacing(MarkdownView.lineSpacing(em: em))
                 .foregroundStyle(.secondary)
                 .padding(.leading, 12)
                 .overlay(alignment: .leading) {
@@ -949,8 +1204,12 @@ private struct MarkdownBlocksView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color.secondary.opacity(0.08))
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Theme.codeBlockFill)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(Theme.hairline, lineWidth: 1)
             )
         case let .table(header, alignments, rows):
             MarkdownTableView(header: header, alignments: alignments, rows: rows)
@@ -998,7 +1257,7 @@ private struct MarkdownTableView: View {
 
     private func cell(_ text: String, column: Int) -> some View {
         let alignment = column < alignments.count ? alignments[column] : .leading
-        return Text(MarkdownView.inline(text))
+        return InlineMarkdownText(markdown: text)
             .multilineTextAlignment(alignment.textAlignment)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
@@ -1073,10 +1332,48 @@ enum DiffColors {
 }
 
 extension View {
-    /// The soft rounded card behind the description and each comment.
-    func conversationCard() -> some View {
-        let shape = RoundedRectangle(cornerRadius: Theme.cardCornerRadius, style: .continuous)
+    /// The tighter card behind each comment and the comment box in the Activity list.
+    func activityCard() -> some View {
+        let shape = RoundedRectangle(cornerRadius: Theme.activityCardCornerRadius, style: .continuous)
         return background(shape.fill(Theme.conversationCardFill))
-            .overlay(shape.strokeBorder(Theme.conversationCardBorder, lineWidth: 1))
+            .overlay(shape.strokeBorder(Theme.activityCardBorder, lineWidth: 1))
+    }
+}
+
+/// Marks the runs of `inline code` in a `Text` so ``InlineCodeRenderer`` can draw their fill.
+@available(macOS 15.0, *)
+struct InlineCodeAttribute: TextAttribute {}
+
+/// Draws only a rounded fill behind each stretch of `inline code` on a line; ``InlineMarkdownText`` puts
+/// the selectable text over it.
+@available(macOS 15.0, *)
+struct InlineCodeRenderer: TextRenderer {
+    static let cornerRadius: CGFloat = 4
+
+    func draw(layout: Text.Layout, in context: inout GraphicsContext) {
+        for line in layout {
+            let runs = line.map { (bounds: $0.typographicBounds.rect, isCode: $0[InlineCodeAttribute.self] != nil) }
+            for rect in Self.codeRects(runs) {
+                context.fill(Path(roundedRect: rect, cornerRadius: Self.cornerRadius, style: .continuous),
+                             with: .color(Theme.inlineCodeFill))
+            }
+        }
+    }
+
+    /// One rect per stretch of neighboring code runs on a line, so a span split into several runs
+    /// still gets a single rounded fill.
+    static func codeRects(_ runs: [(bounds: CGRect, isCode: Bool)]) -> [CGRect] {
+        var rects: [CGRect] = []
+        var current: CGRect?
+        for run in runs {
+            if run.isCode {
+                current = current.map { $0.union(run.bounds) } ?? run.bounds
+            } else if let rect = current {
+                rects.append(rect)
+                current = nil
+            }
+        }
+        if let current { rects.append(current) }
+        return rects
     }
 }

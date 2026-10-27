@@ -73,12 +73,38 @@ final class PullRequestChecksTests: XCTestCase {
         XCTAssertEqual(check("lint", .success).displayName, "lint")
     }
 
-    func testChecksTabTitleCallsOutFailures() {
-        XCTAssertEqual(PullRequestDetailView.checksTitle(nil), "Checks")
-        XCTAssertEqual(PullRequestDetailView.checksTitle(.empty), "Checks")
-        XCTAssertEqual(PullRequestDetailView.checksTitle(PullRequestChecks(checks: [check("a", .success), check("b", .pending)])),
-                       "Checks 2")
-        XCTAssertEqual(PullRequestDetailView.checksTitle(PullRequestChecks(checks: [check("a", .success), check("b", .failure)])),
-                       "Checks 1 failing")
+    func testConversationTabBadgeCountsComments() {
+        XCTAssertNil(PullRequestDetailView.conversationBadge(nil))
+        XCTAssertNil(PullRequestDetailView.conversationBadge(0))
+        XCTAssertEqual(PullRequestDetailView.conversationBadge(3), .count(3))
+    }
+
+    func testSidebarChecksFoldALongListFailingFirst() {
+        let many = PullRequestChecks(checks: (0..<9).map { check("ok\($0)", .success) } + [check("bad", .failure)])
+        let folded = PullRequestChecksSection.visibleChecks(many, isExpanded: false)
+        XCTAssertEqual(folded.count, PullRequestChecksSection.collapsedLimit)
+        XCTAssertEqual(folded.first?.name, "bad")
+        XCTAssertEqual(PullRequestChecksSection.visibleChecks(many, isExpanded: true).count, 10)
+        XCTAssertEqual(PullRequestChecksSection.toggleTitle(many, isExpanded: false), "Show all 10 checks")
+        XCTAssertEqual(PullRequestChecksSection.toggleTitle(many, isExpanded: true), "Show less")
+
+        let few = PullRequestChecks(checks: [check("a", .success), check("b", .pending)])
+        XCTAssertEqual(PullRequestChecksSection.visibleChecks(few, isExpanded: false).map(\.name), ["b", "a"])
+        XCTAssertNil(PullRequestChecksSection.toggleTitle(few, isExpanded: false))
+    }
+
+    func testCheckRowTooltipSaysWhatTheCheckDidAndThatAClickOpensItsLog() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let job = PullRequestCheck(id: "a", name: "Tests", workflowName: "CI", outcome: .failure, summary: "Cancelled",
+                                   startedAt: start, completedAt: start.addingTimeInterval(185),
+                                   detailsURL: URL(string: "https://github.com/acme/widgets/runs/1"), isRequired: true)
+        XCTAssertEqual(PullRequestCheckRow.help(for: job, now: start),
+                       "CI / Tests (Required)\nCancelled\nRan for 3m 05s\nClick to open the log on GitHub")
+        XCTAssertEqual(PullRequestCheckRow.help(for: check("lint", .pending), now: start), "lint")
+    }
+
+    func testSidebarChangesLabelCountsFiles() {
+        XCTAssertEqual(PullRequestChangesSection.filesLabel(1), "1 file")
+        XCTAssertEqual(PullRequestChangesSection.filesLabel(3), "3 files")
     }
 }

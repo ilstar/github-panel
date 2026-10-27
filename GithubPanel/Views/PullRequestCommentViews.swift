@@ -42,8 +42,8 @@ struct CommentComposer: View {
     enum Style {
         /// A bordered box with its buttons underneath, for replies and comments on diff lines.
         case inline
-        /// A one-line glass bar with the button beside the text, floating over the conversation.
-        case floating
+        /// A one-line card with the button beside the text, at the end of the conversation's Activity list.
+        case bar
     }
 
     let placeholder: String
@@ -68,7 +68,7 @@ struct CommentComposer: View {
         Group {
             switch style {
             case .inline: inlineBody
-            case .floating: floatingBody
+            case .bar: barBody
             }
         }
         .prFont(.body)
@@ -81,8 +81,8 @@ struct CommentComposer: View {
         }
     }
 
-    private var floatingBody: some View {
-        let shape = RoundedRectangle(cornerRadius: 23, style: .continuous)
+    private var barBody: some View {
+        let shape = RoundedRectangle(cornerRadius: Theme.activityCardCornerRadius, style: .continuous)
         return VStack(alignment: .leading, spacing: 6) {
             if let errorMessage {
                 errorText(errorMessage)
@@ -111,13 +111,12 @@ struct CommentComposer: View {
                 }
                 submitButton
                     .controlSize(.large)
-                    .capsuleButtonShape()
             }
-            .padding(.leading, 14)
-            .padding(.trailing, 7)
-            .padding(.vertical, 7)
-            .glassSurface(.control, in: shape)
-            .overlay(shape.strokeBorder(Color.accentColor.opacity(isFocused ? 0.5 : 0), lineWidth: 1))
+            .padding(.leading, 12)
+            .padding(.trailing, 8)
+            .padding(.vertical, 8)
+            .activityCard()
+            .overlay(shape.strokeBorder(Color.accentColor.opacity(isFocused ? 0.6 : 0), lineWidth: 1))
             .animation(.easeOut(duration: 0.15), value: isFocused)
         }
     }
@@ -397,17 +396,5 @@ private struct ThreadBadge: View {
             .padding(.vertical, 2)
             .background(Capsule().fill(Color.secondary.opacity(0.15)))
             .foregroundStyle(.secondary)
-    }
-}
-
-private extension View {
-    /// A capsule button, like the Comment button on the floating comment bar. Needs macOS 14.
-    @ViewBuilder
-    func capsuleButtonShape() -> some View {
-        if #available(macOS 14.0, *) {
-            buttonBorderShape(.capsule)
-        } else {
-            self
-        }
     }
 }

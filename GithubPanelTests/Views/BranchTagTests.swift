@@ -3,8 +3,8 @@ import XCTest
 
 final class BranchTagTests: XCTestCase {
     func testSummaryLeadCountsCommits() {
-        XCTAssertEqual(PullRequestDetailHeader.summaryLead(for: detail(commits: 1)), "octocat wants to merge 1 commit into")
-        XCTAssertEqual(PullRequestDetailHeader.summaryLead(for: detail(commits: 3)), "octocat wants to merge 3 commits into")
+        XCTAssertEqual(PullRequestDetailHeader.summaryLead(for: detail(commits: 1)), "wants to merge 1 commit")
+        XCTAssertEqual(PullRequestDetailHeader.summaryLead(for: detail(commits: 3)), "wants to merge 3 commits")
     }
 
     private func detail(commits: Int) -> PullRequestDetail {
