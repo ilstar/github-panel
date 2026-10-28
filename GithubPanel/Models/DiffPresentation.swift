@@ -4,6 +4,8 @@ import Foundation
 struct DiffSegment: Equatable {
     let text: String
     let isChanged: Bool
+    /// What the text is in the file's language, for coloring it. Nil for plain text.
+    var syntax: SyntaxKind? = nil
 }
 
 /// One line as the diff view draws it, with its word-level highlights.
@@ -34,9 +36,13 @@ struct DiffPresentation: Equatable {
         unified.contains { $0.kind == .addition || $0.kind == .deletion }
     }
 
-    init(lines: [DiffLine], hideWhitespace: Bool) {
+    /// `language` colors the code; nil leaves it plain.
+    init(lines: [DiffLine], hideWhitespace: Bool, language: SyntaxLanguage? = nil) {
         let source = hideWhitespace ? DiffPresentation.hidingWhitespaceChanges(lines) : lines
-        let unified = DiffPresentation.highlighted(source)
+        var unified = DiffPresentation.highlighted(source)
+        if let language {
+            unified = DiffPresentation.syntaxHighlighted(unified, language: language)
+        }
         self.unified = unified
         self.split = DiffPresentation.splitRows(unified)
     }
@@ -176,6 +182,72 @@ struct DiffPresentation: Equatable {
             }
         }
         return result.isEmpty ? [DiffSegment(text: "", isChanged: false)] : result
+    }
+
+    // MARK: - Syntax highlights
+
+    /// Splits each code line's segments where its syntax colors change. The old and new files each carry their own
+    /// open block comments and strings from line to line, and each hunk starts fresh since lines between hunks are
+    /// missing.
+    static func syntaxHighlighted(_ lines: [DiffDisplayLine], language: SyntaxLanguage) -> [DiffDisplayLine] {
+        var oldState: SyntaxHighlighter.State = nil
+        var newState: SyntaxHighlighter.State = nil
+        return lines.map { line in
+            let result: (tokens: [SyntaxToken], state: SyntaxHighlighter.State)
+            switch line.kind {
+            case .hunk:
+                oldState = nil
+                newState = nil
+                return line
+            case .note:
+                return line
+            case .context:
+                result = SyntaxHighlighter.tokens(line.text, language: language, state: newState)
+                oldState = result.state
+                newState = result.state
+            case .deletion:
+                result = SyntaxHighlighter.tokens(line.text, language: language, state: oldState)
+                oldState = result.state
+            case .addition:
+                result = SyntaxHighlighter.tokens(line.text, language: language, state: newState)
+                newState = result.state
+            }
+            guard !result.tokens.isEmpty else { return line }
+            return DiffDisplayLine(kind: line.kind,
+                                   oldLineNumber: line.oldLineNumber,
+                                   newLineNumber: line.newLineNumber,
+                                   segments: coloring(line.segments, with: result.tokens))
+        }
+    }
+
+    /// Cuts `segments` at every token edge and gives each piece its token's kind.
+    static func coloring(_ segments: [DiffSegment], with tokens: [SyntaxToken]) -> [DiffSegment] {
+        var result: [DiffSegment] = []
+        var tokenIndex = 0
+        var offset = 0
+        for segment in segments {
+            let characters = Array(segment.text)
+            var start = 0
+            while start < characters.count {
+                let position = offset + start
+                while tokenIndex < tokens.count, tokens[tokenIndex].range.upperBound <= position { tokenIndex += 1 }
+                let kind: SyntaxKind?
+                let end: Int
+                if tokenIndex < tokens.count, tokens[tokenIndex].range.lowerBound <= position {
+                    kind = tokens[tokenIndex].kind
+                    end = tokens[tokenIndex].range.upperBound
+                } else {
+                    kind = nil
+                    end = tokenIndex < tokens.count ? tokens[tokenIndex].range.lowerBound : Int.max
+                }
+                let stop = min(characters.count, end - offset)
+                result.append(DiffSegment(text: String(characters[start..<stop]), isChanged: segment.isChanged, syntax: kind))
+                start = stop
+            }
+            if characters.isEmpty { result.append(segment) }
+            offset += characters.count
+        }
+        return result
     }
 
     // MARK: - Split rows

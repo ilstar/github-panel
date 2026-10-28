@@ -855,6 +855,7 @@ struct SplitDiffRowView: View {
 /// Line numbers, marker, and text for one diff line.
 private struct DiffLineHalf: View {
     @Environment(\.pullRequestTextSize) private var textSize
+    @Environment(\.colorScheme) private var colorScheme
     private var font: NSFont { PullRequestTextSize.codeFont(setting: textSize) }
     /// Keep line numbers and comment targets aligned with the chosen font.
     private var characterWidth: CGFloat { PullRequestTextSize.codeCharacterWidth(setting: textSize) }
@@ -925,10 +926,10 @@ private struct DiffLineHalf: View {
     @ViewBuilder
     private var lineText: some View {
         if isSelectable {
-            Text(DiffColors.attributedText(line))
+            Text(DiffColors.attributedText(line, colorScheme: colorScheme))
                 .textSelection(.enabled)
         } else {
-            Text(DiffColors.attributedText(line))
+            Text(DiffColors.attributedText(line, colorScheme: colorScheme))
         }
     }
 }
