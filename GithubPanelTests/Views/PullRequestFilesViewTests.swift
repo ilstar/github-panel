@@ -47,6 +47,18 @@ final class PullRequestFilesViewTests: XCTestCase {
         XCTAssertEqual(highlighted, ["claude"])
     }
 
+    func testAttributedTextColorsCode() {
+        let line = DiffDisplayLine(kind: .context, oldLineNumber: 1, newLineNumber: 1, segments: [
+            DiffSegment(text: "let", isChanged: false, syntax: .keyword),
+            DiffSegment(text: " a", isChanged: false)
+        ])
+
+        let text = DiffColors.attributedText(line)
+
+        let colored = text.runs.filter { $0.foregroundColor != nil }.map { String(text[$0.range].characters) }
+        XCTAssertEqual(colored, ["let"])
+    }
+
     func testAttributedTextKeepsEmptyLinesVisible() {
         let line = DiffDisplayLine(kind: .context, oldLineNumber: 1, newLineNumber: 1,
                                    segments: [DiffSegment(text: "", isChanged: false)])

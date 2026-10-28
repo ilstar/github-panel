@@ -1316,14 +1316,32 @@ enum DiffColors {
         }
     }
 
-    /// The line's text with its changed words filled in.
-    static func attributedText(_ line: DiffDisplayLine) -> AttributedString {
+    /// Syntax colors, after GitHub's light and dark code themes. Plain colors picked by the color scheme are
+    /// cheaper to draw than colors that follow the appearance on their own, which adds up across every run of a
+    /// fast-scrolling diff.
+    static func syntaxColor(_ kind: SyntaxKind, colorScheme: ColorScheme) -> Color {
+        let dark = colorScheme == .dark
+        switch kind {
+        case .keyword: return dark ? Color(red: 1.00, green: 0.48, blue: 0.45) : Color(red: 0.81, green: 0.13, blue: 0.18)
+        case .string: return dark ? Color(red: 0.65, green: 0.84, blue: 1.00) : Color(red: 0.04, green: 0.19, blue: 0.41)
+        case .number: return dark ? Color(red: 0.47, green: 0.75, blue: 1.00) : Color(red: 0.02, green: 0.31, blue: 0.68)
+        case .comment: return dark ? Color(red: 0.55, green: 0.58, blue: 0.62) : Color(red: 0.35, green: 0.39, blue: 0.43)
+        case .type: return dark ? Color(red: 1.00, green: 0.65, blue: 0.34) : Color(red: 0.58, green: 0.22, blue: 0.00)
+        case .attribute: return dark ? Color(red: 0.82, green: 0.66, blue: 1.00) : Color(red: 0.51, green: 0.31, blue: 0.87)
+        }
+    }
+
+    /// The line's text with its changed words filled in and its code colored.
+    static func attributedText(_ line: DiffDisplayLine, colorScheme: ColorScheme = .light) -> AttributedString {
         let highlight = line.kind == .addition ? additionHighlight : deletionHighlight
         var text = AttributedString()
         for segment in line.segments {
             var part = AttributedString(segment.text)
             if segment.isChanged {
                 part.backgroundColor = highlight
+            }
+            if let syntax = segment.syntax {
+                part.foregroundColor = syntaxColor(syntax, colorScheme: colorScheme)
             }
             text += part
         }

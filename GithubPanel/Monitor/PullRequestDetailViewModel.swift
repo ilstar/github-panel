@@ -608,7 +608,8 @@ final class PullRequestDetailViewModel: ObservableObject {
     func presentation(for filename: String, hideWhitespace: Bool) -> DiffPresentation {
         let key = PresentationKey(filename: filename, scope: fileScope, hideWhitespace: hideWhitespace)
         if let cached = presentations[key] { return cached }
-        let presentation = DiffPresentation(lines: lines(for: filename) ?? [], hideWhitespace: hideWhitespace)
+        let presentation = DiffPresentation(lines: lines(for: filename) ?? [], hideWhitespace: hideWhitespace,
+                                            language: SyntaxLanguage(filename: filename))
         presentations[key] = presentation
         return presentation
     }
