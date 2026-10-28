@@ -301,6 +301,7 @@ struct PullRequestFilesView: View {
             .padding(8)
 
             let rows = FileTree.visibleRows(treeRows, collapsed: collapsedDirectories)
+            let filesByName = Dictionary(shownFiles.map { ($0.filename, $0) }, uniquingKeysWith: { first, _ in first })
             if rows.isEmpty {
                 Text(shownFiles.isEmpty ? noFilesMessage : "No matching files.")
                     .prFont(.callout)
@@ -311,17 +312,17 @@ struct PullRequestFilesView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(rows) { row in
-                            treeRow(row)
+                            treeRow(row, file: filesByName[row.id])
                         }
                     }
-                    .padding(.horizontal, 6)
+                    .padding(.horizontal, 8)
                     .padding(.bottom, 8)
                 }
             }
         }
     }
 
-    private func treeRow(_ row: FileTreeRow) -> some View {
+    private func treeRow(_ row: FileTreeRow, file: PullRequestFile?) -> some View {
         let isSelected = row.kind == .file && row.id == selectedFile
         return HStack(spacing: 4) {
             switch row.kind {
@@ -345,6 +346,14 @@ struct PullRequestFilesView: View {
 
             Spacer(minLength: 4)
 
+            if row.kind == .file, let file {
+                Text(Self.fileChangeSummary(file))
+                    .prFont(.caption1)
+                    .monospacedDigit()
+                    .fixedSize()
+                    .accessibilityLabel("\(file.additions) additions, \(file.deletions) deletions")
+            }
+
             if row.kind == .file, viewModel.viewedFiles.contains(row.id) {
                 Image(systemName: "checkmark")
                     .prFont(.caption1, weight: .semibold)
@@ -358,9 +367,9 @@ struct PullRequestFilesView: View {
             }
         }
         .prFont(.callout)
-        .padding(.leading, CGFloat(row.depth) * 14 + 4)
-        .padding(.trailing, 6)
-        .padding(.vertical, 3)
+        .padding(.leading, CGFloat(row.depth) * 14 + 6)
+        .padding(.trailing, 8)
+        .padding(.vertical, 6)
         .background(
             RoundedRectangle(cornerRadius: 5, style: .continuous)
                 .fill(isSelected ? Color.accentColor.opacity(0.2) : Color.clear)
@@ -383,6 +392,16 @@ struct PullRequestFilesView: View {
             Button("Copy Path") { PullRequestFileHeader.copyPath(row.id) }
         }
         .help(row.id)
+    }
+
+    static func fileChangeSummary(_ file: PullRequestFile) -> AttributedString {
+        var additions = AttributedString("+\(file.additions)")
+        additions.foregroundColor = DiffColors.additionText
+        var separator = AttributedString("/")
+        separator.foregroundColor = .secondary
+        var deletions = AttributedString("−\(file.deletions)")
+        deletions.foregroundColor = DiffColors.deletionText
+        return additions + separator + deletions
     }
 
     // MARK: - Diffs

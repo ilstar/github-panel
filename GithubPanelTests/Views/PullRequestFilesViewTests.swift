@@ -4,6 +4,20 @@ import SwiftUI
 @testable import GithubPanel
 
 final class PullRequestFilesViewTests: XCTestCase {
+    func testFileTreeChangeSummaryUsesFileTotalsWithoutAPatch() {
+        for (additions, deletions, expected) in [(10, 5, "+10/−5"), (0, 0, "+0/−0"),
+                                                 (1234, 0, "+1234/−0"), (0, 12, "+0/−12")] {
+            let file = PullRequestFile(filename: "Sources/New.swift", previousFilename: "Sources/Old.swift",
+                                       status: .renamed, additions: additions, deletions: deletions, patch: nil)
+
+            let summary = PullRequestFilesView.fileChangeSummary(file)
+
+            XCTAssertEqual(String(summary.characters), expected)
+            XCTAssertEqual(summary.runs.map(\.foregroundColor),
+                           [DiffColors.additionText, Color.secondary, DiffColors.deletionText])
+        }
+    }
+
     func testDisplayNameShowsRenames() {
         XCTAssertEqual(PullRequestFileHeader.displayName(file(filename: "New.swift", previousFilename: "Old.swift")),
                        "Old.swift → New.swift")
