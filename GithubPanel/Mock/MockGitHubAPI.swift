@@ -209,8 +209,15 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
         }
     }
 
-    func fetchPullRequestComments(token: String, reference: PullRequestReference) async throws -> PullRequestComments {
-        locked { storedComments(for: reference) }
+    func fetchPullRequestComments(token: String, reference: PullRequestReference,
+                                  limits: PullRequestCommentLimits) async throws -> PullRequestComments {
+        let stored = locked { storedComments(for: reference) }
+        // Like GitHub, the newest comments and the first threads, with the totals so "more" buttons show.
+        return PullRequestComments(comments: Array(stored.comments.suffix(limits.comments)),
+                                   threads: Array(stored.threads.prefix(limits.threads)),
+                                   pendingReviewID: stored.pendingReviewID,
+                                   totalCommentCount: stored.comments.count,
+                                   totalThreadCount: stored.threads.count)
     }
 
     private func storedComments(for reference: PullRequestReference) -> PullRequestComments {

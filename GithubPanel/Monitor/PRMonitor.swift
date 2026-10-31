@@ -622,9 +622,10 @@ final class PRMonitor: ObservableObject {
         try await api.setFileViewed(token: token, pullRequestID: pullRequestID, path: path, viewed: viewed)
     }
 
-    func fetchPullRequestComments(_ reference: PullRequestReference) async throws -> PullRequestComments {
+    func fetchPullRequestComments(_ reference: PullRequestReference,
+                                  limits: PullRequestCommentLimits = PullRequestCommentLimits()) async throws -> PullRequestComments {
         guard let token = loadSessionToken() else { throw MissingTokenError() }
-        return try await api.fetchPullRequestComments(token: token, reference: reference)
+        return try await api.fetchPullRequestComments(token: token, reference: reference, limits: limits)
     }
 
     func postPullRequestComment(_ comment: NewPullRequestComment, on reference: PullRequestReference) async throws {

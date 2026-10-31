@@ -414,6 +414,13 @@ struct PullRequestFilesView: View {
                             fileHeader(section.file)
                         }
                     }
+
+                    if let unloaded = viewModel.comments?.unloadedThreadCount, unloaded > 0, !isShowingChangesSinceLastReview {
+                        LoadMoreButton(title: Self.moreThreadsTitle(unloaded),
+                                       isLoading: viewModel.isLoadingMoreComments,
+                                       action: { Task { await viewModel.loadMoreThreads() } })
+                            .padding(.bottom, Self.fileSpacing)
+                    }
                 }
                 .padding(.horizontal, 24)
                 .padding(.bottom, 24 - Self.fileSpacing)
@@ -431,6 +438,13 @@ struct PullRequestFilesView: View {
 
     /// The space between one file's card and the next.
     private static let fileSpacing: CGFloat = 16
+
+    /// The button after the diffs when some review threads have not loaded, naming how many the next load brings.
+    static func moreThreadsTitle(_ unloadedCount: Int) -> String {
+        let count = min(unloadedCount, PullRequestCommentLimits.threadStep)
+        let conversations = count == 1 ? "1 more conversation" : "\(count) more conversations"
+        return unloadedCount > count ? "Load \(conversations) of \(unloadedCount)" : "Load \(conversations)"
+    }
 
     private var diffSections: [DiffListSection] {
         DiffListSection.sections(DiffListRow.rows(files: visibleFiles,

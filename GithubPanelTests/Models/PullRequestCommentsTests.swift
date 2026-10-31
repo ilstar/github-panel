@@ -4,6 +4,24 @@ import XCTest
 final class PullRequestCommentsTests: XCTestCase {
     private let path = "Sources/Widget.swift"
 
+    func testLimitsGrowByAStepEach() {
+        let limits = PullRequestCommentLimits()
+        XCTAssertEqual(limits, PullRequestCommentLimits(comments: 30, threads: 50))
+        XCTAssertEqual(limits.addingEarlierComments(), PullRequestCommentLimits(comments: 60, threads: 50))
+        XCTAssertEqual(limits.addingThreads().addingThreads(), PullRequestCommentLimits(comments: 30, threads: 150))
+    }
+
+    func testUnloadedCountsComeFromTheTotals() {
+        let comment = PullRequestComment(id: "c", databaseID: 1, authorLogin: "a", body: "", createdAt: Date(), htmlURL: nil)
+        let partial = PullRequestComments(comments: [comment], threads: [], totalCommentCount: 40, totalThreadCount: 7)
+        XCTAssertEqual(partial.earlierCommentCount, 39)
+        XCTAssertEqual(partial.unloadedThreadCount, 7)
+
+        // Without totals, or with totals below what loaded, everything counts as loaded.
+        XCTAssertEqual(PullRequestComments(comments: [comment], threads: []).earlierCommentCount, 0)
+        XCTAssertEqual(PullRequestComments(comments: [comment], threads: [], totalCommentCount: 0).totalCommentCount, 1)
+    }
+
     func testUnifiedAnchorPutsDeletionsOnTheOldSide() {
         XCTAssertEqual(DiffCommentAnchor.unified(path: path, line: line(.deletion, old: 4, new: nil)),
                        DiffCommentAnchor(path: path, line: 4, side: .left))

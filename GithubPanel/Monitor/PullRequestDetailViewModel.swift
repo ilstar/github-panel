@@ -9,7 +9,8 @@ final class PullRequestDetailViewModel: ObservableObject {
     typealias FetchChangedFiles = (String, String, String) async throws -> [PullRequestFile]
     /// Marks or unmarks one file as viewed: the pull request's node ID, the file path, and the new state.
     typealias SetViewed = (String, String, Bool) async throws -> Void
-    typealias FetchComments = (PullRequestReference) async throws -> PullRequestComments
+    /// The comments on a pull request, up to the given limits.
+    typealias FetchComments = (PullRequestReference, PullRequestCommentLimits) async throws -> PullRequestComments
     typealias PostComment = (NewPullRequestComment, PullRequestReference) async throws -> Void
     /// Resolves or unresolves one review thread: its node ID and the new state.
     typealias SetResolved = (String, Bool) async throws -> Void
@@ -55,6 +56,8 @@ final class PullRequestDetailViewModel: ObservableObject {
     @Published private(set) var comments: PullRequestComments?
     /// Review threads for each file, keyed by filename.
     @Published private(set) var threadIndexes: [String: ReviewThreadIndex] = [:]
+    /// Whether earlier comments or more review threads are loading.
+    @Published private(set) var isLoadingMoreComments = false
     /// The verdict of the review submitted from this view, once GitHub accepts it.
     @Published private(set) var submittedReview: PullRequestReviewEvent?
     /// Whether an Update branch request is in flight.
@@ -89,6 +92,8 @@ final class PullRequestDetailViewModel: ObservableObject {
     private let sendReviewRequest: SetReviewRequested
     /// The pending review started here, until the comments reload with it. Keeps a failed reload from starting a second one.
     private var startedReviewID: String?
+    /// How much of the discussion loads. Reloads keep what the "more" buttons added.
+    private var commentLimits = PullRequestCommentLimits()
     private let cache: PullRequestDetailCache?
     /// Parsed diff lines for each file changed since the last review, keyed by filename.
     private var diffLinesSinceLastReview: [String: [DiffLine]] = [:]
@@ -114,7 +119,7 @@ final class PullRequestDetailViewModel: ObservableObject {
          fetch: @escaping Fetch,
          fetchChangedFiles: @escaping FetchChangedFiles = { _, _, _ in [] },
          setViewed: @escaping SetViewed = { _, _, _ in },
-         fetchComments: @escaping FetchComments = { _ in .empty },
+         fetchComments: @escaping FetchComments = { _, _ in .empty },
          postComment: @escaping PostComment = { _, _ in },
          setResolved: @escaping SetResolved = { _, _ in },
          edit: @escaping Edit = { _, _, _ in },
@@ -166,7 +171,9 @@ final class PullRequestDetailViewModel: ObservableObject {
                   setViewed: { [monitor] pullRequestID, path, viewed in
                       try await monitor.setFileViewed(pullRequestID: pullRequestID, path: path, viewed: viewed)
                   },
-                  fetchComments: { [monitor] reference in try await monitor.fetchPullRequestComments(reference) },
+                  fetchComments: { [monitor] reference, limits in
+                      try await monitor.fetchPullRequestComments(reference, limits: limits)
+                  },
                   postComment: { [monitor] comment, reference in
                       try await monitor.postPullRequestComment(comment, on: reference)
                   },
@@ -212,7 +219,7 @@ final class PullRequestDetailViewModel: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         // The comments and checks load alongside the diff, which shows as soon as it arrives.
-        async let loadedComments = fetchComments(reference)
+        async let loadedComments = fetchComments(reference, commentLimits)
         async let loadedChecks = fetchChecks(reference)
         do {
             apply(try await fetch(reference))
@@ -599,9 +606,33 @@ final class PullRequestDetailViewModel: ObservableObject {
     }
 
     private func reloadComments() async throws {
-        let loaded = try await fetchComments(reference)
+        let loaded = try await fetchComments(reference, commentLimits)
         apply(loaded)
         cache?.store(loaded, for: reference)
+    }
+
+    /// Loads the next older general comments, which show above the ones loaded.
+    func loadEarlierComments() async {
+        await loadMoreComments(commentLimits.addingEarlierComments())
+    }
+
+    /// Loads the next review threads, which show on the diff like the ones loaded.
+    func loadMoreThreads() async {
+        await loadMoreComments(commentLimits.addingThreads())
+    }
+
+    private func loadMoreComments(_ limits: PullRequestCommentLimits) async {
+        guard !isLoadingMoreComments else { return }
+        isLoadingMoreComments = true
+        defer { isLoadingMoreComments = false }
+        do {
+            let loaded = try await fetchComments(reference, limits)
+            commentLimits = limits
+            apply(loaded)
+            cache?.store(loaded, for: reference)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     /// The file's diff in the shown scope with word highlights, built on first use and then reused.

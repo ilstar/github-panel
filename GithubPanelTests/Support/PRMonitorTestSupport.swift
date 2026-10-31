@@ -48,6 +48,7 @@ final class FakeGitHubAPI: GitHubAPIClient {
     private(set) var changedFilesCalls: [(token: String, repoFullName: String, baseSHA: String, headSHA: String)] = []
     private(set) var setFileViewedCalls: [(token: String, pullRequestID: String, path: String, viewed: Bool)] = []
     var comments: PullRequestComments = .empty
+    private(set) var commentsLimits: [PullRequestCommentLimits] = []
     private(set) var setResolvedCalls: [(token: String, threadID: String, resolved: Bool)] = []
     var commentsHandler: ((PullRequestReference) async throws -> PullRequestComments)?
     private(set) var commentsCalls: [(token: String, reference: PullRequestReference)] = []
@@ -151,9 +152,11 @@ final class FakeGitHubAPI: GitHubAPIClient {
         setFileViewedCalls.append((token, pullRequestID, path, viewed))
     }
 
-    func fetchPullRequestComments(token: String, reference: PullRequestReference) async throws -> PullRequestComments {
+    func fetchPullRequestComments(token: String, reference: PullRequestReference,
+                                  limits: PullRequestCommentLimits) async throws -> PullRequestComments {
         if let error { throw error }
         commentsCalls.append((token, reference))
+        commentsLimits.append(limits)
         if let commentsHandler { return try await commentsHandler(reference) }
         return comments
     }

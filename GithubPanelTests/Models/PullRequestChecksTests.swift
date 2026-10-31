@@ -79,6 +79,12 @@ final class PullRequestChecksTests: XCTestCase {
         XCTAssertEqual(PullRequestDetailView.conversationBadge(3), .count(3))
     }
 
+    func testEarlierCommentsTitleNamesTheNextLoad() {
+        XCTAssertEqual(PullRequestConversationView.earlierCommentsTitle(1), "Load 1 earlier comment")
+        XCTAssertEqual(PullRequestConversationView.earlierCommentsTitle(30), "Load 30 earlier comments")
+        XCTAssertEqual(PullRequestConversationView.earlierCommentsTitle(45), "Load 30 earlier comments of 45")
+    }
+
     func testSidebarChecksFoldALongListFailingFirst() {
         let many = PullRequestChecks(checks: (0..<9).map { check("ok\($0)", .success) } + [check("bad", .failure)])
         let folded = PullRequestChecksSection.visibleChecks(many, isExpanded: false)

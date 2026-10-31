@@ -134,15 +134,17 @@ final class GitHubAPI: GitHubAPIClient {
     func fetchReviewRequests(token: String) async throws -> ReviewRequests {
         let directSearch = "is:pr is:open archived:false user-review-requested:@me sort:updated-desc"
         let allSearch = "is:pr is:open archived:false review-requested:@me sort:updated-desc"
-        // Both groups' first pages load together; later pages are loaded below.
+        // Both groups' first pages load together; later pages are loaded below. Each pull request carries its
+        // checks and review-request events, so big pages make GitHub time out with a 502; small ones keep it fast.
+        let pageSize = Self.reviewRequestPageSize
         let query = """
         query {
           viewer { login }
-          direct: search(query: "\(directSearch)", type: ISSUE, first: 50) {
+          direct: search(query: "\(directSearch)", type: ISSUE, first: \(pageSize)) {
             pageInfo { hasNextPage endCursor }
             nodes { ...ReviewRequestFields }
           }
-          all: search(query: "\(allSearch)", type: ISSUE, first: 50) {
+          all: search(query: "\(allSearch)", type: ISSUE, first: \(pageSize)) {
             pageInfo { hasNextPage endCursor }
             nodes { ...ReviewRequestFields }
           }
@@ -157,7 +159,7 @@ final class GitHubAPI: GitHubAPIClient {
         func remainingPages(of search: ReviewRequestsResponse.Search, query: String) async throws -> ReviewRequestsResponse.Search {
             let pageQuery = """
             query($query: String!, $after: String!) {
-              page: search(query: $query, type: ISSUE, first: 100, after: $after) {
+              page: search(query: $query, type: ISSUE, first: \(pageSize), after: $after) {
                 pageInfo { hasNextPage endCursor }
                 nodes { ...ReviewRequestFields }
               }
@@ -167,7 +169,8 @@ final class GitHubAPI: GitHubAPIClient {
             """
             struct Response: Decodable { let page: GraphQLPage<ReviewRequestsResponse.Node?> }
             var search = search
-            search.nodes = try await allNodes(GraphQLPage(pageInfo: search.pageInfo, nodes: search.nodes)) { cursor in
+            search.nodes = try await allNodes(GraphQLPage(pageInfo: search.pageInfo, nodes: search.nodes),
+                                              maxPages: Self.maxReviewRequestPages) { cursor in
                 let result = try await graphQLKeepingSSOBlockedData(Response.self, query: pageQuery,
                                                                     variables: ["query": query, "after": cursor], token: token)
                 ssoAuthorizationURL = ssoAuthorizationURL ?? result.ssoAuthorizationURL
@@ -183,6 +186,11 @@ final class GitHubAPI: GitHubAPIClient {
                               all: response.all.rows { $0.typename == "Team" },
                               ssoAuthorizationURL: ssoAuthorizationURL)
     }
+
+    /// Pull requests per To Review search page.
+    static let reviewRequestPageSize = 10
+    /// Enough To Review pages for the 1,000 results GitHub's search returns at most.
+    static let maxReviewRequestPages = 1000 / reviewRequestPageSize
 
     private static let reviewRequestFields = """
         fragment ReviewRequestFields on PullRequest {
@@ -538,9 +546,14 @@ final class GitHubAPI: GitHubAPIClient {
         _ = try await graphQL(Response.self, query: query, variables: ["id": threadID], token: token)
     }
 
-    func fetchPullRequestComments(token: String, reference: PullRequestReference) async throws -> PullRequestComments {
+    func fetchPullRequestComments(token: String, reference: PullRequestReference,
+                                  limits: PullRequestCommentLimits) async throws -> PullRequestComments {
         let (owner, name) = try repoParts(reference.repoFullName)
         let pageInfo = "pageInfo { hasNextPage endCursor }"
+        // General comments page backwards from the newest, so the next page is the one before.
+        let earlierPageInfo = "pageInfo { hasNextPage: hasPreviousPage endCursor: startCursor }"
+        let commentPageSize = min(limits.comments, 100)
+        let threadPageSize = min(limits.threads, 100)
         let threadFields = """
         id path line startLine diffSide isResolved isOutdated
         comments(first: 100) { \(pageInfo) nodes { ...CommentFields } }
@@ -555,14 +568,15 @@ final class GitHubAPI: GitHubAPIClient {
           ... on PullRequestReviewComment { databaseId url state }
         }
         """
-        // Each list loads in pages of 100; later pages are loaded below.
+        // Each list loads up to its limit, in pages of up to 100; later pages are loaded below.
         let query = """
         query($owner: String!, $name: String!, $number: Int!) {
           repository(owner: $owner, name: $name) {
             pullRequest(number: $number) {
-              comments(first: 100) { \(pageInfo) nodes { ...CommentFields } }
+              comments(last: \(commentPageSize)) { totalCount \(earlierPageInfo) nodes { ...CommentFields } }
               reviews(states: PENDING, first: 1) { nodes { id viewerDidAuthor } }
-              reviewThreads(first: 100) {
+              reviewThreads(first: \(threadPageSize)) {
+                totalCount
                 \(pageInfo)
                 nodes {
                   \(threadFields)
@@ -581,13 +595,13 @@ final class GitHubAPI: GitHubAPIClient {
         guard let pullRequest = response.repository?.pullRequest else {
             throw GraphQLError(message: "Pull request \(reference.id) was not found.")
         }
-        let comments = try await allNodes(pullRequest.comments) { cursor in
+        let comments = try await allNodes(pullRequest.comments, limit: limits.comments, prepending: true) { cursor in
             try await pullRequestPage(CommentsResponse.Comment.self,
-                                      connection: "comments(first: 100, after: $after) { \(pageInfo) nodes { ...CommentFields } }",
+                                      connection: "comments(last: 100, before: $after) { \(earlierPageInfo) nodes { ...CommentFields } }",
                                       fragments: commentFields, owner: owner, name: name, number: reference.number,
                                       after: cursor, token: token)
         }
-        var threads = try await allNodes(pullRequest.reviewThreads) { cursor in
+        var threads = try await allNodes(pullRequest.reviewThreads, limit: limits.threads) { cursor in
             try await pullRequestPage(CommentsResponse.Thread.self,
                                       connection: "reviewThreads(first: 100, after: $after) { \(pageInfo) nodes { \(threadFields) } }",
                                       fragments: commentFields, owner: owner, name: name, number: reference.number,
@@ -623,7 +637,9 @@ final class GitHubAPI: GitHubAPIClient {
                              comments: thread.comments.nodes.map(\.comment))
             },
             // GitHub shows a pending review only to its author, but check in case that changes.
-            pendingReviewID: pullRequest.reviews?.nodes.first { $0.viewerDidAuthor }?.id
+            pendingReviewID: pullRequest.reviews?.nodes.first { $0.viewerDidAuthor }?.id,
+            totalCommentCount: pullRequest.comments.totalCount,
+            totalThreadCount: pullRequest.reviewThreads.totalCount
         )
     }
 
@@ -919,19 +935,25 @@ final class GitHubAPI: GitHubAPIClient {
                 ["ADMIN", "MAINTAIN", "WRITE", "TRIAGE"].contains(response.repository?.viewerPermission ?? ""))
     }
 
-    /// The nodes of `first` and of the pages after it, until GitHub has no more or `maxListPages` pages are loaded.
-    /// `fetch` loads the page after a cursor, or returns nil when it is gone.
+    /// The nodes of `first` and of the pages after it, until GitHub has no more, `maxPages` pages are loaded,
+    /// or there are `limit` nodes. `fetch` loads the page after a cursor, or returns nil when it is gone.
+    /// A connection that pages backwards is `prepending`: each page goes before the ones loaded, and the
+    /// newest `limit` nodes are kept.
     private func allNodes<Node>(_ first: GraphQLPage<Node>,
+                                maxPages: Int = maxListPages,
+                                limit: Int = .max,
+                                prepending: Bool = false,
                                 fetch: (String) async throws -> GraphQLPage<Node>?) async throws -> [Node] {
         var nodes = first.nodes
         var pageInfo = first.pageInfo
-        for _ in 1..<Self.maxListPages {
-            guard let info = pageInfo, info.hasNextPage, let cursor = info.endCursor,
+        for _ in 1..<maxPages {
+            guard nodes.count < limit, let info = pageInfo, info.hasNextPage, let cursor = info.endCursor,
                   let page = try await fetch(cursor) else { break }
-            nodes += page.nodes
+            nodes = prepending ? page.nodes + nodes : nodes + page.nodes
             pageInfo = page.pageInfo
         }
-        return nodes
+        guard nodes.count > limit else { return nodes }
+        return prepending ? Array(nodes.suffix(limit)) : Array(nodes.prefix(limit))
     }
 
     /// The page after `cursor` of the pull request connection `connection`, which selects `$after`.
@@ -1599,6 +1621,8 @@ private struct AutoMergeRequest: Decodable {}
 private struct GraphQLPage<Node: Decodable>: Decodable {
     var pageInfo: GraphQLPageInfo?
     var nodes: [Node]
+    /// The size of the whole connection, for queries that ask for it.
+    var totalCount: Int?
 }
 
 private struct GraphQLPageInfo: Decodable {

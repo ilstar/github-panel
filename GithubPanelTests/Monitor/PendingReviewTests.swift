@@ -219,7 +219,7 @@ final class PendingReviewTests: XCTestCase {
         return PullRequestDetailViewModel(
             reference: reference,
             fetch: { [self] _ in detail(isViewerAuthor: isViewerAuthor) },
-            fetchComments: { _ in
+            fetchComments: { _, _ in
                 loads += 1
                 if recorder.failReload && loads > 1 { throw TestError(message: "Reload failed") }
                 return recorder.comments
