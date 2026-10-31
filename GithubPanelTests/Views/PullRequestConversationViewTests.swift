@@ -36,7 +36,7 @@ final class PullRequestConversationViewTests: XCTestCase {
         return (recorder.frames["main"] ?? .null, recorder.frames["sidebar"] ?? .null)
     }
 
-    /// The conversation's content stops at 900pt, but its scroller should still sit at the pane's right edge.
+    /// The conversation's content stops at its max width and centers, but its scroller should still sit at the pane's right edge.
     func testScrollViewFillsAPaneWiderThanTheContent() throws {
         let reference = PullRequestReference(repoFullName: "acme/widgets", number: 7)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1400, height: 600),
@@ -57,6 +57,12 @@ final class PullRequestConversationViewTests: XCTestCase {
         let scrollViews = Self.descendants(of: host).compactMap { $0 as? NSScrollView }
         let conversation = try XCTUnwrap(scrollViews.max { $0.frame.height < $1.frame.height })
         XCTAssertEqual(conversation.convert(conversation.bounds, to: host).maxX, host.bounds.maxX, accuracy: 0.5)
+
+        // The content column sits in the middle of the wider pane.
+        let anchor = try XCTUnwrap(Self.descendants(of: host).first { $0 is PageScrollAnchor.AnchorView })
+        let content = anchor.convert(anchor.bounds, to: host)
+        XCTAssertEqual(content.width, PullRequestConversationView.contentMaxWidth, accuracy: 0.5)
+        XCTAssertEqual(content.midX, host.bounds.midX, accuracy: 0.5)
     }
 
     private static func descendants(of view: NSView) -> [NSView] {

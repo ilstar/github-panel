@@ -871,8 +871,9 @@ struct PullRequestConversationView: View {
                 .padding(.bottom, 32)
                 .frame(maxWidth: Self.contentMaxWidth, alignment: .leading)
                 .background(PageScrollAnchor())
-                // Fill the pane so the scroll view, and its scroller, reach the window's right edge.
-                .frame(maxWidth: .infinity, alignment: .leading)
+                // Fill the pane so the scroll view, and its scroller, reach the window's right edge,
+                // and center the content in a pane wider than it.
+                .frame(maxWidth: .infinity)
             }
             .onChange(of: commentFocusRequest) { _ in
                 withAnimation(.easeOut(duration: 0.2)) {
