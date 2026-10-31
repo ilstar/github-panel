@@ -50,26 +50,31 @@ struct PullRequestDetailView: View {
                         Rectangle().fill(Theme.hairline).frame(height: 1)
                     }
 
-                PullRequestDetailHeader(detail: content.detail,
-                                        isEditingTitle: $isEditingTitle,
-                                        onSaveTitle: { title in try await viewModel.edit(title: title) })
-                    .padding(.horizontal, 32)
-                    .padding(.top, 24)
-                    .padding(.bottom, 16)
-
-                if let error = viewModel.errorMessage {
-                    errorText(error)
+                // On the conversation tab the header lines up with the centered content below it.
+                VStack(alignment: .leading, spacing: 0) {
+                    PullRequestDetailHeader(detail: content.detail,
+                                            isEditingTitle: $isEditingTitle,
+                                            onSaveTitle: { title in try await viewModel.edit(title: title) })
                         .padding(.horizontal, 32)
-                        .padding(.bottom, 8)
-                }
+                        .padding(.top, 24)
+                        .padding(.bottom, 16)
 
-                if let review = viewModel.submittedReview {
-                    Label(review.confirmation, systemImage: "checkmark.circle.fill")
-                        .font(.callout.weight(.medium))
-                        .foregroundStyle(Theme.green)
-                        .padding(.horizontal, 32)
-                        .padding(.bottom, 10)
+                    if let error = viewModel.errorMessage {
+                        errorText(error)
+                            .padding(.horizontal, 32)
+                            .padding(.bottom, 8)
+                    }
+
+                    if let review = viewModel.submittedReview {
+                        Label(review.confirmation, systemImage: "checkmark.circle.fill")
+                            .font(.callout.weight(.medium))
+                            .foregroundStyle(Theme.green)
+                            .padding(.horizontal, 32)
+                            .padding(.bottom, 10)
+                    }
                 }
+                .frame(maxWidth: Self.headerMaxWidth(for: selectedTab), alignment: .leading)
+                .frame(maxWidth: .infinity)
 
                 // The conversation flows on from the header; the diff gets a line above it.
                 if selectedTab != .conversation {
@@ -131,6 +136,14 @@ struct PullRequestDetailView: View {
     private func tabs(for detail: PullRequestDetail) -> [PullRequestDetailTabBar.Tab] {
         [.init(value: .conversation, title: "Conversation", badge: Self.conversationBadge(viewModel.comments?.totalCommentCount)),
          .init(value: .files, title: "Files changed", badge: .diff(additions: detail.additions, deletions: detail.deletions))]
+    }
+
+    /// The conversation's content is capped and centered, so its header is too; the diff uses the whole pane.
+    static func headerMaxWidth(for tab: PullRequestDetailTab) -> CGFloat {
+        switch tab {
+        case .conversation: return PullRequestConversationView.contentMaxWidth
+        case .files: return .infinity
+        }
     }
 
     /// The comment count after Conversation, left off when there are none yet.

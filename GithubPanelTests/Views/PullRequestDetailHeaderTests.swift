@@ -14,6 +14,11 @@ final class PullRequestDetailHeaderTests: XCTestCase {
         XCTAssertFalse(PullRequestDetailHeader.showsEditTitleButton(for: detail))
     }
 
+    func testHeaderLinesUpWithTheConversationButSpansTheFilesTab() {
+        XCTAssertEqual(PullRequestDetailView.headerMaxWidth(for: .conversation), PullRequestConversationView.contentMaxWidth)
+        XCTAssertEqual(PullRequestDetailView.headerMaxWidth(for: .files), .infinity)
+    }
+
     private func mockDetail(own: Bool) async throws -> PullRequestDetail {
         let api = MockGitHubAPI()
         let reference: PullRequestReference
