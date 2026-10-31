@@ -2,6 +2,8 @@ import SwiftUI
 
 /// Every shortcut in one place, opened with ⌘/ or ? and from the Help menu.
 struct KeyboardShortcutsView: View {
+    @Environment(\.dismiss) private var dismiss
+
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(alignment: .top, spacing: 32) {
@@ -22,6 +24,11 @@ struct KeyboardShortcutsView: View {
         }
         .padding(24)
         .frame(width: 820)
+        .background {
+            Button("Close") { dismiss() }
+                .keyboardShortcut(.cancelAction)
+                .hidden()
+        }
     }
 
     private func section(_ section: ShortcutHelp.Section) -> some View {
