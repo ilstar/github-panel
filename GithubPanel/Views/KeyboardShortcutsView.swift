@@ -1,7 +1,10 @@
 import SwiftUI
+import AppKit
 
 /// Every shortcut in one place, opened with ⌘/ or ? and from the Help menu.
 struct KeyboardShortcutsView: View {
+    @Environment(\.dismiss) private var dismiss
+
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(alignment: .top, spacing: 32) {
@@ -22,6 +25,12 @@ struct KeyboardShortcutsView: View {
         }
         .padding(24)
         .frame(width: 820)
+        .background(ShortcutWindowControls())
+        .background {
+            Button("Close") { dismiss() }
+                .keyboardShortcut(.cancelAction)
+                .hidden()
+        }
     }
 
     private func section(_ section: ShortcutHelp.Section) -> some View {
@@ -44,5 +53,19 @@ struct KeyboardShortcutsView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct ShortcutWindowControls: NSViewRepresentable {
+    func makeNSView(context: Context) -> ControlsView { ControlsView() }
+    func updateNSView(_ nsView: ControlsView, context: Context) {}
+
+    final class ControlsView: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+                window?.standardWindowButton(button)?.isHidden = true
+            }
+        }
     }
 }

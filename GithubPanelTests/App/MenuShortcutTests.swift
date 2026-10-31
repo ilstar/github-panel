@@ -50,6 +50,41 @@ final class MenuShortcutTests: XCTestCase {
         }
     }
 
+    func testEscapeClosesKeyboardShortcutsWindow() async throws {
+        let menu = try await mainMenu()
+        let help = try XCTUnwrap(menu.item(withTitle: "Help")?.submenu)
+        let item = try XCTUnwrap(help.item(withTitle: "Keyboard Shortcuts"))
+        help.performActionForItem(at: help.index(of: item))
+
+        var shortcutsWindow: NSWindow?
+        for _ in 0..<20 {
+            shortcutsWindow = NSApp.windows.first { $0.title == "Keyboard Shortcuts" && $0.isVisible }
+            if shortcutsWindow != nil { break }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        let window = try XCTUnwrap(shortcutsWindow)
+        defer { window.close() }
+        for buttonType in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            if let button = window.standardWindowButton(buttonType) {
+                XCTAssertTrue(button.isHiddenOrHasHiddenAncestor,
+                              "The shortcut reference should not show window controls")
+            }
+        }
+        window.makeKeyAndOrderFront(nil)
+        let escape = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, characters: "\u{1b}",
+            charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53
+        ))
+        NSApp.sendEvent(escape)
+
+        for _ in 0..<20 {
+            if !window.isVisible { break }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        XCTAssertFalse(window.isVisible, "Escape should dismiss the Keyboard Shortcuts window")
+    }
+
     /// Find sits in Edit, like Safari's. Until a github.com page is showing, ⌘F stays with Filter Files.
     func testEditMenuHasFind() async throws {
         let titles = try await submenuTitles("Edit")
