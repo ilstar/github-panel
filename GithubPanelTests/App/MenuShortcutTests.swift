@@ -64,6 +64,12 @@ final class MenuShortcutTests: XCTestCase {
         }
         let window = try XCTUnwrap(shortcutsWindow)
         defer { window.close() }
+        for buttonType in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            if let button = window.standardWindowButton(buttonType) {
+                XCTAssertTrue(button.isHiddenOrHasHiddenAncestor,
+                              "The shortcut reference should not show window controls")
+            }
+        }
         window.makeKeyAndOrderFront(nil)
         let escape = try XCTUnwrap(NSEvent.keyEvent(
             with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
