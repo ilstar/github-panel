@@ -14,7 +14,9 @@ protocol GitHubAPIClient {
     /// The files that changed between two commits, such as the one the viewer last reviewed and the head commit.
     func fetchChangedFiles(token: String, repoFullName: String, baseSHA: String, headSHA: String) async throws -> [PullRequestFile]
     func setFileViewed(token: String, pullRequestID: String, path: String, viewed: Bool) async throws
-    func fetchPullRequestComments(token: String, reference: PullRequestReference) async throws -> PullRequestComments
+    /// The pull request's newest general comments and first review threads, up to `limits`.
+    func fetchPullRequestComments(token: String, reference: PullRequestReference,
+                                  limits: PullRequestCommentLimits) async throws -> PullRequestComments
     func postPullRequestComment(token: String, reference: PullRequestReference, comment: NewPullRequestComment) async throws
     func setReviewThreadResolved(token: String, threadID: String, resolved: Bool) async throws
     func editPullRequest(token: String, reference: PullRequestReference, title: String?, body: String?) async throws
@@ -34,6 +36,13 @@ protocol GitHubAPIClient {
     /// Requests a review from a user or team (`org/team-slug`), or removes their request.
     func setReviewRequested(token: String, reference: PullRequestReference, name: String,
                             kind: PullRequestReviewer.Kind, requested: Bool) async throws
+}
+
+extension GitHubAPIClient {
+    /// The comments a pull request shows first.
+    func fetchPullRequestComments(token: String, reference: PullRequestReference) async throws -> PullRequestComments {
+        try await fetchPullRequestComments(token: token, reference: reference, limits: PullRequestCommentLimits())
+    }
 }
 
 protocol HTTPTransport {

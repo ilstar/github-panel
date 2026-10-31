@@ -448,3 +448,27 @@ struct PullRequestGlyph: Shape {
         return path
     }
 }
+
+/// A full-width "load more" row for a list that loaded only part of its items.
+struct LoadMoreButton: View {
+    let title: String
+    let isLoading: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: "ellipsis.circle")
+                }
+                Text(title)
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(QuietButtonStyle())
+        .disabled(isLoading)
+    }
+}

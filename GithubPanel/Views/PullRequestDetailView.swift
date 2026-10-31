@@ -83,6 +83,9 @@ struct PullRequestDetailView: View {
                 case .conversation:
                     PullRequestConversationView(detail: content.detail,
                                                 comments: viewModel.comments?.comments,
+                                                earlierCommentCount: viewModel.comments?.earlierCommentCount ?? 0,
+                                                isLoadingEarlierComments: viewModel.isLoadingMoreComments,
+                                                onLoadEarlierComments: { Task { await viewModel.loadEarlierComments() } },
                                                 checks: viewModel.checks,
                                                 rerunsInFlight: viewModel.rerunsInFlight,
                                                 onRerunCheck: { rerun in Task { await viewModel.rerun(rerun) } },
@@ -126,7 +129,7 @@ struct PullRequestDetailView: View {
     }
 
     private func tabs(for detail: PullRequestDetail) -> [PullRequestDetailTabBar.Tab] {
-        [.init(value: .conversation, title: "Conversation", badge: Self.conversationBadge(viewModel.comments?.comments.count)),
+        [.init(value: .conversation, title: "Conversation", badge: Self.conversationBadge(viewModel.comments?.totalCommentCount)),
          .init(value: .files, title: "Files changed", badge: .diff(additions: detail.additions, deletions: detail.deletions))]
     }
 
@@ -823,6 +826,10 @@ struct PullRequestConversationView: View {
     let detail: PullRequestDetail
     /// General comments, oldest first. Nil while they load.
     let comments: [PullRequestComment]?
+    /// Comments older than `comments` that have not loaded.
+    var earlierCommentCount = 0
+    var isLoadingEarlierComments = false
+    var onLoadEarlierComments: () -> Void = {}
     /// The head commit's checks for the sidebar. Nil while they load.
     var checks: PullRequestChecks?
     /// Check reruns GitHub has not answered yet.
@@ -892,6 +899,13 @@ struct PullRequestConversationView: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 if let comments {
+                    if earlierCommentCount > 0 {
+                        LoadMoreButton(title: Self.earlierCommentsTitle(earlierCommentCount),
+                                       isLoading: isLoadingEarlierComments,
+                                       action: onLoadEarlierComments)
+                            .padding(4)
+                            .activityCard()
+                    }
                     ForEach(comments) { comment in
                         PullRequestCommentView(comment: comment)
                             .padding(.horizontal, 16)
@@ -913,6 +927,13 @@ struct PullRequestConversationView: View {
                     .id(Self.composerID)
             }
         }
+    }
+
+    /// The button above the comments, naming how many the next load brings.
+    static func earlierCommentsTitle(_ earlierCount: Int) -> String {
+        let count = min(earlierCount, PullRequestCommentLimits.commentStep)
+        let comments = count == 1 ? "1 earlier comment" : "\(count) earlier comments"
+        return earlierCount > count ? "Load \(comments) of \(earlierCount)" : "Load \(comments)"
     }
 
     /// The description as plain reading text, with Edit under it for the author.

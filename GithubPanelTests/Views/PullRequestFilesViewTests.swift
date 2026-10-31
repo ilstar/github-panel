@@ -31,6 +31,12 @@ final class PullRequestFilesViewTests: XCTestCase {
         XCTAssertEqual(CodeOwnerShield.ownerLabel("alice@example.com"), "alice@example.com")
     }
 
+    func testMoreThreadsTitleNamesTheNextLoad() {
+        XCTAssertEqual(PullRequestFilesView.moreThreadsTitle(1), "Load 1 more conversation")
+        XCTAssertEqual(PullRequestFilesView.moreThreadsTitle(50), "Load 50 more conversations")
+        XCTAssertEqual(PullRequestFilesView.moreThreadsTitle(120), "Load 50 more conversations of 120")
+    }
+
     func testSinceLastReviewMessageNamesTheShortCommit() {
         XCTAssertEqual(PullRequestFilesView.sinceLastReviewMessage(lastReviewedSHA: "0123456789abcdef"),
                        "Showing changes since your last review (0123456). Switch to All changes to comment.")

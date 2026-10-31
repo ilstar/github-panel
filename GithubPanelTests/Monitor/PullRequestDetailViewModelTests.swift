@@ -165,7 +165,7 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         var fetched: [PullRequestReference] = []
         let viewModel = PullRequestDetailViewModel(reference: reference,
                                                    fetch: { [self] _ in detailContent(title: "Comments") },
-                                                   fetchComments: { reference in
+                                                   fetchComments: { reference, _ in
                                                        fetched.append(reference)
                                                        return comments
                                                    })
@@ -179,10 +179,42 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.threadIndex(for: "c.swift").threads, [])
     }
 
+    func testMoreButtonsRaiseTheLimitsAndReloadsKeepThem() async throws {
+        var requested: [PullRequestCommentLimits] = []
+        var shouldFail = false
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+                                                   fetch: { [self] _ in detailContent(title: "Busy") },
+                                                   fetchComments: { [self] _, limits in
+                                                       requested.append(limits)
+                                                       if shouldFail { throw GraphQLError(message: "Timed out") }
+                                                       return PullRequestComments(comments: [comment(limits.comments)], threads: [],
+                                                                                  totalCommentCount: 200, totalThreadCount: 200)
+                                                   })
+
+        await viewModel.load()
+        await viewModel.loadEarlierComments()
+        await viewModel.loadMoreThreads()
+        shouldFail = true
+        await viewModel.loadEarlierComments()
+        shouldFail = false
+        try await viewModel.post(.general(body: "Thanks"))
+
+        XCTAssertEqual(requested, [
+            PullRequestCommentLimits(comments: 30, threads: 50),
+            PullRequestCommentLimits(comments: 60, threads: 50),
+            PullRequestCommentLimits(comments: 60, threads: 100),
+            PullRequestCommentLimits(comments: 90, threads: 100),
+            // The failed load did not count, and posting reloads as much as was shown.
+            PullRequestCommentLimits(comments: 60, threads: 100)
+        ])
+        XCTAssertEqual(viewModel.comments?.comments.map(\.databaseID), [60])
+        XCTAssertFalse(viewModel.isLoadingMoreComments)
+    }
+
     func testFailedCommentsLoadKeepsDetailAndShowsError() async {
         let viewModel = PullRequestDetailViewModel(reference: reference,
                                                    fetch: { [self] _ in detailContent(title: "Detail") },
-                                                   fetchComments: { _ in throw GraphQLError(message: "Comments failed") })
+                                                   fetchComments: { _, _ in throw GraphQLError(message: "Comments failed") })
 
         await viewModel.load()
 
@@ -194,7 +226,7 @@ final class PullRequestDetailViewModelTests: XCTestCase {
     func testFailedDetailLoadShowsNoComments() async {
         let viewModel = PullRequestDetailViewModel(reference: reference,
                                                    fetch: { _ in throw GraphQLError(message: "Detail failed") },
-                                                   fetchComments: { [self] _ in
+                                                   fetchComments: { [self] _, _ in
                                                        PullRequestComments(comments: [comment(1)], threads: [])
                                                    })
 
@@ -213,7 +245,7 @@ final class PullRequestDetailViewModelTests: XCTestCase {
                                                        await gate.waitForComments()
                                                        return detailContent(title: "Parallel")
                                                    },
-                                                   fetchComments: { _ in
+                                                   fetchComments: { _, _ in
                                                        await gate.commentsStarted()
                                                        return .empty
                                                    })
@@ -253,7 +285,7 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         let comments = PullRequestComments(comments: [comment(2)], threads: [])
         let viewModel = PullRequestDetailViewModel(reference: reference,
                                                    fetch: { [self] _ in detailContent(title: "Fresh") },
-                                                   fetchComments: { _ in comments },
+                                                   fetchComments: { _, _ in comments },
                                                    cache: cache)
 
         await viewModel.load()
@@ -300,7 +332,7 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         var stored = PullRequestComments.empty
         let viewModel = PullRequestDetailViewModel(reference: reference,
                                                    fetch: { [self] _ in detailContent(title: "Comments") },
-                                                   fetchComments: { _ in stored },
+                                                   fetchComments: { _, _ in stored },
                                                    postComment: { [self] _, _ in
                                                        stored = PullRequestComments(comments: [comment(5)], threads: [])
                                                    },
@@ -317,7 +349,7 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         var posted: [(NewPullRequestComment, PullRequestReference)] = []
         let viewModel = PullRequestDetailViewModel(reference: reference,
                                                    fetch: { [self] _ in detailContent(title: "Post") },
-                                                   fetchComments: { _ in stored },
+                                                   fetchComments: { _, _ in stored },
                                                    postComment: { [self] comment, reference in
                                                        posted.append((comment, reference))
                                                        stored = PullRequestComments(comments: [self.comment(9)], threads: [])
@@ -364,7 +396,7 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         var resolved = false
         let viewModel = PullRequestDetailViewModel(reference: reference,
                                                    fetch: { [self] _ in detailContent(title: "Resolve") },
-                                                   fetchComments: { [self] _ in
+                                                   fetchComments: { [self] _, _ in
                                                        let target = ReviewThread(id: "t", path: "a.swift", line: 1, startLine: nil,
                                                                                  side: .right, isResolved: resolved, isOutdated: false,
                                                                                  comments: [comment(1)])
@@ -389,7 +421,7 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         var commentFetches = 0
         let viewModel = PullRequestDetailViewModel(reference: reference,
                                                    fetch: { [self] _ in detailContent(title: "Fail") },
-                                                   fetchComments: { _ in
+                                                   fetchComments: { _, _ in
                                                        commentFetches += 1
                                                        return .empty
                                                    },
@@ -422,7 +454,7 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         var commentFetches = 0
         let viewModel = PullRequestDetailViewModel(reference: reference,
                                                    fetch: { [self] _ in detailContent(title: "Fail") },
-                                                   fetchComments: { _ in
+                                                   fetchComments: { _, _ in
                                                        commentFetches += 1
                                                        return .empty
                                                    },

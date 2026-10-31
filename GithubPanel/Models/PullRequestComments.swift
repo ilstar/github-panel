@@ -82,20 +82,63 @@ struct ReviewThread: Identifiable, Equatable {
     }
 }
 
+/// How much of a pull request's discussion to load. A busy pull request loads part of it, and the "more"
+/// buttons raise these by a step each.
+struct PullRequestCommentLimits: Equatable {
+    static let commentStep = 30
+    static let threadStep = 50
+
+    /// The newest general comments to load.
+    var comments = commentStep
+    /// The first review threads to load.
+    var threads = threadStep
+
+    func addingEarlierComments() -> PullRequestCommentLimits {
+        var limits = self
+        limits.comments += Self.commentStep
+        return limits
+    }
+
+    func addingThreads() -> PullRequestCommentLimits {
+        var limits = self
+        limits.threads += Self.threadStep
+        return limits
+    }
+}
+
 /// The comments on one pull request: general comments on the Conversation tab and review threads on the diff.
 struct PullRequestComments: Equatable {
+    /// The newest general comments, oldest first. Earlier ones may not be loaded yet.
     let comments: [PullRequestComment]
+    /// The first review threads. Later ones may not be loaded yet.
     let threads: [ReviewThread]
     /// The node ID of the viewer's pending review, whose draft comments wait to be submitted with a verdict.
     let pendingReviewID: String?
+    /// How many general comments the pull request has, loaded or not.
+    let totalCommentCount: Int
+    /// How many review threads the pull request has, loaded or not.
+    let totalThreadCount: Int
 
-    init(comments: [PullRequestComment], threads: [ReviewThread], pendingReviewID: String? = nil) {
+    init(comments: [PullRequestComment], threads: [ReviewThread], pendingReviewID: String? = nil,
+         totalCommentCount: Int? = nil, totalThreadCount: Int? = nil) {
         self.comments = comments
         self.threads = threads
         self.pendingReviewID = pendingReviewID
+        self.totalCommentCount = max(totalCommentCount ?? 0, comments.count)
+        self.totalThreadCount = max(totalThreadCount ?? 0, threads.count)
     }
 
     static let empty = PullRequestComments(comments: [], threads: [])
+
+    /// General comments older than the loaded ones.
+    var earlierCommentCount: Int {
+        totalCommentCount - comments.count
+    }
+
+    /// Review threads after the loaded ones.
+    var unloadedThreadCount: Int {
+        totalThreadCount - threads.count
+    }
 
     /// Draft comments in the viewer's pending review.
     var pendingCommentCount: Int {

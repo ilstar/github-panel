@@ -212,6 +212,8 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertTrue(body.query.contains(" review-requested:@me"))
         XCTAssertTrue(body.query.contains("is:pr is:open archived:false"))
         XCTAssertTrue(body.query.contains("headRefOid"))
+        XCTAssertTrue(body.query.contains("type: ISSUE, first: 10)"))
+        XCTAssertFalse(body.query.contains("first: 50"))
     }
 
     func testFetchReviewRequestsFollowsEachGroupsPages() async throws {
@@ -234,7 +236,7 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertEqual(requests.fromMyTeams.map(\.number), [2, 4])
         XCTAssertEqual(transport.requests.count, 3)
         let directPage = try transport.graphQLBody(at: 1)
-        XCTAssertTrue(directPage.query.contains("page: search(query: $query, type: ISSUE, first: 100, after: $after)"))
+        XCTAssertTrue(directPage.query.contains("page: search(query: $query, type: ISSUE, first: 10, after: $after)"))
         XCTAssertTrue(directPage.query.contains("fragment ReviewRequestFields on PullRequest"))
         XCTAssertEqual(directPage.variables["query"] as? String, "is:pr is:open archived:false user-review-requested:@me sort:updated-desc")
         XCTAssertEqual(directPage.variables["after"] as? String, "direct-1")
@@ -1239,7 +1241,8 @@ final class GitHubAPITests: XCTestCase {
                          isResolved: false, isOutdated: true, comments: [])
         ])
         let body = try transport.graphQLBody(at: 0)
-        XCTAssertTrue(body.query.contains("reviewThreads(first: 100)"))
+        XCTAssertTrue(body.query.contains("comments(last: 30) { totalCount pageInfo { hasNextPage: hasPreviousPage endCursor: startCursor }"))
+        XCTAssertTrue(body.query.contains("reviewThreads(first: 50)"))
         XCTAssertEqual(body.variables["owner"] as? String, "acme")
         XCTAssertEqual(body.variables["name"] as? String, "widgets")
         XCTAssertEqual(body.variables["number"] as? Int, 7)
@@ -1269,12 +1272,13 @@ final class GitHubAPITests: XCTestCase {
         let comments = try await GitHubAPI(transport: transport)
             .fetchPullRequestComments(token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7))
 
-        XCTAssertEqual(comments.comments.map(\.id), ["IC_1", "IC_2"])
+        // General comments page backwards from the newest, so the second page holds older ones.
+        XCTAssertEqual(comments.comments.map(\.id), ["IC_2", "IC_1"])
         XCTAssertEqual(comments.threads.map(\.id), ["RT_1", "RT_2"])
         XCTAssertEqual(comments.threads.map { $0.comments.map(\.id) }, [["RC_1", "RC_2"], ["RC_3"]])
         XCTAssertEqual(transport.requests.count, 4)
         let commentPage = try transport.graphQLBody(at: 1)
-        XCTAssertTrue(commentPage.query.contains("page: comments(first: 100, after: $after)"))
+        XCTAssertTrue(commentPage.query.contains("page: comments(last: 100, before: $after)"))
         XCTAssertTrue(commentPage.query.contains("fragment CommentFields on Comment"))
         XCTAssertEqual(commentPage.variables["after"] as? String, "comments-1")
         let threadPage = try transport.graphQLBody(at: 2)
@@ -1302,10 +1306,48 @@ final class GitHubAPITests: XCTestCase {
         }
 
         let comments = try await GitHubAPI(transport: transport)
-            .fetchPullRequestComments(token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7))
+            .fetchPullRequestComments(token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7),
+                                      limits: PullRequestCommentLimits(comments: 10_000, threads: 50))
 
         XCTAssertEqual(comments.comments.count, GitHubAPI.maxListPages)
         XCTAssertEqual(transport.requests.count, GitHubAPI.maxListPages)
+    }
+
+    func testFetchPullRequestCommentsStopsAtTheLimitsAndReportsTotals() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: """
+        {"data":{"repository":{"pullRequest":{
+          "comments":{"totalCount":75,"pageInfo":{"hasNextPage":true,"endCursor":"c1"},
+            "nodes":[\(commentJSON("IC_3")),\(commentJSON("IC_4"))]},
+          "reviewThreads":{"totalCount":120,"pageInfo":{"hasNextPage":true,"endCursor":"t1"},
+            "nodes":[\(threadJSON("RT_1", comments: [], hasMoreComments: false))]}
+        }}}}
+        """)
+        transport.enqueue(json: """
+        {"data":{"repository":{"pullRequest":{"page":{"pageInfo":{"hasNextPage":true,"endCursor":"c2"},
+          "nodes":[\(commentJSON("IC_1")),\(commentJSON("IC_2"))]}}}}}
+        """)
+        transport.enqueue(json: """
+        {"data":{"repository":{"pullRequest":{"page":{"pageInfo":{"hasNextPage":true,"endCursor":"t2"},
+          "nodes":[\(threadJSON("RT_2", comments: [], hasMoreComments: false)),\(threadJSON("RT_3", comments: [], hasMoreComments: false))]}}}}}
+        """)
+
+        let comments = try await GitHubAPI(transport: transport)
+            .fetchPullRequestComments(token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7),
+                                      limits: PullRequestCommentLimits(comments: 3, threads: 2))
+
+        // The newest three comments and the first two threads; the rest wait for a "more" button.
+        XCTAssertEqual(comments.comments.map(\.id), ["IC_2", "IC_3", "IC_4"])
+        XCTAssertEqual(comments.threads.map(\.id), ["RT_1", "RT_2"])
+        XCTAssertEqual(comments.totalCommentCount, 75)
+        XCTAssertEqual(comments.earlierCommentCount, 72)
+        XCTAssertEqual(comments.totalThreadCount, 120)
+        XCTAssertEqual(comments.unloadedThreadCount, 118)
+        XCTAssertEqual(transport.requests.count, 3)
+        let first = try transport.graphQLBody(at: 0)
+        XCTAssertTrue(first.query.contains("comments(last: 3)"))
+        XCTAssertTrue(first.query.contains("reviewThreads(first: 2)"))
+        XCTAssertEqual(try transport.graphQLBody(at: 1).variables["after"] as? String, "c1")
     }
 
     func testFetchPullRequestCommentsMarksDraftsInTheViewersPendingReview() async throws {
