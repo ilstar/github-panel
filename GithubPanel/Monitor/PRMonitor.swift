@@ -659,6 +659,11 @@ final class PRMonitor: ObservableObject {
         return try await api.fetchReviewerCandidates(token: token, reference: reference, query: query)
     }
 
+    func searchMentionCandidates(_ reference: PullRequestReference, query: String) async throws -> [MentionCandidate] {
+        guard let token = loadSessionToken() else { throw MissingTokenError() }
+        return try await api.searchMentionCandidates(token: token, reference: reference, query: query)
+    }
+
     /// Requests a review, or removes a request, then refreshes the list, whose review tag can change.
     func setReviewRequested(_ name: String, kind: PullRequestReviewer.Kind, requested: Bool,
                             on reference: PullRequestReference) async throws {

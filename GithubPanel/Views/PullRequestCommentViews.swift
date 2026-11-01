@@ -91,6 +91,7 @@ struct CommentComposer: View {
             HStack(alignment: .bottom, spacing: 10) {
                 ZStack(alignment: .topLeading) {
                     TextEditor(text: $text)
+                        .mentionAutocomplete()
                         .prFont(.body)
                         .scrollContentBackground(.hidden)
                         .focused($isFocused)
@@ -133,6 +134,7 @@ struct CommentComposer: View {
         VStack(alignment: .leading, spacing: 8) {
             ZStack(alignment: .topLeading) {
                 TextEditor(text: $text)
+                    .mentionAutocomplete()
                     .prFont(.body)
                     .scrollContentBackground(.hidden)
                     .focused($isFocused)

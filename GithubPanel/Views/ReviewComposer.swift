@@ -33,6 +33,7 @@ struct ReviewComposer: View {
             }
 
             TextEditor(text: $text)
+                .mentionAutocomplete()
                 .font(.body)
                 .scrollContentBackground(.hidden)
                 .focused($isFocused)

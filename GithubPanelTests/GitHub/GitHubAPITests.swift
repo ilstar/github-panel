@@ -811,6 +811,39 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertEqual(candidates.map(\.name), ["hubot"])
     }
 
+    func testSearchMentionCandidatesMatchesLoginOrNameAndListsRepositoryPeopleFirst() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: #"""
+        {"data":{
+          "repository":{"assignableUsers":{"nodes":[{"login":"monalisa","name":"Mona Lisa"}]}},
+          "search":{"nodes":[{"login":"mojombo","name":"Tom"},{},{"login":"monalisa","name":"Mona Lisa"}]}
+        }}
+        """#)
+
+        let candidates = try await GitHubAPI(transport: transport)
+            .searchMentionCandidates(token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7), query: "mo")
+
+        XCTAssertEqual(candidates, [MentionCandidate(login: "monalisa", name: "Mona Lisa"), MentionCandidate(login: "mojombo", name: "Tom")])
+        let body = try transport.graphQLBody(at: 0)
+        XCTAssertTrue(body.query.contains("assignableUsers(query: $query, first: 10)"))
+        XCTAssertTrue(body.query.contains("search(type: USER, query: $search, first: 10) @include(if: $hasQuery)"))
+        XCTAssertEqual(body.variables["owner"] as? String, "acme")
+        XCTAssertEqual(body.variables["query"] as? String, "mo")
+        XCTAssertEqual(body.variables["search"] as? String, "mo in:login in:name type:user")
+        XCTAssertEqual(body.variables["hasQuery"] as? Bool, true)
+    }
+
+    func testSearchMentionCandidatesSkipsTheUserSearchForABareAt() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: #"{"data":{"repository":{"assignableUsers":{"nodes":[{"login":"hubot","name":null}]}}}}"#)
+
+        let candidates = try await GitHubAPI(transport: transport)
+            .searchMentionCandidates(token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7), query: "")
+
+        XCTAssertEqual(candidates, [MentionCandidate(login: "hubot")])
+        XCTAssertEqual(try transport.graphQLBody(at: 0).variables["hasQuery"] as? Bool, false)
+    }
+
     func testSetReviewRequestedPostsUsersAndDeletesTeamsBySlug() async throws {
         let transport = MockHTTPTransport()
         transport.enqueue(json: #"{"number":7}"#)
