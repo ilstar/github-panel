@@ -33,6 +33,9 @@ protocol GitHubAPIClient {
     func rerunChecks(token: String, repoFullName: String, rerun: CheckRerun) async throws
     /// Users and teams that could review the pull request, matching `query`, for the reviewer picker.
     func fetchReviewerCandidates(token: String, reference: PullRequestReference, query: String) async throws -> [ReviewerCandidate]
+    /// GitHub users whose login or name matches `query`, for an @mention in a comment on the pull request.
+    /// People with access to its repository come first; an empty query lists only them.
+    func searchMentionCandidates(token: String, reference: PullRequestReference, query: String) async throws -> [MentionCandidate]
     /// Requests a review from a user or team (`org/team-slug`), or removes their request.
     func setReviewRequested(token: String, reference: PullRequestReference, name: String,
                             kind: PullRequestReviewer.Kind, requested: Bool) async throws

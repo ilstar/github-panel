@@ -126,6 +126,7 @@ struct PullRequestDetailView: View {
         .frame(minWidth: 420, minHeight: 400)
         .prFont(.body)
         .environment(\.pullRequestTextSize, prTextSize)
+        .environment(\.mentionSearch, { [viewModel] query in try await viewModel.mentionCandidates(matching: query) })
         .navigationTitle(navigationTitle)
         .focusedSceneValue(\.pullRequestDetail, actions)
         .task {
@@ -705,6 +706,7 @@ struct PullRequestBodyEditor: View {
                 switch tab {
                 case .write:
                     TextEditor(text: $text)
+                        .mentionAutocomplete()
                         .prFont(.body)
                         .scrollContentBackground(.hidden)
                         .focused($isFocused)

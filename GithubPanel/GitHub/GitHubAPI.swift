@@ -349,6 +349,38 @@ final class GitHubAPI: GitHubAPIClient {
             authorLogin: users.repository?.pullRequest?.author?.login ?? "")
     }
 
+    func searchMentionCandidates(token: String, reference: PullRequestReference, query: String) async throws -> [MentionCandidate] {
+        let (owner, name) = try repoParts(reference.repoFullName)
+        struct Response: Decodable {
+            struct User: Decodable { let login: String?; let name: String? }
+            struct Users: Decodable { let nodes: [User?] }
+            struct Repository: Decodable { let assignableUsers: Users }
+            let repository: Repository?
+            let search: Users?
+        }
+        let query = query.trimmingCharacters(in: .whitespaces)
+        // Repository people match a login or a name; the user search covers everyone else on GitHub.
+        // Organizations come back from a user search too, and decode without a login since they are not a User.
+        let response = try await graphQL(Response.self, query: """
+        query($owner: String!, $name: String!, $query: String!, $search: String!, $hasQuery: Boolean!) {
+          repository(owner: $owner, name: $name) {
+            assignableUsers(query: $query, first: 10) { nodes { login name } }
+          }
+          search(type: USER, query: $search, first: 10) @include(if: $hasQuery) {
+            nodes { ... on User { login name } }
+          }
+        }
+        """, variables: ["owner": owner, "name": name, "query": query,
+                         "search": "\(query) in:login in:name type:user", "hasQuery": !query.isEmpty], token: token)
+        func candidates(_ users: Response.Users?) -> [MentionCandidate] {
+            (users?.nodes ?? []).compactMap { user in
+                user?.login.map { MentionCandidate(login: $0, name: user?.name) }
+            }
+        }
+        return MentionCandidate.merged(repository: candidates(response.repository?.assignableUsers),
+                                       everyone: candidates(response.search))
+    }
+
     func setReviewRequested(token: String, reference: PullRequestReference, name: String,
                             kind: PullRequestReviewer.Kind, requested: Bool) async throws {
         let (owner, repo) = try repoParts(reference.repoFullName)

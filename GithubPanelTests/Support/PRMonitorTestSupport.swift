@@ -63,6 +63,8 @@ final class FakeGitHubAPI: GitHubAPIClient {
     var checks: PullRequestChecks = .empty
     var reviewerCandidates: [ReviewerCandidate] = []
     private(set) var reviewerCandidateCalls: [(token: String, reference: PullRequestReference, query: String)] = []
+    var mentionCandidates: [MentionCandidate] = []
+    private(set) var mentionCandidateCalls: [(token: String, reference: PullRequestReference, query: String)] = []
     private(set) var setReviewRequestedCalls: [(token: String, reference: PullRequestReference, name: String,
                                                 kind: PullRequestReviewer.Kind, requested: Bool)] = []
     private(set) var checksCalls: [(token: String, reference: PullRequestReference)] = []
@@ -222,6 +224,12 @@ final class FakeGitHubAPI: GitHubAPIClient {
         if let error { throw error }
         reviewerCandidateCalls.append((token, reference, query))
         return reviewerCandidates
+    }
+
+    func searchMentionCandidates(token: String, reference: PullRequestReference, query: String) async throws -> [MentionCandidate] {
+        if let error { throw error }
+        mentionCandidateCalls.append((token, reference, query))
+        return mentionCandidates
     }
 
     func setReviewRequested(token: String, reference: PullRequestReference, name: String,

@@ -32,6 +32,8 @@ final class PullRequestDetailViewModel: ObservableObject {
     typealias RerunChecks = (CheckRerun, String) async throws -> Void
     /// Users and teams the reviewer picker offers for a search.
     typealias FetchReviewerCandidates = (PullRequestReference, String) async throws -> [ReviewerCandidate]
+    /// GitHub users the @mention menu offers for what was typed after the "@".
+    typealias SearchMentionCandidates = (PullRequestReference, String) async throws -> [MentionCandidate]
     /// Requests a review from a user or team, or removes the request: its name, kind, and whether it is requested.
     typealias SetReviewRequested = (PullRequestReference, String, PullRequestReviewer.Kind, Bool) async throws -> Void
 
@@ -89,6 +91,7 @@ final class PullRequestDetailViewModel: ObservableObject {
     private let fetchChecks: FetchChecks
     private let sendRerun: RerunChecks
     private let fetchCandidates: FetchReviewerCandidates
+    private let searchMentions: SearchMentionCandidates
     private let sendReviewRequest: SetReviewRequested
     /// The pending review started here, until the comments reload with it. Keeps a failed reload from starting a second one.
     private var startedReviewID: String?
@@ -133,6 +136,7 @@ final class PullRequestDetailViewModel: ObservableObject {
          rerunChecks: @escaping RerunChecks = { _, _ in },
          fetchReviewerCandidates: @escaping FetchReviewerCandidates = { _, _ in [] },
          setReviewRequested: @escaping SetReviewRequested = { _, _, _, _ in },
+         searchMentionCandidates: @escaping SearchMentionCandidates = { _, _ in [] },
          cache: PullRequestDetailCache? = nil) {
         self.reference = reference
         self.fetch = fetch
@@ -152,6 +156,7 @@ final class PullRequestDetailViewModel: ObservableObject {
         self.sendRerun = rerunChecks
         self.fetchCandidates = fetchReviewerCandidates
         self.sendReviewRequest = setReviewRequested
+        self.searchMentions = searchMentionCandidates
         self.cache = cache
         if let cached = cache?.entry(for: reference) {
             apply(cached.content)
@@ -210,6 +215,9 @@ final class PullRequestDetailViewModel: ObservableObject {
                   },
                   setReviewRequested: { [monitor] reference, name, kind, requested in
                       try await monitor.setReviewRequested(name, kind: kind, requested: requested, on: reference)
+                  },
+                  searchMentionCandidates: { [monitor] reference, query in
+                      try await monitor.searchMentionCandidates(reference, query: query)
                   },
                   cache: monitor.detailCache)
     }
@@ -509,6 +517,10 @@ final class PullRequestDetailViewModel: ObservableObject {
 
     func reviewerCandidates(matching query: String) async throws -> [ReviewerCandidate] {
         try await fetchCandidates(reference, query)
+    }
+
+    func mentionCandidates(matching query: String) async throws -> [MentionCandidate] {
+        try await searchMentions(reference, query)
     }
 
     /// Requests a review from a user or team, or removes their request, like toggling them in GitHub's reviewer picker.

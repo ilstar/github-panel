@@ -515,6 +515,22 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
         locked { reviewRequestChanges[reference.id, default: []].append((name, kind, requested)) }
     }
 
+    func searchMentionCandidates(token: String, reference: PullRequestReference, query: String) async throws -> [MentionCandidate] {
+        let matches: (MentionCandidate) -> Bool = {
+            query.isEmpty || $0.login.localizedCaseInsensitiveContains(query) || $0.name?.localizedCaseInsensitiveContains(query) == true
+        }
+        return MentionCandidate.merged(repository: Self.mentionCandidates.prefix(3).filter(matches),
+                                       everyone: query.isEmpty ? [] : Self.mentionCandidates.filter(matches))
+    }
+
+    private static let mentionCandidates = [
+        MentionCandidate(login: "hubot", name: "Hubot"),
+        MentionCandidate(login: "monalisa", name: "Mona Lisa Octocat"),
+        MentionCandidate(login: "octocat", name: "The Octocat"),
+        MentionCandidate(login: "defunkt", name: "Chris Wanstrath"),
+        MentionCandidate(login: "mojombo", name: "Tom Preston-Werner")
+    ]
+
     private static let reviewerCandidates = [
         ReviewerCandidate(name: "hubot", kind: .user, detail: "Hubot"),
         ReviewerCandidate(name: "monalisa", kind: .user, detail: "Mona Lisa Octocat"),

@@ -713,6 +713,22 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.content?.detail.reviewers.reviewers.map(\.name), ["hubot"])
     }
 
+    func testMentionSearchAsksAboutThisPullRequest() async throws {
+        var searches: [(PullRequestReference, String)] = []
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+            fetch: { [self] _ in detailContent(title: "Title") },
+            searchMentionCandidates: { reference, query in
+                searches.append((reference, query))
+                return [MentionCandidate(login: "octocat")]
+            })
+
+        let candidates = try await viewModel.mentionCandidates(matching: "oct")
+
+        XCTAssertEqual(candidates.map(\.login), ["octocat"])
+        XCTAssertEqual(searches.map(\.0), [reference])
+        XCTAssertEqual(searches.map(\.1), ["oct"])
+    }
+
     func testRequestingReviewersNeedsPermission() async {
         var requestCount = 0
         let viewModel = PullRequestDetailViewModel(reference: reference,
