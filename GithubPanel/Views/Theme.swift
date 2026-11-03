@@ -222,14 +222,16 @@ struct RowIcon: View {
     let systemName: String
     let color: Color
     var inCircle = false
+    /// The disc's size with `inCircle`. The glyph scales with it.
+    var diameter: CGFloat = 19
 
     var body: some View {
         Group {
             if inCircle {
                 Image(systemName: systemName)
-                    .font(.system(size: 9.5, weight: .bold))
+                    .font(.system(size: diameter / 2, weight: .bold))
                     .foregroundStyle(.white)
-                    .frame(width: 19, height: 19)
+                    .frame(width: diameter, height: diameter)
                     .background(Circle().fill(color))
             } else {
                 Image(systemName: systemName)
@@ -239,7 +241,7 @@ struct RowIcon: View {
             }
         }
         .shadow(color: .black.opacity(0.14), radius: 1, y: 0.5)
-        .frame(width: 22)
+        .frame(width: max(22, diameter))
     }
 }
 

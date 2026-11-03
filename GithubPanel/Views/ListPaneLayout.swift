@@ -5,9 +5,10 @@ import AppKit
 /// The width is kept in UserDefaults so it survives selection changes and relaunches.
 enum ListPaneLayout {
     static let widthDefaultsKey = "GithubPanel.listPaneWidth"
-    static let defaultWidth: CGFloat = 600
-    /// Narrow enough to leave the pull request more room on small screens, wide enough for the tab picker and refresh button.
-    static let minWidth: CGFloat = 440
+    static let defaultWidth: CGFloat = 400
+    /// Narrow enough to leave the pull request more room on small screens, wide enough for a My PRs card's
+    /// number, age and status chips on one line.
+    static let minWidth: CGFloat = 360
     static let maxWidth: CGFloat = 760
     static let minDetailWidth: CGFloat = 420
     static let dividerWidth: CGFloat = 1

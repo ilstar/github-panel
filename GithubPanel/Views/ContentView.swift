@@ -138,21 +138,17 @@ struct ContentView: View {
 
     /// The title bar strip's height when the window reports none, such as in full screen.
     static let minimumTitleBarHeight: CGFloat = 44
-    /// Room kept for the window buttons at the left of the title bar strip, measured from the list pane's
-    /// content edge, so the tab switcher starts just after them.
-    static let windowButtonsWidth: CGFloat = 76
     /// The list pane's leading padding: the sidebar's inset plus the 6 points that keep rows inside its corners.
     static let listLeadingPadding: CGFloat = Theme.sidebarInset + 6
 
     private func listPane(titleBarHeight: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            // The window buttons sit on the left of this strip, and the tab switcher takes the rest of it.
-            HStack(spacing: 0) {
-                Color.clear
-                    .frame(width: Self.windowButtonsWidth)
-                PullRequestTabPicker(selection: $monitor.selectedTab)
-            }
-            .frame(height: titleBarHeight - Theme.sidebarInset)
+            // The window buttons have the title bar strip to themselves, and the tab switcher gets its own
+            // row below them, so the sidebar can be narrow.
+            Color.clear
+                .frame(height: titleBarHeight - Theme.sidebarInset)
+
+            PullRequestTabPicker(selection: $monitor.selectedTab)
 
             if monitor.isUsingMockData {
                 mockDataBanner
