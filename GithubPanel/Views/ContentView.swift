@@ -362,6 +362,10 @@ struct ContentView: View {
                                 didClickRow(pr.htmlURL)
                             }
                             .contextMenu {
+                                let action = mergeAction(for: pr).primaryAction
+                                Button(action.title, action: action.perform)
+                                    .disabled(!action.isEnabled)
+                                Divider()
                                 pullRequestContextMenu(pr.reference, htmlURL: pr.htmlURL)
                                 mergeMethodMenu(for: pr)
                             }
@@ -856,18 +860,19 @@ struct ContentView: View {
     /// The selected pull request's merge button, for the menu.
     private var primaryAction: PrimaryAction? {
         guard let pr = selectedOpenPullRequest else { return nil }
-        let state = MergeButtonState.resolve(for: pr, isWorking: mergeInFlight.contains(pr.id))
-        return PrimaryAction(title: state.title(mergeMethod: monitor.mergeMethod(for: pr)), isEnabled: state.isClickable) {
-            actOnPullRequest(pr: pr)
-        }
+        return mergeAction(for: pr).primaryAction
     }
 
     /// The merge button in the pull request toolbar. Nil when there is nothing to do or say that the row's icons do not show.
     private var mergeAction: PullRequestMergeAction? {
         guard let pr = selectedOpenPullRequest else { return nil }
-        let state = MergeButtonState.resolve(for: pr, isWorking: mergeInFlight.contains(pr.id))
-        guard state.isShown else { return nil }
-        return PullRequestMergeAction(state: state, mergeMethod: monitor.mergeMethod(for: pr)) {
+        let action = mergeAction(for: pr)
+        return action.state.isShown ? action : nil
+    }
+
+    private func mergeAction(for pr: PullRequestRow) -> PullRequestMergeAction {
+        PullRequestMergeAction(state: .resolve(for: pr, isWorking: mergeInFlight.contains(pr.id)),
+                               mergeMethod: monitor.mergeMethod(for: pr)) {
             actOnPullRequest(pr: pr)
         }
     }

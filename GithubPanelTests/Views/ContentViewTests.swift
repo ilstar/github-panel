@@ -5,6 +5,43 @@ import SwiftUI
 
 @MainActor
 final class ContentViewTests: XCTestCase {
+    func testPrimaryActionMatchesTheToolbarAndPerformsTheProvidedRowAction() {
+        let states: [MergeButtonState] = [.markReady, .enqueue, .merge, .enableAutoMerge, .disableAutoMerge]
+        for state in states {
+            for method in MergeMethod.allCases {
+                var performedRows: [String] = []
+                let selected = PullRequestMergeAction(state: state, mergeMethod: method) {
+                    performedRows.append("selected")
+                }
+                let clicked = PullRequestMergeAction(state: state, mergeMethod: method) {
+                    performedRows.append("right-clicked")
+                }
+
+                XCTAssertEqual(clicked.primaryAction.title, state.title(mergeMethod: method))
+                XCTAssertTrue(clicked.primaryAction.isEnabled)
+                clicked.primaryAction.perform()
+                XCTAssertEqual(performedRows, ["right-clicked"])
+                selected.primaryAction.perform()
+                XCTAssertEqual(performedRows, ["right-clicked", "selected"])
+            }
+        }
+    }
+
+    func testUnavailablePrimaryActionsCannotPerform() {
+        let states: [MergeButtonState] = [.queued, .checksFailed, .blocked(.conflicts), .statusUnavailable,
+                                          .waitingForChecks, .working]
+        for state in states {
+            var performed = false
+            let action = PullRequestMergeAction(state: state, mergeMethod: .squash) {
+                performed = true
+            }.primaryAction
+
+            XCTAssertFalse(action.isEnabled)
+            action.perform()
+            XCTAssertFalse(performed, "\(state) must not perform an action")
+        }
+    }
+
     func testEmptyPullRequestsBackgroundAssetIsAvailable() {
         XCTAssertNotNil(NSImage(named: EmptyPullRequestsBackground.imageName))
     }

@@ -6,6 +6,14 @@ struct PullRequestMergeAction {
     /// The method the Merge and Enable auto-merge buttons use.
     let mergeMethod: MergeMethod
     let perform: () -> Void
+
+    /// Menu items use the same label and availability as the toolbar button.
+    var primaryAction: PrimaryAction {
+        PrimaryAction(title: state.title(mergeMethod: mergeMethod), isEnabled: state.isClickable) {
+            guard state.isClickable else { return }
+            perform()
+        }
+    }
 }
 
 /// Merge, Add to queue, Mark ready or auto-merge in the pull request toolbar, sized like its other buttons.
@@ -58,8 +66,7 @@ struct MergeActionButton: View {
     }
 
     private func handleClick() {
-        guard state.isClickable else { return }
-        action.perform()
+        action.primaryAction.perform()
     }
 
     private var help: String {
