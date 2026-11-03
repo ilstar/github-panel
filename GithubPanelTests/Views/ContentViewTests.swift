@@ -29,4 +29,25 @@ final class ContentViewTests: XCTestCase {
         host.layoutSubtreeIfNeeded()
         XCTAssertEqual(host.fittingSize.width, 420, accuracy: 1)
     }
+
+    func testTabSwitcherSitsJustUnderTheWindowButtons() throws {
+        // The title bar strip is taller than the buttons, so the switcher must not wait for the strip to end.
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800),
+                              styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                              backing: .buffered,
+                              defer: false)
+        window.titlebarAppearsTransparent = true
+        WindowToolbarStripView.install(in: window)
+
+        let zoom = try XCTUnwrap(window.standardWindowButton(.zoomButton))
+        let contentHeight = try XCTUnwrap(window.contentView).frame.height
+        let buttonsBottom = contentHeight - zoom.convert(zoom.bounds, to: nil).minY
+        let titleBarHeight = TitleBarDoubleClickView.titleBarHeight(of: window)
+        let switcherTop = Theme.sidebarInset
+            + ContentView.windowButtonsClearance(titleBarHeight: titleBarHeight)
+            + ContentView.listPaneSpacing
+
+        XCTAssertGreaterThanOrEqual(switcherTop - buttonsBottom, 6)
+        XCTAssertLessThanOrEqual(switcherTop - buttonsBottom, 18)
+    }
 }
