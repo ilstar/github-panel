@@ -15,7 +15,7 @@ struct PRRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
+            HStack(spacing: 10) {
                 statusIcon
                 summary
             }
@@ -43,12 +43,10 @@ struct PRRow: View {
                         detail: "Updated \(relativeFormatter.localizedString(for: pr.updatedAt, relativeTo: now))")
 
             HStack(spacing: 6) {
-                StatusChip(kindSymbol: "hammer.fill",
-                           stateSymbol: pr.status.chipSymbolName,
+                StatusChip(symbolName: "hammer.fill",
                            color: pr.status.tint,
                            help: pr.status.descriptionText)
-                StatusChip(kindSymbol: "person.fill",
-                           stateSymbol: reviewIndicator.symbolName,
+                StatusChip(symbolName: "person.fill",
                            color: reviewIndicator.color,
                            help: reviewHelp)
             }
@@ -190,27 +188,23 @@ struct PRRow: View {
     }
 }
 
-/// A small capsule on a My PRs card: a glyph for what it is about, such as checks or reviews, and one
-/// for how that stands. The state glyph keeps the meaning when the color alone is hard to tell apart.
+/// A small capsule on a My PRs card: a glyph for what it is about, such as checks or reviews, in the
+/// color of how that stands. The tooltip spells the state out.
 struct StatusChip: View {
-    let kindSymbol: String
-    let stateSymbol: String
+    let symbolName: String
     let color: Color
     let help: String
 
     var body: some View {
-        HStack(spacing: 3) {
-            Image(systemName: kindSymbol)
-            Image(systemName: stateSymbol)
-        }
-        .font(.system(size: 9.5, weight: .bold))
-        .padding(.horizontal, 7)
-        .frame(height: 18)
-        .background(Capsule().fill(color.opacity(0.14)))
-        .foregroundStyle(color)
-        .help(help)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(help)
+        Image(systemName: symbolName)
+            .font(.system(size: 9.5, weight: .bold))
+            .padding(.horizontal, 8)
+            .frame(height: 18)
+            .background(Capsule().fill(color.opacity(0.16)))
+            .foregroundStyle(color)
+            .help(help)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(help)
     }
 }
 
@@ -238,15 +232,6 @@ extension PullRequestState {
 }
 
 extension ReviewIndicator {
-    var symbolName: String {
-        switch self {
-        case .none: return "minus"
-        case .waiting: return "clock"
-        case .approved: return "checkmark"
-        case .changesRequested: return "xmark"
-        }
-    }
-
     var color: Color {
         switch self {
         case .none: return .secondary
@@ -265,17 +250,6 @@ extension CheckState {
         case .failure, .error: return "xmark.circle.fill"
         case .pending: return "clock.circle.fill"
         case .unknown: return "questionmark.circle.fill"
-        }
-    }
-
-    /// The bare state glyph in a ``StatusChip``.
-    var chipSymbolName: String {
-        switch self {
-        case .success: return "checkmark"
-        case .noChecks: return "minus"
-        case .failure, .error: return "xmark"
-        case .pending: return "clock"
-        case .unknown: return "questionmark"
         }
     }
 
