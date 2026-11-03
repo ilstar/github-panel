@@ -66,11 +66,35 @@ struct PRRow: View {
         [reviewIndicator.title + ".", pr.reviewStatus.helpText].compactMap { $0 }.joined(separator: "\n")
     }
 
+    @ViewBuilder
     private var statusIcon: some View {
         let state = PullRequestState(pr)
-        return RowIcon(systemName: state.symbolName, color: state.tint, inCircle: true, diameter: 22)
-            .help(state.title)
-            .accessibilityLabel(state.title)
+        Group {
+            if state == .open {
+                PullRequestDiscIcon(color: state.tint, diameter: 22)
+            } else {
+                RowIcon(systemName: state.symbolName, color: state.tint, inCircle: true, diameter: 22)
+            }
+        }
+        .help(state.title)
+        .accessibilityLabel(state.title)
+    }
+}
+
+/// The open state's icon: GitHub's pull request mark, without its arrowhead, white on a colored disc like
+/// ``RowIcon``. SF Symbols has no close match for the mark.
+struct PullRequestDiscIcon: View {
+    let color: Color
+    var diameter: CGFloat = 19
+
+    var body: some View {
+        PullRequestGlyph(showsArrow: false)
+            .stroke(.white, style: StrokeStyle(lineWidth: diameter * 0.068, lineCap: .round, lineJoin: .round))
+            .frame(width: diameter * 0.55, height: diameter * 0.55)
+            .frame(width: diameter, height: diameter)
+            .background(Circle().fill(color))
+            .shadow(color: .black.opacity(0.14), radius: 1, y: 0.5)
+            .frame(width: max(22, diameter))
     }
 }
 

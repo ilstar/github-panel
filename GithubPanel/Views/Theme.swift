@@ -441,6 +441,9 @@ struct AvatarView: View {
 /// GitHub's pull request mark: two commits on a branch and an arrow into the base. Drawn on a 24-point grid
 /// and scaled to fit, so stroke it with a width suited to its size.
 struct PullRequestGlyph: Shape {
+    /// Off for small sizes, such as the My PRs row icon, where the arrowhead would blur into the curve.
+    var showsArrow = true
+
     func path(in rect: CGRect) -> Path {
         let scale = min(rect.width, rect.height) / 24
         func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
@@ -460,9 +463,11 @@ struct PullRequestGlyph: Shape {
         path.addLine(to: point(18, 10))
         path.addQuadCurve(to: point(15, 7), control: point(18, 7))
         path.addLine(to: point(10.5, 7))
-        path.move(to: point(12.8, 4.6))
-        path.addLine(to: point(10.4, 7))
-        path.addLine(to: point(12.8, 9.4))
+        if showsArrow {
+            path.move(to: point(12.8, 4.6))
+            path.addLine(to: point(10.4, 7))
+            path.addLine(to: point(12.8, 9.4))
+        }
         return path
     }
 }

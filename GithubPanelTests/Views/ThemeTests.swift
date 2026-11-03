@@ -24,6 +24,17 @@ final class ThemeTests: XCTestCase {
         }
     }
 
+    func testPullRequestGlyphCanLeaveOutItsArrowhead() {
+        // The arrowhead is one move and two lines; the row icon drops it.
+        func elementCount(_ glyph: PullRequestGlyph) -> Int {
+            var count = 0
+            glyph.path(in: CGRect(x: 0, y: 0, width: 24, height: 24)).forEach { _ in count += 1 }
+            return count
+        }
+
+        XCTAssertEqual(elementCount(PullRequestGlyph()) - elementCount(PullRequestGlyph(showsArrow: false)), 3)
+    }
+
     func testAvatarColorStaysTheSameForALogin() {
         XCTAssertEqual(AvatarView.paletteIndex(for: "octocat"), AvatarView.paletteIndex(for: "octocat"))
         XCTAssertEqual(AvatarView.paletteIndex(for: "Octocat"), AvatarView.paletteIndex(for: "octocat"))
