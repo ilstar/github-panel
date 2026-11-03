@@ -9,16 +9,14 @@ struct PRRow: View {
     @State private var isHovering = false
 
     var body: some View {
-        HStack(spacing: 10) {
-            HStack(spacing: 10) {
-                statusIcon
-                summary
-            }
-
-            Spacer(minLength: 8)
-
-            statusChips
+        HStack(spacing: 12) {
+            statusIcon
+            summary
+            Spacer(minLength: 0)
         }
+        // A little roomier than the other tabs' rows, so the chips sit comfortably under the title.
+        .padding(.vertical, 4)
+        .padding(.horizontal, 2)
         .listRowBackground(isSelected: isSelected, isHovering: isHovering, isCard: true)
         .onHover { hovering in
             isHovering = hovering
@@ -26,18 +24,28 @@ struct PRRow: View {
     }
 
     private var summary: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 7) {
             Text(pr.title)
-                .font(.system(size: 13.5, weight: .semibold))
+                .font(.system(size: 14, weight: .semibold))
                 .lineLimit(1)
                 .help(pr.title)
 
-            RowSubtitle(text: "\(pr.repoFullName)#\(String(pr.number))",
-                        detail: "Updated \(relativeFormatter.localizedString(for: pr.updatedAt, relativeTo: now))")
+            // The repository gives way first when the row is narrow, so the age and chips stay whole.
+            HStack(spacing: 8) {
+                Text("\(pr.repoFullName)#\(String(pr.number))")
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Text(CompactAge.string(from: pr.updatedAt, to: now))
+                    .foregroundStyle(.tertiary)
+                    .fixedSize()
+                    .help("Updated \(relativeFormatter.localizedString(for: pr.updatedAt, relativeTo: now))")
+                statusChips
+            }
+            .font(.system(size: 11.5))
         }
     }
 
-    /// Checks and reviews, at the card's trailing edge.
+    /// Checks and reviews, beside the pull request's number.
     private var statusChips: some View {
         HStack(spacing: 6) {
             StatusChip(symbolName: "hammer.fill",
@@ -58,11 +66,35 @@ struct PRRow: View {
         [reviewIndicator.title + ".", pr.reviewStatus.helpText].compactMap { $0 }.joined(separator: "\n")
     }
 
+    @ViewBuilder
     private var statusIcon: some View {
         let state = PullRequestState(pr)
-        return RowIcon(systemName: state.symbolName, color: state.tint, inCircle: true)
-            .help(state.title)
-            .accessibilityLabel(state.title)
+        Group {
+            if state == .open {
+                PullRequestDiscIcon(color: state.tint, diameter: 22)
+            } else {
+                RowIcon(systemName: state.symbolName, color: state.tint, inCircle: true, diameter: 22)
+            }
+        }
+        .help(state.title)
+        .accessibilityLabel(state.title)
+    }
+}
+
+/// The open state's icon: GitHub's pull request mark, without its arrowhead, white on a colored disc like
+/// ``RowIcon``. SF Symbols has no close match for the mark.
+struct PullRequestDiscIcon: View {
+    let color: Color
+    var diameter: CGFloat = 19
+
+    var body: some View {
+        PullRequestGlyph(showsArrow: false)
+            .stroke(.white, style: StrokeStyle(lineWidth: diameter * 0.068, lineCap: .round, lineJoin: .round))
+            .frame(width: diameter * 0.55, height: diameter * 0.55)
+            .frame(width: diameter, height: diameter)
+            .background(Circle().fill(color))
+            .shadow(color: .black.opacity(0.14), radius: 1, y: 0.5)
+            .frame(width: max(22, diameter))
     }
 }
 
@@ -77,7 +109,7 @@ struct StatusChip: View {
         Image(systemName: symbolName)
             .font(.system(size: 9.5, weight: .bold))
             .padding(.horizontal, 8)
-            .frame(height: 18)
+            .frame(height: 20)
             .background(Capsule().fill(color.opacity(0.16)))
             .foregroundStyle(color)
             .help(help)

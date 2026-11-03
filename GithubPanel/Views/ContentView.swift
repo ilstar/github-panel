@@ -138,21 +138,25 @@ struct ContentView: View {
 
     /// The title bar strip's height when the window reports none, such as in full screen.
     static let minimumTitleBarHeight: CGFloat = 44
-    /// Room kept for the window buttons at the left of the title bar strip, measured from the list pane's
-    /// content edge, so the tab switcher starts just after them.
-    static let windowButtonsWidth: CGFloat = 76
     /// The list pane's leading padding: the sidebar's inset plus the 6 points that keep rows inside its corners.
     static let listLeadingPadding: CGFloat = Theme.sidebarInset + 6
+    /// The gap between the list pane's sections, such as between the window buttons and the tab switcher.
+    static let listPaneSpacing: CGFloat = 12
+    /// The empty space at the top of the list pane. It ends at the window buttons' bottom edge, which AppKit
+    /// puts at the middle of the unified toolbar's strip, rather than at the bottom of the strip, so the tab
+    /// switcher sits just under the buttons.
+    static func windowButtonsClearance(titleBarHeight: CGFloat) -> CGFloat {
+        max(0, titleBarHeight / 2 - Theme.sidebarInset)
+    }
 
     private func listPane(titleBarHeight: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // The window buttons sit on the left of this strip, and the tab switcher takes the rest of it.
-            HStack(spacing: 0) {
-                Color.clear
-                    .frame(width: Self.windowButtonsWidth)
-                PullRequestTabPicker(selection: $monitor.selectedTab)
-            }
-            .frame(height: titleBarHeight - Theme.sidebarInset)
+        VStack(alignment: .leading, spacing: Self.listPaneSpacing) {
+            // The window buttons have the top to themselves, and the tab switcher gets its own row below
+            // them, so the sidebar can be narrow.
+            Color.clear
+                .frame(height: Self.windowButtonsClearance(titleBarHeight: titleBarHeight))
+
+            PullRequestTabPicker(selection: $monitor.selectedTab)
 
             if monitor.isUsingMockData {
                 mockDataBanner

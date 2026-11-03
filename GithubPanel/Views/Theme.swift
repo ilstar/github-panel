@@ -222,14 +222,16 @@ struct RowIcon: View {
     let systemName: String
     let color: Color
     var inCircle = false
+    /// The disc's size with `inCircle`. The glyph scales with it.
+    var diameter: CGFloat = 19
 
     var body: some View {
         Group {
             if inCircle {
                 Image(systemName: systemName)
-                    .font(.system(size: 9.5, weight: .bold))
+                    .font(.system(size: diameter / 2, weight: .bold))
                     .foregroundStyle(.white)
-                    .frame(width: 19, height: 19)
+                    .frame(width: diameter, height: diameter)
                     .background(Circle().fill(color))
             } else {
                 Image(systemName: systemName)
@@ -239,7 +241,7 @@ struct RowIcon: View {
             }
         }
         .shadow(color: .black.opacity(0.14), radius: 1, y: 0.5)
-        .frame(width: 22)
+        .frame(width: max(22, diameter))
     }
 }
 
@@ -439,6 +441,9 @@ struct AvatarView: View {
 /// GitHub's pull request mark: two commits on a branch and an arrow into the base. Drawn on a 24-point grid
 /// and scaled to fit, so stroke it with a width suited to its size.
 struct PullRequestGlyph: Shape {
+    /// Off for small sizes, such as the My PRs row icon, where the arrowhead would blur into the curve.
+    var showsArrow = true
+
     func path(in rect: CGRect) -> Path {
         let scale = min(rect.width, rect.height) / 24
         func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
@@ -458,9 +463,11 @@ struct PullRequestGlyph: Shape {
         path.addLine(to: point(18, 10))
         path.addQuadCurve(to: point(15, 7), control: point(18, 7))
         path.addLine(to: point(10.5, 7))
-        path.move(to: point(12.8, 4.6))
-        path.addLine(to: point(10.4, 7))
-        path.addLine(to: point(12.8, 9.4))
+        if showsArrow {
+            path.move(to: point(12.8, 4.6))
+            path.addLine(to: point(10.4, 7))
+            path.addLine(to: point(12.8, 9.4))
+        }
         return path
     }
 }

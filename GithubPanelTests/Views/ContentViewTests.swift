@@ -30,8 +30,8 @@ final class ContentViewTests: XCTestCase {
         XCTAssertEqual(host.fittingSize.width, 420, accuracy: 1)
     }
 
-    func testTabSwitcherInTheTitleBarStripStartsAfterTheWindowButtons() throws {
-        // The switcher shares the title bar strip with the window buttons, so it must begin to their right.
+    func testTabSwitcherSitsJustUnderTheWindowButtons() throws {
+        // The title bar strip is taller than the buttons, so the switcher must not wait for the strip to end.
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                               backing: .buffered,
@@ -40,11 +40,14 @@ final class ContentViewTests: XCTestCase {
         WindowToolbarStripView.install(in: window)
 
         let zoom = try XCTUnwrap(window.standardWindowButton(.zoomButton))
-        let buttonsEnd = zoom.convert(zoom.bounds, to: nil).maxX
-        let switcherStart = ContentView.listLeadingPadding + ContentView.windowButtonsWidth
+        let contentHeight = try XCTUnwrap(window.contentView).frame.height
+        let buttonsBottom = contentHeight - zoom.convert(zoom.bounds, to: nil).minY
+        let titleBarHeight = TitleBarDoubleClickView.titleBarHeight(of: window)
+        let switcherTop = Theme.sidebarInset
+            + ContentView.windowButtonsClearance(titleBarHeight: titleBarHeight)
+            + ContentView.listPaneSpacing
 
-        XCTAssertLessThanOrEqual(buttonsEnd + 6, switcherStart)
-        // And not so far that it leaves a wide empty gap.
-        XCTAssertLessThanOrEqual(switcherStart - buttonsEnd, 24)
+        XCTAssertGreaterThanOrEqual(switcherTop - buttonsBottom, 6)
+        XCTAssertLessThanOrEqual(switcherTop - buttonsBottom, 18)
     }
 }
