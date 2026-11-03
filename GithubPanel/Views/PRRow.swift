@@ -16,6 +16,8 @@ struct PRRow: View {
             }
 
             Spacer(minLength: 8)
+
+            statusChips
         }
         .listRowBackground(isSelected: isSelected, isHovering: isHovering, isCard: true)
         .onHover { hovering in
@@ -32,17 +34,20 @@ struct PRRow: View {
 
             RowSubtitle(text: "\(pr.repoFullName)#\(String(pr.number))",
                         detail: "Updated \(relativeFormatter.localizedString(for: pr.updatedAt, relativeTo: now))")
-
-            HStack(spacing: 6) {
-                StatusChip(symbolName: "hammer.fill",
-                           color: pr.status.tint,
-                           help: pr.status.descriptionText)
-                StatusChip(symbolName: "person.fill",
-                           color: reviewIndicator.color,
-                           help: reviewHelp)
-            }
-            .padding(.top, 3)
         }
+    }
+
+    /// Checks and reviews, at the card's trailing edge.
+    private var statusChips: some View {
+        HStack(spacing: 6) {
+            StatusChip(symbolName: "hammer.fill",
+                       color: pr.status.tint,
+                       help: pr.status.descriptionText)
+            StatusChip(symbolName: "person.fill",
+                       color: reviewIndicator.color,
+                       help: reviewHelp)
+        }
+        .fixedSize()
     }
 
     private var reviewIndicator: ReviewIndicator {
@@ -98,7 +103,7 @@ extension PullRequestState {
         case .conflict: return Theme.orange
         case .draft: return .secondary
         case .queued: return Theme.purple
-        case .autoMerge: return Theme.branch
+        case .autoMerge: return Theme.amber
         case .open: return Theme.green
         }
     }
