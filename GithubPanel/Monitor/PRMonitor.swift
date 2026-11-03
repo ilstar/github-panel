@@ -731,7 +731,7 @@ final class PRMonitor: ObservableObject {
         guard !row.isDraft, let token = loadSessionToken() else { return }
         let session = credentialSession
         do {
-            // Use the same resolver as the row's button so the label and the action cannot drift apart.
+            // Use the same resolver as the merge button so the label and the action cannot drift apart.
             switch MergeButtonState.resolve(for: row, isWorking: false) {
             case .enqueue:
                 try await api.enqueuePullRequest(token: token, pullRequestID: row.nodeID)

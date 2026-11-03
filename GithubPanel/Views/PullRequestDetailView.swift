@@ -18,9 +18,12 @@ struct PullRequestDetailView: View {
     @Environment(\.titleBarHeight) private var titleBarHeight
     /// Goes up by one each time the comment box should take focus.
     @State private var commentFocusRequest = 0
+    /// The merge button, for a pull request of yours selected on My PRs.
+    private let mergeAction: PullRequestMergeAction?
 
-    init(viewModel: @autoclosure @escaping () -> PullRequestDetailViewModel) {
+    init(viewModel: @autoclosure @escaping () -> PullRequestDetailViewModel, mergeAction: PullRequestMergeAction? = nil) {
         _viewModel = StateObject(wrappedValue: viewModel())
+        self.mergeAction = mergeAction
     }
 
     var body: some View {
@@ -42,7 +45,8 @@ struct PullRequestDetailView: View {
                                          pendingCommentCount: viewModel.pendingCommentCount,
                                          onDiscardReview: viewModel.isReviewPending ? {
                                              try await viewModel.discardPendingReview()
-                                         } : nil)
+                                         } : nil,
+                                         mergeAction: mergeAction)
                     .padding(.leading, 24)
                     .padding(.trailing, 16)
                     .frame(height: max(titleBarHeight ?? 0, 54))
@@ -212,6 +216,8 @@ struct PullRequestDetailToolbar: View {
     var pendingCommentCount = 0
     /// Discards the pending review. Nil when no review is pending.
     var onDiscardReview: (() async throws -> Void)?
+    /// Merge, Add to queue, Mark ready or auto-merge. Nil outside My PRs.
+    var mergeAction: PullRequestMergeAction?
 
     var body: some View {
         HStack(spacing: 6) {
@@ -289,6 +295,10 @@ struct PullRequestDetailToolbar: View {
                                        }
                                    })
                 }
+            }
+
+            if let mergeAction {
+                MergeActionButton(action: mergeAction)
             }
         }
     }

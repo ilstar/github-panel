@@ -179,7 +179,8 @@ struct ContentView: View {
         if let reference = selectedReference, detailPaneMode == .web {
             PullRequestWebPane(reference: reference, session: webSession.session)
         } else if let reference = selectedReference {
-            PullRequestDetailView(viewModel: PullRequestDetailViewModel(reference: reference, monitor: monitor))
+            PullRequestDetailView(viewModel: PullRequestDetailViewModel(reference: reference, monitor: monitor),
+                                  mergeAction: mergeAction)
             .id(reference)
             .environment(\.pageScroller, pageScroller)
         } else {
@@ -340,7 +341,7 @@ struct ContentView: View {
     private var openPullRequestsList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 2) {
+                LazyVStack(spacing: 6) {
                     if monitor.prRows.isEmpty {
                         emptyStateSpacer
                     } else {
@@ -349,12 +350,7 @@ struct ContentView: View {
                                 pr: pr,
                                 isSelected: selectedPRID == pr.id,
                                 relativeFormatter: relativeFormatter,
-                                now: now,
-                                isMerging: mergeInFlight.contains(pr.id),
-                                mergeMethod: monitor.mergeMethod(for: pr),
-                                onAction: {
-                                    actOnPullRequest(pr: pr)
-                                }
+                                now: now
                             )
                             .id(pr.id)
                             .onTapGesture {
@@ -847,12 +843,27 @@ struct ContentView: View {
                                })
     }
 
-    /// The selected row's merge button, for the menu. Only rows on My PRs have one.
+    /// The selected pull request on My PRs, the only tab whose pull requests can be merged from here.
+    private var selectedOpenPullRequest: PullRequestRow? {
+        guard monitor.selectedTab == .open else { return nil }
+        return monitor.prRows.first { $0.id == selectedPRID }
+    }
+
+    /// The selected pull request's merge button, for the menu.
     private var primaryAction: PrimaryAction? {
-        guard monitor.selectedTab == .open,
-              let pr = monitor.prRows.first(where: { $0.id == selectedPRID }) else { return nil }
+        guard let pr = selectedOpenPullRequest else { return nil }
         let state = MergeButtonState.resolve(for: pr, isWorking: mergeInFlight.contains(pr.id))
         return PrimaryAction(title: state.title(mergeMethod: monitor.mergeMethod(for: pr)), isEnabled: state.isClickable) {
+            actOnPullRequest(pr: pr)
+        }
+    }
+
+    /// The merge button in the pull request toolbar. Nil when there is nothing to do or say that the row's icons do not show.
+    private var mergeAction: PullRequestMergeAction? {
+        guard let pr = selectedOpenPullRequest else { return nil }
+        let state = MergeButtonState.resolve(for: pr, isWorking: mergeInFlight.contains(pr.id))
+        guard state.isShown else { return nil }
+        return PullRequestMergeAction(state: state, mergeMethod: monitor.mergeMethod(for: pr)) {
             actOnPullRequest(pr: pr)
         }
     }

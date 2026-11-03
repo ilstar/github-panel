@@ -20,7 +20,7 @@ enum MergeMethod: String, CaseIterable, Identifiable {
         }
     }
 
-    /// The row's merge button.
+    /// The label on the merge button in the pull request toolbar.
     var buttonTitle: String {
         switch self {
         case .merge: return "Merge"

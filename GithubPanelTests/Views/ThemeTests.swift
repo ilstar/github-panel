@@ -18,6 +18,12 @@ final class ThemeTests: XCTestCase {
         }
     }
 
+    func testPullRequestStateIconsAreBareGlyphsForTheRowDisc() {
+        for state in [PullRequestState.conflict, .draft, .queued, .autoMerge, .open] {
+            XCTAssertFalse(state.symbolName.contains("circle"), state.symbolName)
+        }
+    }
+
     func testAvatarColorStaysTheSameForALogin() {
         XCTAssertEqual(AvatarView.paletteIndex(for: "octocat"), AvatarView.paletteIndex(for: "octocat"))
         XCTAssertEqual(AvatarView.paletteIndex(for: "Octocat"), AvatarView.paletteIndex(for: "octocat"))

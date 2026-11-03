@@ -12,7 +12,7 @@ struct PullRequestListActions {
 struct SelectedPullRequestActions {
     let htmlURL: URL
     let openInNewWindow: () -> Void
-    /// The row's merge button. Only pull requests on My PRs have one.
+    /// The merge button. Only pull requests on My PRs have one.
     var primaryAction: PrimaryAction?
 }
 
