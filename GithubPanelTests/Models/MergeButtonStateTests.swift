@@ -69,7 +69,7 @@ final class MergeButtonStateTests: XCTestCase {
         XCTAssertEqual(MergeButtonState.resolve(for: autoMergeOn, isWorking: false), .disableAutoMerge)
     }
 
-    func testRowShowsActionsAndOnlyTheReasonsNoIconCovers() {
+    func testButtonShowsActionsAndOnlyTheReasonsNoIconCovers() {
         let shown: [MergeButtonState] = [.markReady, .enqueue, .merge, .enableAutoMerge, .disableAutoMerge, .working,
                                          .blocked(.behindBase), .blocked(.branchRules),
                                          .blocked(.checkingMergeability), .blocked(.other)]
@@ -77,8 +77,8 @@ final class MergeButtonStateTests: XCTestCase {
         let hidden: [MergeButtonState] = [.queued, .checksFailed, .statusUnavailable, .waitingForChecks,
                                           .blocked(.conflicts), .blocked(.changesRequested), .blocked(.needsApproval)]
 
-        for state in shown { XCTAssertTrue(state.isShownOnRow, state.title) }
-        for state in hidden { XCTAssertFalse(state.isShownOnRow, state.title) }
+        for state in shown { XCTAssertTrue(state.isShown, state.title) }
+        for state in hidden { XCTAssertFalse(state.isShown, state.title) }
     }
 
     func testActionableButtonsHaveNoHelpText() {

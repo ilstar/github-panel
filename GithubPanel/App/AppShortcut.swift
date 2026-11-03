@@ -78,7 +78,7 @@ enum AppShortcut: CaseIterable {
         case .openInNewWindow: return "Open in a new window"
         case .copyURL: return "Copy the pull request's URL"
         case .copyBranch: return "Copy the branch name"
-        case .primaryAction: return "Merge, mark ready, or toggle auto-merge (same as the row's button)"
+        case .primaryAction: return "Merge, mark ready, or toggle auto-merge (same as the pull request's merge button)"
         case .editTitle: return "Edit the title"
         case .addComment: return "Write a comment"
         case .reviewChanges: return "Approve, comment, or request changes"

@@ -110,9 +110,9 @@ enum MergeButtonState: Equatable {
         }
     }
 
-    /// Whether a My PRs row draws the button. The row's icons already show draft, conflict, queued,
-    /// checks and reviews, so the button only offers actions and the reasons no icon covers.
-    var isShownOnRow: Bool {
+    /// Whether the pull request toolbar draws the button. The My PRs row's icons already show draft,
+    /// conflict, queued, checks and reviews, so the button only offers actions and the reasons no icon covers.
+    var isShown: Bool {
         switch self {
         case .markReady, .enqueue, .merge, .enableAutoMerge, .disableAutoMerge, .working:
             return true
