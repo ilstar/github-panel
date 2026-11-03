@@ -35,9 +35,12 @@ enum CheckState: String {
     case pending
     case unknown
 
+    /// GitHub reports no rollup at all when nothing runs on the head commit, so `nil` means no CI.
     init(githubStatus: String?, hasCheckContexts: Bool? = nil) {
         switch githubStatus {
-        case "SUCCESS", nil:
+        case nil:
+            self = .noChecks
+        case "SUCCESS":
             self = .success
         case "EXPECTED" where hasCheckContexts == false:
             self = .noChecks
@@ -74,5 +77,39 @@ enum CheckState: String {
 
     var isPassing: Bool {
         self == .success || self == .noChecks
+    }
+}
+
+/// Where a pull request stands, apart from its checks and reviews: the big icon on a My PRs row.
+/// A conflict comes first because it is what the author has to fix, even on a draft.
+enum PullRequestState: Equatable {
+    case conflict
+    case draft
+    case queued
+    case autoMerge
+    case open
+
+    init(_ pr: PullRequestRow) {
+        if pr.mergeStateStatus == "DIRTY" {
+            self = .conflict
+        } else if pr.isDraft {
+            self = .draft
+        } else if pr.isInMergeQueue {
+            self = .queued
+        } else if pr.isAutoMergeEnabled {
+            self = .autoMerge
+        } else {
+            self = .open
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .conflict: return "Merge conflict"
+        case .draft: return "Draft"
+        case .queued: return "In the merge queue"
+        case .autoMerge: return "Auto-merge enabled"
+        case .open: return "Open"
+        }
     }
 }

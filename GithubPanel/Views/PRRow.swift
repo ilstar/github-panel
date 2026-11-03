@@ -22,9 +22,11 @@ struct PRRow: View {
 
             Spacer(minLength: 8)
 
-            mergeButton
+            if mergeButtonState.isShownOnRow {
+                mergeButton
+            }
         }
-        .listRowBackground(isSelected: isSelected, isHovering: isHovering)
+        .listRowBackground(isSelected: isSelected, isHovering: isHovering, isCard: true)
         .onHover { hovering in
             isHovering = hovering
         }
@@ -37,17 +39,29 @@ struct PRRow: View {
                 .lineLimit(1)
                 .help(pr.title)
 
-            RowSubtitle(text: "\(pr.repoFullName)#\(String(pr.number)) · \(pr.status.descriptionText)",
-                        detail: "Updated \(relativeFormatter.localizedString(for: pr.updatedAt, relativeTo: now))") {
-                if pr.isDraft {
-                    TagView(text: "DRAFT")
-                }
-                if let badge = pr.reviewStatus.badge {
-                    TagView(text: badge.title, color: badge.color)
-                        .help(pr.reviewStatus.helpText ?? "")
-                }
+            RowSubtitle(text: "\(pr.repoFullName)#\(String(pr.number))",
+                        detail: "Updated \(relativeFormatter.localizedString(for: pr.updatedAt, relativeTo: now))")
+
+            HStack(spacing: 6) {
+                StatusChip(kindSymbol: "hammer.fill",
+                           stateSymbol: pr.status.chipSymbolName,
+                           color: pr.status.tint,
+                           help: pr.status.descriptionText)
+                StatusChip(kindSymbol: "person.fill",
+                           stateSymbol: reviewIndicator.symbolName,
+                           color: reviewIndicator.color,
+                           help: reviewHelp)
             }
+            .padding(.top, 3)
         }
+    }
+
+    private var reviewIndicator: ReviewIndicator {
+        pr.reviewStatus.indicator
+    }
+
+    private var reviewHelp: String {
+        [reviewIndicator.title + ".", pr.reviewStatus.helpText].compactMap { $0 }.joined(separator: "\n")
     }
 
     private var mergeButtonState: MergeButtonState {
@@ -169,7 +183,77 @@ struct PRRow: View {
     }
 
     private var statusIcon: some View {
-        RowIcon(systemName: pr.status.symbolName, color: pr.status.tint)
+        let state = PullRequestState(pr)
+        return RowIcon(systemName: state.symbolName, color: state.tint, inCircle: true)
+            .help(state.title)
+            .accessibilityLabel(state.title)
+    }
+}
+
+/// A small capsule on a My PRs card: a glyph for what it is about, such as checks or reviews, and one
+/// for how that stands. The state glyph keeps the meaning when the color alone is hard to tell apart.
+struct StatusChip: View {
+    let kindSymbol: String
+    let stateSymbol: String
+    let color: Color
+    let help: String
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: kindSymbol)
+            Image(systemName: stateSymbol)
+        }
+        .font(.system(size: 9.5, weight: .bold))
+        .padding(.horizontal, 7)
+        .frame(height: 18)
+        .background(Capsule().fill(color.opacity(0.14)))
+        .foregroundStyle(color)
+        .help(help)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(help)
+    }
+}
+
+extension PullRequestState {
+    /// A bare glyph, drawn white on the row's colored disc.
+    var symbolName: String {
+        switch self {
+        case .conflict: return "exclamationmark"
+        case .draft: return "pencil"
+        case .queued: return "arrow.right.to.line"
+        case .autoMerge: return "bolt.fill"
+        case .open: return "arrow.triangle.pull"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .conflict: return Theme.orange
+        case .draft: return .secondary
+        case .queued: return Theme.purple
+        case .autoMerge: return Theme.branch
+        case .open: return Theme.green
+        }
+    }
+}
+
+extension ReviewIndicator {
+    var symbolName: String {
+        switch self {
+        case .none: return "minus"
+        case .waiting: return "clock"
+        case .approved: return "checkmark"
+        case .changesRequested: return "xmark"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .none: return .secondary
+        case .waiting: return Theme.amber
+        case .approved: return Theme.green
+        case .changesRequested: return Theme.red
+        }
     }
 }
 
@@ -181,6 +265,17 @@ extension CheckState {
         case .failure, .error: return "xmark.circle.fill"
         case .pending: return "clock.circle.fill"
         case .unknown: return "questionmark.circle.fill"
+        }
+    }
+
+    /// The bare state glyph in a ``StatusChip``.
+    var chipSymbolName: String {
+        switch self {
+        case .success: return "checkmark"
+        case .noChecks: return "minus"
+        case .failure, .error: return "xmark"
+        case .pending: return "clock"
+        case .unknown: return "questionmark"
         }
     }
 

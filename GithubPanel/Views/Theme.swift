@@ -14,6 +14,11 @@ enum Theme {
                                          dark: NSColor(red: 0.118, green: 0.118, blue: 0.137, alpha: 1))
     static let rowHover = Color(light: NSColor(white: 1, alpha: 0.4),
                                 dark: NSColor(white: 1, alpha: 0.06))
+    /// A card row, such as a pull request on My PRs, when it is not selected.
+    static let rowCard = Color(light: NSColor(white: 1, alpha: 0.45),
+                               dark: NSColor(white: 1, alpha: 0.045))
+    static let rowCardHover = Color(light: NSColor(white: 1, alpha: 0.62),
+                                    dark: NSColor(white: 1, alpha: 0.08))
     /// The selected row: a raised white chip rather than an accent tint.
     static let rowSelection = Color(light: NSColor(white: 1, alpha: 0.84),
                                     dark: NSColor(white: 1, alpha: 0.13))
@@ -58,6 +63,9 @@ enum Theme {
                            dark: NSColor(red: 1.00, green: 0.42, blue: 0.40, alpha: 1))
     static let purple = Color(light: NSColor(red: 0.51, green: 0.31, blue: 0.85, alpha: 1),
                               dark: NSColor(red: 0.70, green: 0.55, blue: 1.00, alpha: 1))
+    /// Merge conflicts: warmer than amber and softer than red, so it does not read as a failed check.
+    static let orange = Color(light: NSColor(red: 0.89, green: 0.36, blue: 0.05, alpha: 1),
+                              dark: NSColor(red: 1.00, green: 0.56, blue: 0.24, alpha: 1))
     static let amber = Color(light: NSColor(red: 0.80, green: 0.50, blue: 0.05, alpha: 1),
                              dark: NSColor(red: 1.00, green: 0.72, blue: 0.30, alpha: 1))
     /// Branch name tags, in GitHub's blue on a pale blue fill.
@@ -105,9 +113,11 @@ struct TagView: View {
 }
 
 /// The rounded background behind a list row: a faint fill on hover, a raised chip when selected.
+/// A card row always has a soft fill and a hairline edge, so each row reads as its own card.
 struct ListRowBackground: ViewModifier {
     let isSelected: Bool
     let isHovering: Bool
+    var isCard = false
 
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: Theme.rowCornerRadius, style: .continuous)
@@ -116,18 +126,24 @@ struct ListRowBackground: ViewModifier {
             .padding(.vertical, 9)
             .background(
                 shape
-                    .fill(isSelected ? Theme.rowSelection : isHovering ? Theme.rowHover : Color.clear)
-                    .overlay(shape.strokeBorder(Theme.hairline, lineWidth: 0.5).opacity(isSelected ? 0.7 : 0))
+                    .fill(fill)
+                    .overlay(shape.strokeBorder(Theme.hairline, lineWidth: 0.5).opacity(isSelected || isCard ? 0.7 : 0))
                     .shadow(color: .black.opacity(isSelected ? 0.07 : 0), radius: 5, y: 2)
             )
             .contentShape(shape)
             .animation(.easeOut(duration: 0.12), value: isHovering)
     }
+
+    private var fill: Color {
+        if isSelected { return Theme.rowSelection }
+        if isCard { return isHovering ? Theme.rowCardHover : Theme.rowCard }
+        return isHovering ? Theme.rowHover : Color.clear
+    }
 }
 
 extension View {
-    func listRowBackground(isSelected: Bool, isHovering: Bool) -> some View {
-        modifier(ListRowBackground(isSelected: isSelected, isHovering: isHovering))
+    func listRowBackground(isSelected: Bool, isHovering: Bool, isCard: Bool = false) -> some View {
+        modifier(ListRowBackground(isSelected: isSelected, isHovering: isHovering, isCard: isCard))
     }
 }
 

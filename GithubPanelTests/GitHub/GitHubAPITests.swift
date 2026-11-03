@@ -47,7 +47,7 @@ final class GitHubAPITests: XCTestCase {
                                                                 waitingOn: ["octocat", "acme/web"]))
         let second = result.rows[1]
         XCTAssertEqual(second.reviewStatus, .none)
-        XCTAssertEqual(second.status, .success) // Preserve existing missing-rollup behavior.
+        XCTAssertEqual(second.status, .noChecks) // No rollup means no CI on the head commit.
         XCTAssertTrue(second.isDraft)
         XCTAssertFalse(second.isAutoMergeEnabled)
         XCTAssertTrue(second.canEnableAutoMerge)

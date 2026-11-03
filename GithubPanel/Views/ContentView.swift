@@ -340,7 +340,7 @@ struct ContentView: View {
     private var openPullRequestsList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 2) {
+                LazyVStack(spacing: 6) {
                     if monitor.prRows.isEmpty {
                         emptyStateSpacer
                     } else {

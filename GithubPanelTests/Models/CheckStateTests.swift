@@ -4,7 +4,8 @@ import XCTest
 final class CheckStateTests: XCTestCase {
     func testGitHubStatusMapping() {
         XCTAssertEqual(CheckState(githubStatus: "SUCCESS"), .success)
-        XCTAssertEqual(CheckState(githubStatus: nil), .success)
+        // No rollup means nothing runs on the head commit.
+        XCTAssertEqual(CheckState(githubStatus: nil), .noChecks)
         XCTAssertEqual(CheckState(githubStatus: "FAILURE"), .failure)
         XCTAssertEqual(CheckState(githubStatus: "ERROR"), .error)
         XCTAssertEqual(CheckState(githubStatus: "PENDING"), .pending)

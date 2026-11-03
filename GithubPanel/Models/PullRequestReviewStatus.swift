@@ -19,13 +19,19 @@ struct PullRequestReviewStatus: Equatable {
 
     static let none = PullRequestReviewStatus()
 
-    /// The tag on a My PRs row. Changes requested wins over an approval, like GitHub's verdict.
-    var badge: ReviewBadge? {
-        if decision == .changesRequested || !changesRequestedBy.isEmpty { return .changesRequested }
-        if decision == .approved || (decision == nil && !approvedBy.isEmpty) { return .approved }
-        if !waitingOn.isEmpty { return .awaitingReview }
-        if decision == .reviewRequired { return .needsReview }
-        return nil
+    /// The review icon on a My PRs row. When the base branch requires reviews, GitHub's verdict decides,
+    /// so enough approvals reads as approved even while other reviewers have yet to answer.
+    var indicator: ReviewIndicator {
+        switch decision {
+        case .approved: return .approved
+        case .changesRequested: return .changesRequested
+        case .reviewRequired: return .waiting
+        case nil:
+            if !changesRequestedBy.isEmpty { return .changesRequested }
+            if !approvedBy.isEmpty { return .approved }
+            if !waitingOn.isEmpty { return .waiting }
+            return .none
+        }
     }
 
     /// One line per group of reviewers, for the tag's tooltip.
@@ -38,6 +44,24 @@ struct PullRequestReviewStatus: Equatable {
             lines.append("The base branch needs an approving review. Ask someone to review it.")
         }
         return lines.isEmpty ? nil : lines.joined(separator: "\n")
+    }
+}
+
+enum ReviewIndicator: Equatable {
+    /// Nobody was asked and the base branch does not require a review.
+    case none
+    /// A review is requested or required and not yet given.
+    case waiting
+    case approved
+    case changesRequested
+
+    var title: String {
+        switch self {
+        case .none: return "No reviews requested"
+        case .waiting: return "Waiting for review"
+        case .approved: return "Approved"
+        case .changesRequested: return "Changes requested"
+        }
     }
 }
 

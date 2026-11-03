@@ -110,6 +110,24 @@ enum MergeButtonState: Equatable {
         }
     }
 
+    /// Whether a My PRs row draws the button. The row's icons already show draft, conflict, queued,
+    /// checks and reviews, so the button only offers actions and the reasons no icon covers.
+    var isShownOnRow: Bool {
+        switch self {
+        case .markReady, .enqueue, .merge, .enableAutoMerge, .disableAutoMerge, .working:
+            return true
+        case .queued, .checksFailed, .statusUnavailable, .waitingForChecks:
+            return false
+        case let .blocked(reason):
+            switch reason {
+            case .conflicts, .changesRequested, .needsApproval:
+                return false
+            case .behindBase, .branchRules, .checkingMergeability, .other:
+                return true
+            }
+        }
+    }
+
     var hasHoverEffect: Bool {
         switch self {
         case .markReady, .enqueue, .merge, .enableAutoMerge, .disableAutoMerge, .queued:
