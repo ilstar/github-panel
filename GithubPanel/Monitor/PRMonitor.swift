@@ -3,6 +3,8 @@ import Combine
 @MainActor
 final class PRMonitor: ObservableObject {
     @Published var prRows: [PullRequestRow] = []
+    /// My PRs parked under For Later, keyed by pull request ID. Also saved to defaults.
+    @Published private(set) var forLaterIDs: Set<String> = []
     @Published var historyRows: [PullRequestHistoryRow] = []
     @Published var reviewRequests: ReviewRequests = .empty
     @Published var selectedTab: PullRequestTab = .open {
@@ -135,6 +137,7 @@ final class PRMonitor: ObservableObject {
         anyFailuresHookScript = defaults.string(forKey: DefaultsKeys.anyFailuresHookScript) ?? ""
         hiddenReviewRequests = defaults.string(forKey: DefaultsKeys.hiddenReviewRequests)
             .flatMap { try? JSONDecoder().decode([String: HiddenReviewRequest].self, from: Data($0.utf8)) } ?? [:]
+        forLaterIDs = ForLaterStorage.decode(defaults.string(forKey: DefaultsKeys.forLaterPullRequests))
     }
 
     func start() {
@@ -382,6 +385,7 @@ final class PRMonitor: ObservableObject {
                     updateNotificationsForRows(result.rows)
                     setPRRows(result.rows)
                     openPullRequestsSSOAuthorizationURL = result.ssoAuthorizationURL
+                    forgetClosedForLater(openRows: result.rows, isComplete: result.ssoAuthorizationURL == nil)
                     lastRefreshAt = dateProvider.now
                 }
             } catch {
@@ -492,6 +496,34 @@ final class PRMonitor: ObservableObject {
     private func setPRRows(_ rows: [PullRequestRow]) {
         guard prRows != rows else { return }
         prRows = rows
+    }
+
+    /// My PRs split into the ones I am working on and the ones under For Later.
+    var myPullRequests: MyPullRequestSections {
+        MyPullRequestSections(rows: prRows, forLaterIDs: forLaterIDs)
+    }
+
+    /// Parks a pull request under For Later on My PRs, until it is moved back, merged or closed.
+    func moveToForLater(_ row: PullRequestRow) {
+        setForLaterIDs(forLaterIDs.union([row.id]))
+    }
+
+    /// Moves a pull request from For Later back up with the others on My PRs.
+    func moveOutOfForLater(_ row: PullRequestRow) {
+        setForLaterIDs(forLaterIDs.subtracting([row.id]))
+    }
+
+    /// Forgets For Later pull requests that are no longer open, so a reopened one starts back on My PRs.
+    /// Keeps them all when SSO hid some of the list, since a hidden one may still be open.
+    private func forgetClosedForLater(openRows: [PullRequestRow], isComplete: Bool) {
+        guard isComplete else { return }
+        setForLaterIDs(forLaterIDs.intersection(openRows.map(\.id)))
+    }
+
+    private func setForLaterIDs(_ ids: Set<String>) {
+        guard ids != forLaterIDs else { return }
+        forLaterIDs = ids
+        defaults.set(ForLaterStorage.encode(ids), forKey: DefaultsKeys.forLaterPullRequests)
     }
 
     private func setHistoryRows(_ rows: [PullRequestHistoryRow]) {
@@ -849,6 +881,7 @@ private enum DefaultsKeys {
     static let allSucceededHookScript = "GithubPanel.hooks.allSucceededScript"
     static let anyFailuresHookScript = "GithubPanel.hooks.anyFailuresScript"
     static let hiddenReviewRequests = "GithubPanel.hiddenReviewRequests"
+    static let forLaterPullRequests = "GithubPanel.forLaterPullRequests"
 
     static func mergeMethod(for repoFullName: String) -> String {
         "GithubPanel.mergeMethod.\(repoFullName)"
