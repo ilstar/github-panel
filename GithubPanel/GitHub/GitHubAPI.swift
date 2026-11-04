@@ -35,6 +35,9 @@ final class GitHubAPI: GitHubAPIClient {
                   viewerDefaultMergeMethod
                 }
                 headRefOid
+                baseRefName
+                headRefName
+                isCrossRepository
                 isDraft
                 autoMergeRequest { enabledAt }
                 viewerCanEnableAutoMerge
@@ -102,7 +105,9 @@ final class GitHubAPI: GitHubAPIClient {
                            mergeStateStatus: pr.mergeStateStatus,
                            updatedAt: pr.updatedAt,
                            reviewStatus: pr.reviewStatus,
-                           mergeMethods: pr.repository.mergeMethods)
+                           mergeMethods: pr.repository.mergeMethods,
+                           baseRefName: pr.baseRefName,
+                           headRefName: pr.isCrossRepository == true ? nil : pr.headRefName)
         }
         return OpenPullRequests(login: login, rows: rows, ssoAuthorizationURL: ssoAuthorizationURL)
     }
@@ -1515,6 +1520,10 @@ private struct PullRequestNode: Decodable {
     let number: Int
     let url: URL
     let headRefOid: String
+    /// Only the My PRs query asks for these.
+    var baseRefName: String?
+    var headRefName: String?
+    var isCrossRepository: Bool?
     let isDraft: Bool
     let autoMergeRequest: AutoMergeRequest?
     let viewerCanEnableAutoMerge: Bool

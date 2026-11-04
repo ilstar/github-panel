@@ -475,7 +475,9 @@ func row(number: Int,
                  isDraft: Bool = false,
                  mergeStateStatus: String = "CLEAN",
                  updatedAt: Date? = nil,
-                 mergeMethods: RepositoryMergeMethods = RepositoryMergeMethods()) -> PullRequestRow {
+                 mergeMethods: RepositoryMergeMethods = RepositoryMergeMethods(),
+                 baseRefName: String? = nil,
+                 headRefName: String? = nil) -> PullRequestRow {
     PullRequestRow(id: "acme/widgets#\(number)",
                    nodeID: "node-\(number)",
                    title: "PR \(number)",
@@ -492,7 +494,9 @@ func row(number: Int,
                    isInMergeQueue: inMergeQueue,
                    mergeStateStatus: mergeStateStatus,
                    updatedAt: updatedAt ?? Date(timeIntervalSince1970: TimeInterval(number)),
-                   mergeMethods: mergeMethods)
+                   mergeMethods: mergeMethods,
+                   baseRefName: baseRefName,
+                   headRefName: headRefName)
 }
 
 func reviewRequestRow(number: Int, author: String? = "octocat") -> ReviewRequestRow {

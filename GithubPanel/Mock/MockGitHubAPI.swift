@@ -610,7 +610,10 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
                         title: "Pending: disable auto-merge",
                         status: .pending,
                         isAutoMergeEnabled: true,
-                        canDisableAutoMerge: true),
+                        canDisableAutoMerge: true,
+                        // The top of a stack of three: #111, then #108, then this one.
+                        baseRefName: "mock/stack-2",
+                        headRefName: "mock/stack-3"),
             pullRequest(number: 104,
                         title: "Ready: merge queue enabled",
                         status: .success,
@@ -635,7 +638,9 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
             pullRequest(number: 108,
                         title: "Waiting: auto-merge unavailable",
                         status: .pending,
-                        reviewStatus: PullRequestReviewStatus(decision: .reviewRequired)),
+                        reviewStatus: PullRequestReviewStatus(decision: .reviewRequired),
+                        baseRefName: "mock/stack-1",
+                        headRefName: "mock/stack-2"),
             pullRequest(number: 109,
                         title: "Draft: success but not mergeable",
                         status: .success,
@@ -646,7 +651,9 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
             pullRequest(number: 111,
                         title: "Ready: no checks, add to queue",
                         status: .noChecks,
-                        isMergeQueueEnabled: true),
+                        isMergeQueueEnabled: true,
+                        baseRefName: "main",
+                        headRefName: "mock/stack-1"),
             pullRequest(number: 112,
                         title: "Blocked: merge conflict",
                         status: .pending,
@@ -716,7 +723,9 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
                                     isMergeQueueEnabled: Bool = false,
                                     isInMergeQueue: Bool = false,
                                     mergeStateStatus: String = "CLEAN",
-                                    reviewStatus: PullRequestReviewStatus = .none) -> PullRequestRow {
+                                    reviewStatus: PullRequestReviewStatus = .none,
+                                    baseRefName: String = "main",
+                                    headRefName: String? = nil) -> PullRequestRow {
         PullRequestRow(id: "mock/github-panel#\(number)",
                         nodeID: "mock-node-\(number)",
                         title: title,
@@ -735,7 +744,9 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
                         updatedAt: Date(timeIntervalSince1970: 0),
                         reviewStatus: reviewStatus,
                         // Like most team repositories: squash by default, merge commits allowed, rebase off.
-                        mergeMethods: RepositoryMergeMethods(allowed: [.merge, .squash], suggested: .squash))
+                        mergeMethods: RepositoryMergeMethods(allowed: [.merge, .squash], suggested: .squash),
+                        baseRefName: baseRefName,
+                        headRefName: headRefName ?? "mock/pr-\(number)")
     }
 }
 
@@ -765,7 +776,9 @@ private extension PullRequestRow {
                         mergeStateStatus: mergeStateStatus ?? self.mergeStateStatus,
                         updatedAt: updatedAt ?? self.updatedAt,
                         reviewStatus: reviewStatus,
-                        mergeMethods: mergeMethods)
+                        mergeMethods: mergeMethods,
+                        baseRefName: baseRefName,
+                        headRefName: headRefName)
     }
 }
 

@@ -358,15 +358,15 @@ struct ContentView: View {
                     if monitor.prRows.isEmpty {
                         emptyStateSpacer
                     } else {
-                        ForEach(sections.active) { pr in
-                            openPullRequestRow(pr, isForLater: false)
+                        ForEach(sections.activeEntries) { entry in
+                            openPullRequestEntry(entry, isForLater: false, stackPositions: sections.stackPositions)
                         }
                         if !sections.forLater.isEmpty {
                             forLaterHeading(count: sections.forLater.count)
                                 .padding(.top, sections.active.isEmpty ? 4 : 12)
                             if isForLaterExpanded {
-                                ForEach(sections.forLater) { pr in
-                                    openPullRequestRow(pr, isForLater: true)
+                                ForEach(sections.forLaterEntries) { entry in
+                                    openPullRequestEntry(entry, isForLater: true, stackPositions: sections.stackPositions)
                                 }
                             }
                         }
@@ -392,9 +392,36 @@ struct ContentView: View {
         }
     }
 
-    private func openPullRequestRow(_ pr: PullRequestRow, isForLater: Bool) -> some View {
+    /// A single row, or a stack's rows indented together beside a rail that ties them into one stack.
+    @ViewBuilder
+    private func openPullRequestEntry(_ entry: MyPullRequestEntry,
+                                      isForLater: Bool,
+                                      stackPositions: [String: PullRequestStackPosition]) -> some View {
+        switch entry {
+        case .single(let pr):
+            openPullRequestRow(pr, isForLater: isForLater, stackPosition: stackPositions[pr.id])
+        case .stack(let rows):
+            VStack(spacing: 6) {
+                ForEach(rows) { pr in
+                    openPullRequestRow(pr, isForLater: isForLater, stackPosition: stackPositions[pr.id])
+                }
+            }
+            .padding(.leading, 12)
+            .overlay(alignment: .leading) {
+                Capsule()
+                    .fill(Theme.purple.opacity(0.55))
+                    .frame(width: 3)
+                    .padding(.leading, 2)
+                    .padding(.vertical, 6)
+                    .accessibilityHidden(true)
+            }
+        }
+    }
+
+    private func openPullRequestRow(_ pr: PullRequestRow, isForLater: Bool, stackPosition: PullRequestStackPosition?) -> some View {
         PRRow(
             pr: pr,
+            stackPosition: stackPosition,
             isSelected: selectedPRID == pr.id,
             relativeFormatter: relativeFormatter,
             now: now

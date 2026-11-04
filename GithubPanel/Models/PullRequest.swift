@@ -19,6 +19,10 @@ struct PullRequestRow: Identifiable, Equatable {
     let updatedAt: Date
     var reviewStatus: PullRequestReviewStatus = .none
     var mergeMethods = RepositoryMergeMethods()
+    /// The branch this pull request merges into.
+    var baseRefName: String?
+    /// The pull request's branch, or nil when it lives in a fork, so another pull request can't be stacked on it.
+    var headRefName: String?
 
     var canMergeImmediately: Bool {
         status.isPassing
