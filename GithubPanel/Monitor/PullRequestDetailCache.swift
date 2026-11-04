@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 /// Pull request content loaded so far, so a pull request shows right away when it is opened again
 /// or after a refresh loaded it in the background. Keeps the most recently used entries.
@@ -12,6 +13,8 @@ final class PullRequestDetailCache {
         var checks: PullRequestChecks?
         var filesSinceLastReview: [PullRequestFile]?
     }
+
+    let updates = PassthroughSubject<(PullRequestReference, Entry), Never>()
 
     let capacity: Int
     private var entries: [PullRequestReference: Entry] = [:]
@@ -45,6 +48,7 @@ final class PullRequestDetailCache {
         entries[reference] = entry
         touch(reference)
         evictIfNeeded()
+        publish(reference)
     }
 
     /// Stores a pull request's comments. Ignored until its detail is cached, since comments alone cannot be shown.
@@ -54,12 +58,14 @@ final class PullRequestDetailCache {
         entries[reference]?.comments = comments
         entries[reference]?.commentLimits = limits
         touch(reference)
+        publish(reference)
     }
 
     func store(_ checks: PullRequestChecks, for reference: PullRequestReference, headSHA: String) {
         guard entries[reference]?.content.detail.headSHA == headSHA else { return }
         entries[reference]?.checks = checks
         touch(reference)
+        publish(reference)
     }
 
     func storeChanges(_ files: [PullRequestFile], for reference: PullRequestReference,
@@ -68,6 +74,7 @@ final class PullRequestDetailCache {
               detail.lastReviewedSHA == baseSHA, detail.headSHA == headSHA else { return }
         entries[reference]?.filesSinceLastReview = files
         touch(reference)
+        publish(reference)
     }
 
     /// Whether the cached copy is missing, incomplete, or older than the list's `updatedAt`.
@@ -82,6 +89,10 @@ final class PullRequestDetailCache {
     func removeAll() {
         entries = [:]
         order = []
+    }
+
+    private func publish(_ reference: PullRequestReference) {
+        if let entry = entries[reference] { updates.send((reference, entry)) }
     }
 
     private func touch(_ reference: PullRequestReference) {
