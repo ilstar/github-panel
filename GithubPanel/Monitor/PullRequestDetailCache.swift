@@ -1,6 +1,6 @@
 import Foundation
 
-/// Pull request details and comments loaded so far, so a pull request shows right away when it is opened again
+/// Pull request content loaded so far, so a pull request shows right away when it is opened again
 /// or after a refresh loaded it in the background. Keeps the most recently used entries.
 @MainActor
 final class PullRequestDetailCache {
@@ -8,6 +8,9 @@ final class PullRequestDetailCache {
         var content: PullRequestDetailContent
         /// Nil until the comments first load.
         var comments: PullRequestComments?
+        var commentLimits = PullRequestCommentLimits()
+        var checks: PullRequestChecks?
+        var filesSinceLastReview: [PullRequestFile]?
     }
 
     let capacity: Int
@@ -30,15 +33,40 @@ final class PullRequestDetailCache {
     /// Stores a pull request's detail and files, keeping any comments already cached for it.
     func store(_ content: PullRequestDetailContent) {
         let reference = content.detail.reference
-        entries[reference] = Entry(content: content, comments: entries[reference]?.comments)
+        var entry = entries[reference] ?? Entry(content: content)
+        if entry.content.detail.headSHA != content.detail.headSHA {
+            entry.checks = nil
+            entry.filesSinceLastReview = nil
+        }
+        if entry.content.detail.lastReviewedSHA != content.detail.lastReviewedSHA {
+            entry.filesSinceLastReview = nil
+        }
+        entry.content = content
+        entries[reference] = entry
         touch(reference)
         evictIfNeeded()
     }
 
     /// Stores a pull request's comments. Ignored until its detail is cached, since comments alone cannot be shown.
-    func store(_ comments: PullRequestComments, for reference: PullRequestReference) {
+    func store(_ comments: PullRequestComments, for reference: PullRequestReference,
+               limits: PullRequestCommentLimits = PullRequestCommentLimits()) {
         guard entries[reference] != nil else { return }
         entries[reference]?.comments = comments
+        entries[reference]?.commentLimits = limits
+        touch(reference)
+    }
+
+    func store(_ checks: PullRequestChecks, for reference: PullRequestReference, headSHA: String) {
+        guard entries[reference]?.content.detail.headSHA == headSHA else { return }
+        entries[reference]?.checks = checks
+        touch(reference)
+    }
+
+    func storeChanges(_ files: [PullRequestFile], for reference: PullRequestReference,
+                      baseSHA: String, headSHA: String) {
+        guard let detail = entries[reference]?.content.detail,
+              detail.lastReviewedSHA == baseSHA, detail.headSHA == headSHA else { return }
+        entries[reference]?.filesSinceLastReview = files
         touch(reference)
     }
 
@@ -46,6 +74,7 @@ final class PullRequestDetailCache {
     func needsRefresh(_ reference: PullRequestReference, updatedAt: Date) -> Bool {
         guard let entry = entries[reference],
               entry.comments != nil,
+              entry.checks != nil,
               let cachedAt = entry.content.detail.updatedAt else { return true }
         return updatedAt > cachedAt
     }

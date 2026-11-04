@@ -399,7 +399,7 @@ final class PRMonitor: ObservableObject {
         isLoading = false
     }
 
-    /// Loads, one pull request at a time, the details of open pull requests that changed since they were cached,
+    /// Loads, one pull request at a time, details, comments, and checks for open pull requests needing refresh,
     /// so they show right away when opened. Unchanged pull requests cost no requests.
     private func prefetchDetails(for rows: [PullRequestRow]) {
         guard prefetchTask == nil, let token = loadSessionToken() else { return }
@@ -420,12 +420,17 @@ final class PRMonitor: ObservableObject {
         for reference in references {
             guard !Task.isCancelled, session == credentialSession else { return }
             do {
-                async let comments = api.fetchPullRequestComments(token: token, reference: reference)
+                let limits = detailCache.entry(for: reference)?.commentLimits ?? PullRequestCommentLimits()
+                async let comments = api.fetchPullRequestComments(token: token, reference: reference, limits: limits)
+                async let checks = api.fetchPullRequestChecks(token: token, reference: reference)
                 let content = try await api.fetchPullRequestDetail(token: token, reference: reference)
                 let loadedComments = try await comments
                 guard session == credentialSession else { return }
                 detailCache.store(content)
-                detailCache.store(loadedComments, for: reference)
+                detailCache.store(loadedComments, for: reference, limits: limits)
+                let loadedChecks = try await checks
+                guard !Task.isCancelled, session == credentialSession else { return }
+                detailCache.store(loadedChecks, for: reference, headSHA: content.detail.headSHA)
             } catch {
                 // Prefetching is best effort. Stop when GitHub throttles, so the list refresh keeps its budget.
                 if Self.isThrottlingError(error) { return }

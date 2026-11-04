@@ -35,6 +35,8 @@ final class PullRequestDetailCacheTests: XCTestCase {
         XCTAssertTrue(cache.needsRefresh(reference(1), updatedAt: updatedAt), "Comments are not cached yet")
 
         cache.store(.empty, for: reference(1))
+        XCTAssertTrue(cache.needsRefresh(reference(1), updatedAt: updatedAt), "Checks are not cached yet")
+        cache.store(.empty, for: reference(1), headSHA: "sha-1")
         XCTAssertFalse(cache.needsRefresh(reference(1), updatedAt: updatedAt))
         XCTAssertFalse(cache.needsRefresh(reference(1), updatedAt: updatedAt.addingTimeInterval(-1)))
         XCTAssertTrue(cache.needsRefresh(reference(1), updatedAt: updatedAt.addingTimeInterval(1)))
@@ -42,6 +44,34 @@ final class PullRequestDetailCacheTests: XCTestCase {
         cache.store(content(number: 2, updatedAt: nil))
         cache.store(.empty, for: reference(2))
         XCTAssertTrue(cache.needsRefresh(reference(2), updatedAt: updatedAt), "No updatedAt to compare")
+    }
+
+    func testCommitChangesInvalidateChecksAndComparisonButKeepComments() {
+        let cache = PullRequestDetailCache()
+        var original = content(number: 1).detail
+        original.lastReviewedSHA = "base"
+        cache.store(PullRequestDetailContent(detail: original, files: []))
+        cache.store(.empty, for: reference(1))
+        cache.store(.empty, for: reference(1), headSHA: original.headSHA)
+        cache.storeChanges([], for: reference(1), baseSHA: "base", headSHA: original.headSHA)
+        XCTAssertNotNil(cache.entry(for: reference(1))?.filesSinceLastReview)
+
+        var reviewed = original
+        reviewed.lastReviewedSHA = "new-base"
+        cache.store(PullRequestDetailContent(detail: reviewed, files: []))
+        XCTAssertNotNil(cache.entry(for: reference(1))?.checks)
+        XCTAssertNil(cache.entry(for: reference(1))?.filesSinceLastReview)
+
+        let changed = PullRequestDetail(reference: original.reference, nodeID: original.nodeID,
+            title: original.title, body: original.body, authorLogin: original.authorLogin, state: original.state,
+            baseRef: original.baseRef, headRef: original.headRef, headSHA: "new-head", htmlURL: original.htmlURL,
+            createdAt: original.createdAt, additions: 0, deletions: 0, changedFiles: 0, commits: 1)
+        cache.store(PullRequestDetailContent(detail: changed, files: []))
+        cache.store(.empty, for: reference(1), headSHA: original.headSHA)
+        cache.storeChanges([], for: reference(1), baseSHA: "base", headSHA: original.headSHA)
+        XCTAssertNil(cache.entry(for: reference(1))?.checks)
+        XCTAssertNil(cache.entry(for: reference(1))?.filesSinceLastReview)
+        XCTAssertNotNil(cache.entry(for: reference(1))?.comments)
     }
 
     func testEvictsTheLeastRecentlyUsedEntry() {
