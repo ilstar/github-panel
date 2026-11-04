@@ -373,6 +373,7 @@ struct ContentView: View {
                     }
                 }
                 .padding(.bottom, 8)
+                .mouseWheelStep()
             }
             .scrollIndicators(.hidden)
             .onAppear {
@@ -472,6 +473,7 @@ struct ContentView: View {
                         }
                     }
                     .padding(.bottom, 8)
+                    .mouseWheelStep()
                 }
                 .scrollIndicators(.hidden)
                 .onChange(of: selectedReviewID) { id in
@@ -578,6 +580,7 @@ struct ContentView: View {
                                 }
                             }
                             .padding(.bottom, 8)
+                            .mouseWheelStep()
                         }
                         .scrollIndicators(.hidden)
                         .onAppear {

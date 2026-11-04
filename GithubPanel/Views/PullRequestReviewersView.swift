@@ -218,6 +218,7 @@ struct ReviewerPicker: View {
                     content
                 }
                 .padding(.vertical, 4)
+                .mouseWheelStep()
             }
             .frame(height: 260)
         }

@@ -317,6 +317,7 @@ struct PullRequestFilesView: View {
                     }
                     .padding(.horizontal, 8)
                     .padding(.bottom, 8)
+                    .mouseWheelStep()
                 }
             }
         }
@@ -446,6 +447,7 @@ struct PullRequestFilesView: View {
                 .padding(.top, 8 + Self.fileSpacing)
                 .background(PageScrollAnchor())
                 .background(ScrollActivityMonitor(activity: scrollActivity))
+                .mouseWheelStep()
             }
             .onChange(of: scrollRequest) { request in
                 guard let request else { return }
