@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 /// Loads one pull request's detail and changed files for the detail window.
 /// Starts from the shared cache when it has the pull request, then reloads it in the background.
@@ -98,6 +99,8 @@ final class PullRequestDetailViewModel: ObservableObject {
     /// How much of the discussion loads. Reloads keep what the "more" buttons added.
     private var commentLimits = PullRequestCommentLimits()
     private let cache: PullRequestDetailCache?
+    private var cacheSubscription: AnyCancellable?
+    private var isApplyingCacheUpdate = false
     /// Parsed diff lines for each file changed since the last review, keyed by filename.
     private var diffLinesSinceLastReview: [String: [DiffLine]] = [:]
     /// The commits `filesSinceLastReview` compares.
@@ -167,6 +170,22 @@ final class PullRequestDetailViewModel: ObservableObject {
             }
             if let comments = cached.comments {
                 apply(comments)
+            }
+        }
+        cacheSubscription = cache?.updates.sink { [weak self] reference, entry in
+            guard let self, reference == self.reference, !self.isApplyingCacheUpdate else { return }
+            self.isApplyingCacheUpdate = true
+            defer { self.isApplyingCacheUpdate = false }
+            self.apply(entry.content)
+            self.commentLimits = entry.commentLimits
+            if let comments = entry.comments, comments != self.comments { self.apply(comments) }
+            self.checks = entry.checks
+            if let files = entry.filesSinceLastReview, let range = self.reviewRange,
+               files != self.filesSinceLastReview {
+                self.setFilesSinceLastReview(files, range: range, files: entry.content.files)
+            }
+            if self.fileScope == .sinceLastReview, self.filesSinceLastReview == nil {
+                Task { [weak self] in await self?.loadChangesSinceLastReview() }
             }
         }
     }

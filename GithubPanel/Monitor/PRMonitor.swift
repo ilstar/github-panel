@@ -83,6 +83,7 @@ final class PRMonitor: ObservableObject {
     private var refreshQueued = false
     private var refreshRevision = 0
     private var prefetchTask: Task<Void, Never>?
+    private var pendingPrefetch: [PullRequestReference: Date] = [:]
     private var lastStates: [String: CheckState] = [:]
     private var lastReviewStatuses: [String: PullRequestReviewStatus] = [:]
     /// Review requests seen since the token was set. Nil until the first load, so the first list posts nothing.
@@ -185,6 +186,7 @@ final class PRMonitor: ObservableObject {
         consecutiveThrottledFailures = 0
         prefetchTask?.cancel()
         prefetchTask = nil
+        pendingPrefetch = [:]
         lastReviewStatuses = [:]
         knownReviewRequestIDs = nil
         detailCache.removeAll()
@@ -226,9 +228,12 @@ final class PRMonitor: ObservableObject {
     /// either tab all come through here, so switching between the two tabs never fetches.
     func refreshNow() async {
         guard loadSessionToken() != nil else { return }
-        async let reviewRequests: Void = refreshReviewRequests()
+        let session = credentialSession
+        async let reviewRequests: Void = refreshReviewRequests(preload: false)
         await refreshOpenPullRequests()
         await reviewRequests
+        guard session == credentialSession else { return }
+        prefetchDetails()
     }
 
     private func refreshOpenPullRequests() async {
@@ -323,7 +328,7 @@ final class PRMonitor: ObservableObject {
         isHistoryLoading = false
     }
 
-    func refreshReviewRequests() async {
+    func refreshReviewRequests(preload: Bool = true) async {
         guard let token = loadSessionToken() else { return }
         guard !isReviewRequestsLoading else { return }
         let session = credentialSession
@@ -336,6 +341,7 @@ final class PRMonitor: ObservableObject {
             fetchedReviewRequests = requests
             showReviewRequests()
             lastReviewRequestsRefreshAt = dateProvider.now
+            if preload { prefetchDetails() }
         } catch {
             guard session == credentialSession else { return }
             // Keep the last list on screen; the error shows above it until a refresh succeeds.
@@ -377,7 +383,6 @@ final class PRMonitor: ObservableObject {
                     setPRRows(result.rows)
                     openPullRequestsSSOAuthorizationURL = result.ssoAuthorizationURL
                     lastRefreshAt = dateProvider.now
-                    prefetchDetails(for: result.rows)
                 }
             } catch {
                 guard session == credentialSession else { return }
@@ -399,41 +404,50 @@ final class PRMonitor: ObservableObject {
         isLoading = false
     }
 
-    /// Loads, one pull request at a time, details, comments, and checks for open pull requests needing refresh,
-    /// so they show right away when opened. Unchanged pull requests cost no requests.
-    private func prefetchDetails(for rows: [PullRequestRow]) {
-        guard prefetchTask == nil, let token = loadSessionToken() else { return }
-        let references = rows.filter { detailCache.needsRefresh($0.reference, updatedAt: $0.updatedAt) }.map(\.reference)
-        guard !references.isEmpty else { return }
+    /// Both tabs share a queue. A refresh arriving during preloading queues another pass rather than being dropped.
+    private func prefetchDetails() {
+        guard let token = loadSessionToken() else { return }
+        for row in prRows {
+            pendingPrefetch[row.reference] = max(pendingPrefetch[row.reference] ?? .distantPast, row.updatedAt)
+        }
+        for row in reviewRequests.rows {
+            pendingPrefetch[row.reference] = max(pendingPrefetch[row.reference] ?? .distantPast, row.updatedAt)
+        }
+        guard prefetchTask == nil, !pendingPrefetch.isEmpty else { return }
         let session = credentialSession
         prefetchTask = Task { @MainActor [weak self] in
-            await self?.prefetch(references, token: token, session: session)
+            await self?.prefetch(token: token, session: session)
         }
     }
 
-    private func prefetch(_ references: [PullRequestReference], token: String, session: UUID) async {
+    private func prefetch(token: String, session: UUID) async {
         defer {
-            if session == credentialSession {
-                prefetchTask = nil
-            }
+            if session == credentialSession { prefetchTask = nil }
         }
-        for reference in references {
+        while let reference = pendingPrefetch.keys.sorted(by: { $0.id < $1.id }).first,
+              let updatedAt = pendingPrefetch.removeValue(forKey: reference) {
             guard !Task.isCancelled, session == credentialSession else { return }
             do {
-                let limits = detailCache.entry(for: reference)?.commentLimits ?? PullRequestCommentLimits()
-                async let comments = api.fetchPullRequestComments(token: token, reference: reference, limits: limits)
-                async let checks = api.fetchPullRequestChecks(token: token, reference: reference)
-                let content = try await api.fetchPullRequestDetail(token: token, reference: reference)
-                let loadedComments = try await comments
-                guard session == credentialSession else { return }
-                detailCache.store(content)
-                detailCache.store(loadedComments, for: reference, limits: limits)
-                let loadedChecks = try await checks
+                let cached = detailCache.entry(for: reference)
+                if detailCache.needsRefresh(reference, updatedAt: updatedAt) {
+                    let limits = cached?.commentLimits ?? PullRequestCommentLimits()
+                    async let comments = api.fetchPullRequestComments(token: token, reference: reference, limits: limits)
+                    let content = try await api.fetchPullRequestDetail(token: token, reference: reference)
+                    let loadedComments = try await comments
+                    guard !Task.isCancelled, session == credentialSession else { return }
+                    detailCache.store(content)
+                    detailCache.store(loadedComments, for: reference, limits: limits)
+                }
+                // Check results can change without changing the PR's updatedAt.
+                guard let headSHA = detailCache.entry(for: reference)?.content.detail.headSHA else { continue }
+                let checks = try await api.fetchPullRequestChecks(token: token, reference: reference)
                 guard !Task.isCancelled, session == credentialSession else { return }
-                detailCache.store(loadedChecks, for: reference, headSHA: content.detail.headSHA)
+                detailCache.store(checks, for: reference, headSHA: headSHA)
             } catch {
-                // Prefetching is best effort. Stop when GitHub throttles, so the list refresh keeps its budget.
-                if Self.isThrottlingError(error) { return }
+                if Self.isThrottlingError(error) {
+                    pendingPrefetch = [:]
+                    return
+                }
             }
         }
     }
@@ -471,6 +485,8 @@ final class PRMonitor: ObservableObject {
             refreshQueued = true
         }
         await refreshOpenPullRequests()
+        guard session == credentialSession else { return }
+        prefetchDetails()
     }
 
     private func setPRRows(_ rows: [PullRequestRow]) {
