@@ -50,6 +50,7 @@ struct ContentView: View {
     @State private var pageScroller = PageScroller()
     @AppStorage(ListPaneLayout.widthDefaultsKey, store: AppDefaults.store) private var listPaneWidth: Double = ListPaneLayout.defaultWidth
     @AppStorage(DetailPaneMode.defaultsKey, store: AppDefaults.store) private var detailPaneMode: DetailPaneMode = .native
+    @AppStorage(Self.forLaterExpandedDefaultsKey, store: AppDefaults.store) private var isForLaterExpanded = true
     /// Made on first use of the GitHub pane, then kept so switching pull requests reuses one web view.
     @StateObject private var webSession = LazyWebSession()
     private let minuteTicker = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
@@ -135,6 +136,8 @@ struct ContentView: View {
             .clipShape(shape)
         .glassSurface(.panel, in: shape)
     }
+
+    static let forLaterExpandedDefaultsKey = "GithubPanel.forLaterExpanded"
 
     /// The title bar strip's height when the window reports none, such as in full screen.
     static let minimumTitleBarHeight: CGFloat = 44
@@ -342,32 +345,29 @@ struct ContentView: View {
         }
     }
 
+    /// The ids of the My PRs rows on screen, in order. Rows under a collapsed For Later are left out.
+    private var visibleOpenRowIDs: [String] {
+        monitor.myPullRequests.visibleIDs(isForLaterExpanded: isForLaterExpanded)
+    }
+
     private var openPullRequestsList: some View {
-        ScrollViewReader { proxy in
+        let sections = monitor.myPullRequests
+        return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 6) {
                     if monitor.prRows.isEmpty {
                         emptyStateSpacer
                     } else {
-                        ForEach(monitor.prRows) { pr in
-                            PRRow(
-                                pr: pr,
-                                isSelected: selectedPRID == pr.id,
-                                relativeFormatter: relativeFormatter,
-                                now: now
-                            )
-                            .id(pr.id)
-                            .onTapGesture {
-                                selectedPRID = pr.id
-                                didClickRow(pr.htmlURL)
-                            }
-                            .contextMenu {
-                                let action = mergeAction(for: pr).primaryAction
-                                Button(action.title, action: action.perform)
-                                    .disabled(!action.isEnabled)
-                                Divider()
-                                pullRequestContextMenu(pr.reference, htmlURL: pr.htmlURL)
-                                mergeMethodMenu(for: pr)
+                        ForEach(sections.active) { pr in
+                            openPullRequestRow(pr, isForLater: false)
+                        }
+                        if !sections.forLater.isEmpty {
+                            forLaterHeading(count: sections.forLater.count)
+                                .padding(.top, sections.active.isEmpty ? 4 : 12)
+                            if isForLaterExpanded {
+                                ForEach(sections.forLater) { pr in
+                                    openPullRequestRow(pr, isForLater: true)
+                                }
                             }
                         }
                     }
@@ -376,12 +376,12 @@ struct ContentView: View {
             }
             .scrollIndicators(.hidden)
             .onAppear {
-                openRowIDs = monitor.prRows.map(\.id)
+                openRowIDs = visibleOpenRowIDs
                 if selectedPRID == nil {
-                    selectedPRID = monitor.prRows.first?.id
+                    selectedPRID = visibleOpenRowIDs.first
                 }
             }
-            .onChange(of: monitor.prRows.map { $0.id }) { newIDs in
+            .onChange(of: visibleOpenRowIDs) { newIDs in
                 selectedPRID = ListNavigation.selection(after: selectedPRID, oldIDs: openRowIDs, newIDs: newIDs)
                 openRowIDs = newIDs
             }
@@ -389,6 +389,63 @@ struct ContentView: View {
                 scrollToSelection(id, with: proxy)
             }
         }
+    }
+
+    private func openPullRequestRow(_ pr: PullRequestRow, isForLater: Bool) -> some View {
+        PRRow(
+            pr: pr,
+            isSelected: selectedPRID == pr.id,
+            relativeFormatter: relativeFormatter,
+            now: now
+        )
+        .id(pr.id)
+        .onTapGesture {
+            selectedPRID = pr.id
+            didClickRow(pr.htmlURL)
+        }
+        .contextMenu {
+            let action = mergeAction(for: pr).primaryAction
+            Button(action.title, action: action.perform)
+                .disabled(!action.isEnabled)
+            Divider()
+            if isForLater {
+                Button("Move Back to My PRs") { monitor.moveOutOfForLater(pr) }
+            } else {
+                Button("Move to \(MyPullRequestSections.forLaterTitle)") { monitor.moveToForLater(pr) }
+            }
+            Divider()
+            pullRequestContextMenu(pr.reference, htmlURL: pr.htmlURL)
+            mergeMethodMenu(for: pr)
+        }
+    }
+
+    /// The For Later heading under the other My PRs. Clicking it folds the parked pull requests away.
+    private func forLaterHeading(count: Int) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isForLaterExpanded.toggle()
+            }
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .bold))
+                    .rotationEffect(.degrees(isForLaterExpanded ? 90 : 0))
+                    .foregroundStyle(.secondary)
+                Text(MyPullRequestSections.forLaterTitle)
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+                Text(String(count))
+                    .font(.caption.weight(.medium))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 2)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(isForLaterExpanded ? "Hide pull requests for later" : "Show pull requests for later")
     }
 
     private var reviewRequestsSection: some View {
@@ -804,7 +861,7 @@ struct ContentView: View {
     private var visibleRowIDs: [String] {
         switch monitor.selectedTab {
         case .open:
-            return monitor.prRows.map(\.id)
+            return visibleOpenRowIDs
         case .reviews:
             return ReviewRequestGroup.allCases.flatMap { monitor.reviewRequests.rows(in: $0) }.map(\.id)
         case .history:
@@ -881,6 +938,9 @@ struct ContentView: View {
     private func show(_ request: PullRequestToShow) {
         switch request.tab {
         case .open:
+            if monitor.forLaterIDs.contains(request.reference.id) {
+                isForLaterExpanded = true
+            }
             selectedPRID = request.reference.id
         case .reviews:
             selectedReviewID = request.reference.id
