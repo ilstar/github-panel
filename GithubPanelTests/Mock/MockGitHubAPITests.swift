@@ -11,6 +11,14 @@ final class MockGitHubAPITests: XCTestCase {
         XCTAssertTrue(result.rows.isEmpty)
     }
 
+    func testMockPullRequestsIncludeAStackOfThree() async throws {
+        let rows = try await MockGitHubAPI().fetchOpenPRs(token: "token").rows
+
+        let stack = MyPullRequestSections(rows: rows, forLaterIDs: []).activeEntries.first { $0.rows.count > 1 }
+
+        XCTAssertEqual(stack?.rows.map(\.number), [111, 108, 103])
+    }
+
     func testMockReviewRequestsCoverBothGroups() async throws {
         let requests = try await MockGitHubAPI().fetchReviewRequests(token: "token")
         let empty = try await MockGitHubAPI(isEmpty: true).fetchReviewRequests(token: "token")

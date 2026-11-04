@@ -2,6 +2,7 @@ import SwiftUI
 
 struct PRRow: View {
     let pr: PullRequestRow
+    var stackPosition: PullRequestStackPosition?
     let isSelected: Bool
     let relativeFormatter: RelativeDateTimeFormatter
     let now: Date
@@ -48,6 +49,9 @@ struct PRRow: View {
     /// Checks and reviews, beside the pull request's number.
     private var statusChips: some View {
         HStack(spacing: 6) {
+            if let stackPosition {
+                StackChip(position: stackPosition)
+            }
             StatusChip(symbolName: "hammer.fill",
                        color: pr.status.tint,
                        help: pr.status.descriptionText)
@@ -115,6 +119,28 @@ struct StatusChip: View {
             .help(help)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(help)
+    }
+}
+
+/// The pull request's place in its stack, such as 2/3, beside the status chips.
+struct StackChip: View {
+    let position: PullRequestStackPosition
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "square.stack.3d.up.fill")
+                .font(.system(size: 9.5, weight: .bold))
+            Text(position.label)
+                .font(.system(size: 10.5, weight: .semibold))
+                .monospacedDigit()
+        }
+        .padding(.horizontal, 7)
+        .frame(height: 20)
+        .background(Capsule().fill(Theme.purple.opacity(0.16)))
+        .foregroundStyle(Theme.purple)
+        .help(position.helpText)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(position.helpText)
     }
 }
 

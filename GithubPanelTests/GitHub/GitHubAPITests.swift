@@ -70,6 +70,27 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertTrue(body.query.contains("... on Team { combinedSlug }"))
     }
 
+    func testFetchOpenPRsDecodesBranchesForStacks() async throws {
+        let response = openPRResponse
+            .replacingOccurrences(of: #""headRefOid":"abc123","#,
+                                  with: #""headRefOid":"abc123","baseRefName":"feature-1","headRefName":"feature-2","isCrossRepository":false,"#)
+            .replacingOccurrences(of: #""headRefOid":"def456","#,
+                                  with: #""headRefOid":"def456","baseRefName":"main","headRefName":"main","isCrossRepository":true,"#)
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: response)
+
+        let result = try await GitHubAPI(transport: transport).fetchOpenPRs(token: "token")
+
+        XCTAssertEqual(result.rows[0].baseRefName, "feature-1")
+        XCTAssertEqual(result.rows[0].headRefName, "feature-2")
+        XCTAssertEqual(result.rows[1].baseRefName, "main")
+        XCTAssertNil(result.rows[1].headRefName) // A fork's branch can't carry a stack in this repository.
+        let body = try transport.graphQLBody(at: 0)
+        XCTAssertTrue(body.query.contains("baseRefName"))
+        XCTAssertTrue(body.query.contains("headRefName"))
+        XCTAssertTrue(body.query.contains("isCrossRepository"))
+    }
+
     func testExpectedRollupWithNoContextsIsDecodedAsNoChecks() async throws {
         let noChecksResponse = openPRResponse.replacingOccurrences(
             of: #""state":"PENDING""#,
