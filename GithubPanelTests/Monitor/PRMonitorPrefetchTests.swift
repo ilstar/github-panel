@@ -3,7 +3,7 @@ import XCTest
 
 @MainActor
 final class PRMonitorPrefetchTests: XCTestCase {
-    func testRefreshPrefetchesDetailsAndCommentsOfOpenPullRequests() async {
+    func testRefreshPrefetchesDetailsCommentsAndChecksOfOpenPullRequests() async {
         let api = prefetchingAPI(rows: [row(number: 1, status: .success), row(number: 2, status: .pending)])
         let comments = PullRequestComments(comments: [], threads: [])
         api.comments = comments
@@ -15,6 +15,8 @@ final class PRMonitorPrefetchTests: XCTestCase {
         XCTAssertEqual(api.detailCalls.map(\.reference.number), [1, 2])
         XCTAssertEqual(api.detailCalls.map(\.token), ["token", "token"])
         XCTAssertEqual(Set(api.commentsCalls.map(\.reference.number)), [1, 2])
+        XCTAssertEqual(Set(api.checksCalls.map(\.reference.number)), [1, 2])
+        XCTAssertNotNil(monitor.detailCache.entry(for: reference(1))?.checks)
         XCTAssertEqual(monitor.detailCache.entry(for: reference(1))?.content.detail.title, "PR 1")
         XCTAssertEqual(monitor.detailCache.entry(for: reference(2))?.comments, comments)
     }
@@ -37,6 +39,21 @@ final class PRMonitorPrefetchTests: XCTestCase {
         XCTAssertEqual(api.detailCalls.map(\.reference.number), [1, 2, 2])
         XCTAssertEqual(monitor.detailCache.entry(for: reference(2))?.content.detail.updatedAt,
                        Date(timeIntervalSince1970: 50))
+    }
+
+    func testPrefetchPreservesExpandedDiscussionLimits() async {
+        let api = prefetchingAPI(rows: [row(number: 1, status: .success)])
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+        await monitor.refreshNow()
+        await monitor.waitForPrefetch()
+        let limits = PullRequestCommentLimits().addingEarlierComments().addingThreads()
+        monitor.detailCache.store(.empty, for: reference(1), limits: limits)
+        api.rows = [row(number: 1, status: .success, updatedAt: Date(timeIntervalSince1970: 50))]
+
+        await monitor.refreshNow()
+        await monitor.waitForPrefetch()
+
+        XCTAssertEqual(monitor.detailCache.entry(for: reference(1))?.commentLimits, limits)
     }
 
     func testPrefetchStopsWhenGitHubThrottles() async {

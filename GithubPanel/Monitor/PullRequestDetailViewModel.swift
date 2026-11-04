@@ -160,6 +160,11 @@ final class PullRequestDetailViewModel: ObservableObject {
         self.cache = cache
         if let cached = cache?.entry(for: reference) {
             apply(cached.content)
+            commentLimits = cached.commentLimits
+            checks = cached.checks
+            if let changed = cached.filesSinceLastReview, let range = reviewRange {
+                setFilesSinceLastReview(changed, range: range, files: cached.content.files)
+            }
             if let comments = cached.comments {
                 apply(comments)
             }
@@ -243,12 +248,13 @@ final class PullRequestDetailViewModel: ObservableObject {
         do {
             let comments = try await loadedComments
             apply(comments)
-            cache?.store(comments, for: reference)
+            cache?.store(comments, for: reference, limits: commentLimits)
         } catch {
             errorMessage = error.localizedDescription
         }
         do {
             checks = try await loadedChecks
+            cacheChecks()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -289,14 +295,21 @@ final class PullRequestDetailViewModel: ObservableObject {
     private func reloadChecks() async {
         do {
             checks = try await fetchChecks(reference)
+            cacheChecks()
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
+    private func cacheChecks() {
+        guard let checks, let headSHA = content?.detail.headSHA else { return }
+        cache?.store(checks, for: reference, headSHA: headSHA)
+    }
+
     /// Shows loaded content. Skips identical content so a reload does not rebuild the diff.
     private func apply(_ loaded: PullRequestDetailContent) {
         guard loaded != content else { return }
+        if content?.detail.headSHA != loaded.detail.headSHA { checks = nil }
         diffLines = Dictionary(loaded.files.map { ($0.filename, DiffParser.parse($0.patch ?? "")) },
                                uniquingKeysWith: { first, _ in first })
         presentations = [:]
@@ -367,6 +380,7 @@ final class PullRequestDetailViewModel: ObservableObject {
         presentations = presentations.filter { $0.key.scope == .all }
         loadedReviewRange = range
         filesSinceLastReview = changed
+        cache?.storeChanges(changed, for: reference, baseSHA: range.base, headSHA: range.head)
     }
 
     /// The parsed diff lines of a file in the shown scope.
@@ -620,7 +634,7 @@ final class PullRequestDetailViewModel: ObservableObject {
     private func reloadComments() async throws {
         let loaded = try await fetchComments(reference, commentLimits)
         apply(loaded)
-        cache?.store(loaded, for: reference)
+        cache?.store(loaded, for: reference, limits: commentLimits)
     }
 
     /// Loads the next older general comments, which show above the ones loaded.
@@ -641,7 +655,7 @@ final class PullRequestDetailViewModel: ObservableObject {
             let loaded = try await fetchComments(reference, limits)
             commentLimits = limits
             apply(loaded)
-            cache?.store(loaded, for: reference)
+            cache?.store(loaded, for: reference, limits: commentLimits)
         } catch {
             errorMessage = error.localizedDescription
         }

@@ -279,6 +279,66 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.threadIndex(for: "a.swift").threads.map(\.id), ["t1"])
     }
 
+    func testReopeningRestoresChecksComparisonAndExpandedCommentLimits() async {
+        let cache = PullRequestDetailCache()
+        let checks = PullRequestChecks(checks: [check("ci", .failure, rerun: .workflowRun(1))])
+        var comparisons = 0
+        var requestedLimits: [PullRequestCommentLimits] = []
+        func makeViewModel() -> PullRequestDetailViewModel {
+            PullRequestDetailViewModel(reference: reference,
+                fetch: { [self] _ in detailContent(title: "Cached", files: [file("a.swift")], lastReviewedSHA: "base") },
+                fetchChangedFiles: { [self] _, _, _ in
+                    comparisons += 1
+                    return [file("a.swift", patch: "@@ -1 +1 @@\n-a\n+b")]
+                },
+                fetchComments: { _, limits in
+                    requestedLimits.append(limits)
+                    return .empty
+                },
+                fetchChecks: { _ in checks }, cache: cache)
+        }
+        let first = makeViewModel()
+        await first.load()
+        await first.showFiles(.sinceLastReview)
+        await first.loadEarlierComments()
+        await first.loadMoreThreads()
+
+        let reopened = makeViewModel()
+        XCTAssertEqual(reopened.checks, checks)
+        XCTAssertEqual(reopened.filesSinceLastReview, first.filesSinceLastReview)
+        await reopened.showFiles(.sinceLastReview)
+        XCTAssertEqual(reopened.lines(for: "a.swift"), first.lines(for: "a.swift"))
+        XCTAssertEqual(comparisons, 1)
+        await reopened.load()
+        XCTAssertEqual(requestedLimits.last, PullRequestCommentLimits().addingEarlierComments().addingThreads())
+        XCTAssertEqual(comparisons, 1)
+    }
+
+    func testCheckRefreshFailureKeepsCachedChecksAndRerunUpdatesCache() async {
+        let cache = PullRequestDetailCache()
+        var fail = false
+        var checks = PullRequestChecks(checks: [check("ci", .failure, rerun: .workflowRun(1))])
+        func makeViewModel() -> PullRequestDetailViewModel {
+            PullRequestDetailViewModel(reference: reference,
+                fetch: { [self] _ in detailContent(title: "Cached") },
+                fetchChecks: { _ in
+                    if fail { throw TestError(message: "Offline") }
+                    return checks
+                }, cache: cache)
+        }
+        let first = makeViewModel()
+        await first.load()
+        fail = true
+        let reopened = makeViewModel()
+        await reopened.load()
+        XCTAssertEqual(reopened.checks, checks)
+        XCTAssertEqual(cache.entry(for: reference)?.checks, checks)
+        fail = false
+        checks = .empty
+        await reopened.rerun(.workflowRun(1))
+        XCTAssertEqual(cache.entry(for: reference)?.checks, .empty)
+    }
+
     func testLoadReplacesCachedContentAndStoresIt() async {
         let cache = PullRequestDetailCache()
         cache.store(detailContent(title: "Cached"))
