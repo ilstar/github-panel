@@ -14,6 +14,12 @@ final class PullRequestDetailHeaderTests: XCTestCase {
         XCTAssertFalse(PullRequestDetailHeader.showsEditTitleButton(for: detail))
     }
 
+    func testPullRequestNumberLinksToGitHub() async throws {
+        let detail = try await mockDetail(own: true)
+        XCTAssertEqual(PullRequestDetailHeader.numberLabel(for: detail), "#109")
+        XCTAssertEqual(detail.htmlURL.lastPathComponent, "109")
+    }
+
     func testHeaderLinesUpWithTheConversationButSpansTheFilesTab() {
         XCTAssertEqual(PullRequestDetailView.headerMaxWidth(for: .conversation), PullRequestConversationView.contentMaxWidth)
         XCTAssertEqual(PullRequestDetailView.headerMaxWidth(for: .files), .infinity)

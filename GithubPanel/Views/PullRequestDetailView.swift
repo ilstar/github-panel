@@ -31,7 +31,6 @@ struct PullRequestDetailView: View {
             if let content = viewModel.content {
                 PullRequestDetailToolbar(selectedTab: $selectedTab,
                                          tabs: tabs(for: content.detail),
-                                         htmlURL: content.detail.htmlURL,
                                          isLoading: viewModel.isLoading,
                                          onRefresh: reload,
                                          isUpdatingBranch: viewModel.isUpdatingBranch,
@@ -198,11 +197,11 @@ struct PullRequestDetailView: View {
 }
 
 /// The row over the pull request: the Conversation / Files changed tabs on the left and the
-/// Reload, Open on GitHub, Update branch and Review buttons on the right. Edit title sits by the title instead.
+/// Reload, Update branch and Review buttons on the right. Edit title sits by the title, and the
+/// pull request number in the header links to GitHub.
 struct PullRequestDetailToolbar: View {
     @Binding var selectedTab: PullRequestDetailTab
     let tabs: [PullRequestDetailTabBar.Tab]
-    let htmlURL: URL
     let isLoading: Bool
     let onRefresh: () -> Void
     var isUpdatingBranch = false
@@ -235,17 +234,6 @@ struct PullRequestDetailToolbar: View {
             .disabled(isLoading)
             .help("Reload")
             .accessibilityLabel("Reload")
-
-            Button {
-                NSWorkspace.shared.open(htmlURL)
-            } label: {
-                HStack(spacing: 6) {
-                    Text("Open on GitHub")
-                    Image(systemName: "arrow.up.right")
-                        .font(.system(size: 10, weight: .semibold))
-                }
-            }
-            .buttonStyle(DetailToolbarButtonStyle())
 
             if let onUpdateBranch {
                 Button(action: onUpdateBranch) {
@@ -443,9 +431,12 @@ struct PullRequestDetailHeader: View {
                 PullRequestStateBadge(state: detail.state)
                 Text(detail.reference.repoFullName)
                     .lineLimit(1)
-                Text("#\(String(detail.reference.number))")
+                Link(Self.numberLabel(for: detail), destination: detail.htmlURL)
                     .monospacedDigit()
-                    .textSelection(.enabled)
+                    .help("Open on GitHub")
+                    .onHover { inside in
+                        if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+                    }
             }
             .prFont(.callout)
             .foregroundStyle(.secondary)
@@ -480,6 +471,11 @@ struct PullRequestDetailHeader: View {
             }
             .prFont(.callout)
         }
+    }
+
+    /// The pull request number, which links to the pull request on GitHub.
+    static func numberLabel(for detail: PullRequestDetail) -> String {
+        "#\(String(detail.reference.number))"
     }
 
     /// Only the author can rename a pull request, so only they get the pencil.
