@@ -3,6 +3,8 @@ import SwiftUI
 struct PRRow: View {
     let pr: PullRequestRow
     var stackPosition: PullRequestStackPosition?
+    /// The review bot's login from Settings, normalized. Nil hides the bot chip.
+    var botReviewer: String?
     let isSelected: Bool
     let relativeFormatter: RelativeDateTimeFormatter
     let now: Date
@@ -55,6 +57,12 @@ struct PRRow: View {
             StatusChip(symbolName: "hammer.fill",
                        color: pr.status.tint,
                        help: pr.status.descriptionText)
+            if let botReviewer {
+                let indicator = pr.reviewStatus.botIndicator(for: botReviewer)
+                StatusChip(symbolName: "cpu.fill",
+                           color: indicator.color,
+                           help: "\(botReviewer): \(indicator.botTitle).")
+            }
             StatusChip(symbolName: "person.fill",
                        color: reviewIndicator.color,
                        help: reviewHelp)
@@ -62,12 +70,17 @@ struct PRRow: View {
         .fixedSize()
     }
 
+    /// The people's reviews. With a review bot set, its review shows on its own chip instead.
+    private var humanReviewStatus: PullRequestReviewStatus {
+        botReviewer.map(pr.reviewStatus.excludingBot) ?? pr.reviewStatus
+    }
+
     private var reviewIndicator: ReviewIndicator {
-        pr.reviewStatus.indicator
+        humanReviewStatus.indicator
     }
 
     private var reviewHelp: String {
-        [reviewIndicator.title + ".", pr.reviewStatus.helpText].compactMap { $0 }.joined(separator: "\n")
+        [reviewIndicator.title + ".", humanReviewStatus.helpText].compactMap { $0 }.joined(separator: "\n")
     }
 
     @ViewBuilder
@@ -174,6 +187,18 @@ extension ReviewIndicator {
         case .waiting: return Theme.amber
         case .approved: return Theme.green
         case .changesRequested: return Theme.red
+        }
+    }
+}
+
+extension ReviewIndicator {
+    /// The bot chip's tooltip, after the bot's login.
+    var botTitle: String {
+        switch self {
+        case .none: return "No review requested"
+        case .waiting: return "Review requested"
+        case .approved: return "Approved"
+        case .changesRequested: return "Changes requested"
         }
     }
 }
