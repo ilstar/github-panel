@@ -431,12 +431,18 @@ struct PullRequestDetailHeader: View {
                 PullRequestStateBadge(state: detail.state)
                 Text(detail.reference.repoFullName)
                     .lineLimit(1)
-                Link(Self.numberLabel(for: detail), destination: detail.htmlURL)
-                    .monospacedDigit()
-                    .help("Open on GitHub")
-                    .onHover { inside in
-                        if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+                Link(destination: detail.htmlURL) {
+                    HStack(spacing: 3) {
+                        Text(Self.numberLabel(for: detail))
+                            .monospacedDigit()
+                        Image(systemName: "arrow.up.right")
+                            .font(.system(size: 9, weight: .semibold))
                     }
+                }
+                .help("Open on GitHub")
+                .onHover { inside in
+                    if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+                }
             }
             .prFont(.callout)
             .foregroundStyle(.secondary)
