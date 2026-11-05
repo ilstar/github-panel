@@ -1,7 +1,7 @@
 import Foundation
 
 /// How GitHub merges a pull request. Raw values are GitHub's GraphQL names.
-enum MergeMethod: String, CaseIterable, Identifiable {
+enum MergeMethod: String, CaseIterable, Identifiable, Codable {
     case merge = "MERGE"
     case squash = "SQUASH"
     case rebase = "REBASE"
@@ -31,7 +31,7 @@ enum MergeMethod: String, CaseIterable, Identifiable {
 }
 
 /// The merge methods a repository allows and the one GitHub suggests for the viewer.
-struct RepositoryMergeMethods: Equatable {
+struct RepositoryMergeMethods: Equatable, Codable {
     /// In GitHub's menu order. Never empty: GitHub requires a repository to allow at least one.
     var allowed: [MergeMethod] = [.merge]
     /// The method the viewer last used in this repository, or the repository's default.

@@ -1,7 +1,7 @@
 import Foundation
 
 /// Open pull requests waiting on the viewer's review, split by who the review was requested from.
-struct ReviewRequests: Equatable {
+struct ReviewRequests: Equatable, Codable {
     /// Review requested from the viewer directly.
     let fromMe: [ReviewRequestRow]
     /// Review requested only from a team the viewer belongs to.
@@ -82,7 +82,7 @@ enum ReviewRequestGroup: CaseIterable, Identifiable {
     }
 }
 
-struct ReviewRequestRow: Identifiable, Equatable {
+struct ReviewRequestRow: Identifiable, Equatable, Codable {
     let id: String
     let title: String
     let number: Int
