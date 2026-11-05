@@ -11,20 +11,38 @@ struct SettingsView: View {
     @AppStorage(DetailPaneMode.defaultsKey, store: AppDefaults.store) private var detailPaneMode: DetailPaneMode = .native
     @AppStorage(PullRequestTextSize.defaultsKey, store: AppDefaults.store) private var prTextSize = PullRequestTextSize.defaultSize
     @AppStorage(BotReviewer.defaultsKey, store: AppDefaults.store) private var botReviewerLogin = ""
+    @AppStorage(SettingsTab.defaultsKey, store: AppDefaults.store) private var selectedTab: SettingsTab = .general
 
     var body: some View {
+        TabView(selection: $selectedTab) {
+            ForEach(SettingsTab.allCases) { tab in
+                page(for: tab)
+                    .tabItem { Label(tab.title, systemImage: tab.systemImage) }
+                    .tag(tab)
+            }
+        }
+        .frame(width: 540, height: 480)
+    }
+
+    private func page(for tab: SettingsTab) -> some View {
         Form {
-            tokenSection
-            appearanceSection
-            botReviewSection
-            WebExtensionsSection()
-            notificationsSection
-            refreshSection
-            hooksSection
-            shortcutSection
+            switch tab {
+            case .general:
+                appearanceSection
+                refreshSection
+                shortcutSection
+            case .account:
+                tokenSection
+                botReviewSection
+            case .notifications:
+                notificationsSection
+            case .extensions:
+                WebExtensionsSection()
+            case .hooks:
+                hooksSection
+            }
         }
         .formStyle(.grouped)
-        .frame(minWidth: 520, minHeight: 640)
     }
 
     private var tokenSection: some View {
@@ -33,6 +51,8 @@ struct SettingsView: View {
                 Text("Create a personal access token in GitHub and paste it here.")
                     .foregroundStyle(.secondary)
                 Link("https://github.com/settings/tokens", destination: URL(string: "https://github.com/settings/tokens")!)
+                    // Otherwise the link takes first focus when the tab opens and draws a blue focus ring.
+                    .focusable(false)
                 Text("Permissions needed: `repo` for private repos, or `public_repo` for public-only.")
                     .foregroundStyle(.secondary)
             }
