@@ -1,14 +1,14 @@
 import Foundation
 
 /// GitHub's review verdict for a pull request. GitHub only reports one when the base branch requires reviews.
-enum ReviewDecision: String, Equatable {
+enum ReviewDecision: String, Equatable, Codable {
     case approved = "APPROVED"
     case changesRequested = "CHANGES_REQUESTED"
     case reviewRequired = "REVIEW_REQUIRED"
 }
 
 /// Who has reviewed a pull request and who has yet to.
-struct PullRequestReviewStatus: Equatable {
+struct PullRequestReviewStatus: Equatable, Codable {
     var decision: ReviewDecision?
     /// Reviewers whose latest review approved.
     var approvedBy: [String] = []

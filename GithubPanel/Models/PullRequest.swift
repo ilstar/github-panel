@@ -1,6 +1,6 @@
 import Foundation
 
-struct PullRequestRow: Identifiable, Equatable {
+struct PullRequestRow: Identifiable, Equatable, Codable {
     let id: String
     let nodeID: String
     let title: String
@@ -31,7 +31,7 @@ struct PullRequestRow: Identifiable, Equatable {
     }
 }
 
-enum CheckState: String {
+enum CheckState: String, Codable {
     case success
     case noChecks
     case failure
