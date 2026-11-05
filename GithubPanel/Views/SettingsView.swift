@@ -10,11 +10,13 @@ struct SettingsView: View {
 
     @AppStorage(DetailPaneMode.defaultsKey, store: AppDefaults.store) private var detailPaneMode: DetailPaneMode = .native
     @AppStorage(PullRequestTextSize.defaultsKey, store: AppDefaults.store) private var prTextSize = PullRequestTextSize.defaultSize
+    @AppStorage(BotReviewer.defaultsKey, store: AppDefaults.store) private var botReviewerLogin = ""
 
     var body: some View {
         Form {
             tokenSection
             appearanceSection
+            botReviewSection
             WebExtensionsSection()
             notificationsSection
             refreshSection
@@ -94,6 +96,20 @@ struct SettingsView: View {
             .disabled(prTextSize == PullRequestTextSize.defaultSize)
         } header: {
             Text("Appearance")
+        }
+    }
+
+    private var botReviewSection: some View {
+        Section {
+            TextField("Bot GitHub login", text: $botReviewerLogin, prompt: Text("review-bot"))
+                .autocorrectionDisabled()
+        } header: {
+            Text("Bot Review")
+        } footer: {
+            Text("My PRs shows the bot's review in its own chip, between checks and reviews, and the reviews chip shows only people's reviews. Leave empty to hide the chip.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

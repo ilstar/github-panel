@@ -50,6 +50,7 @@ struct ContentView: View {
     @State private var pageScroller = PageScroller()
     @AppStorage(ListPaneLayout.widthDefaultsKey, store: AppDefaults.store) private var listPaneWidth: Double = ListPaneLayout.defaultWidth
     @AppStorage(DetailPaneMode.defaultsKey, store: AppDefaults.store) private var detailPaneMode: DetailPaneMode = .native
+    @AppStorage(BotReviewer.defaultsKey, store: AppDefaults.store) private var botReviewerLogin = ""
     @AppStorage(Self.forLaterExpandedDefaultsKey, store: AppDefaults.store) private var isForLaterExpanded = true
     /// Made on first use of the GitHub pane, then kept so switching pull requests reuses one web view.
     @StateObject private var webSession = LazyWebSession()
@@ -422,6 +423,7 @@ struct ContentView: View {
         PRRow(
             pr: pr,
             stackPosition: stackPosition,
+            botReviewer: BotReviewer.normalized(botReviewerLogin),
             isSelected: selectedPRID == pr.id,
             relativeFormatter: relativeFormatter,
             now: now
