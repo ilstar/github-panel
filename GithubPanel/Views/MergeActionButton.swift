@@ -24,7 +24,7 @@ struct MergeActionButton: View {
     @State private var isHovering = false
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
+        let shape = DetailToolbarButtonStyle.shape
         Button(action: handleClick) {
             HStack(spacing: 6) {
                 if state == .working {

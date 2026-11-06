@@ -166,6 +166,7 @@ struct PullRequestFilesView: View {
             } label: {
                 Image(systemName: "sidebar.left")
             }
+            .buttonStyle(DetailToolbarButtonStyle(isIconOnly: true, isBordered: true))
             .help(showsFileTree ? "Hide file tree" : "Show file tree")
 
             Text("\(viewedCount) / \(shownFiles.count) files viewed")
@@ -173,13 +174,10 @@ struct PullRequestFilesView: View {
                 .foregroundStyle(.secondary)
 
             if viewModel.canShowChangesSinceLastReview {
-                Picker("", selection: Binding(get: { viewModel.fileScope },
-                                              set: { scope in Task { await viewModel.showFiles(scope) } })) {
-                    Text("All changes").tag(PullRequestDetailViewModel.FileScope.all)
-                    Text("Since your last review").tag(PullRequestDetailViewModel.FileScope.sinceLastReview)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+                GlassSegmentedControl(selection: Binding(get: { viewModel.fileScope },
+                                                         set: { scope in Task { await viewModel.showFiles(scope) } }),
+                                      segments: [.init(value: .all, title: "All changes"),
+                                                 .init(value: .sinceLastReview, title: "Since your last review")])
                 .fixedSize()
                 .help("Show every change, or only the commits pushed since you last reviewed")
             }
@@ -189,18 +187,15 @@ struct PullRequestFilesView: View {
             Toggle("Hide whitespace", isOn: $hideWhitespace)
                 .toggleStyle(.checkbox)
 
-            Picker("", selection: $mode) {
-                ForEach(DiffViewMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize()
+            GlassSegmentedControl(selection: $mode,
+                                  segments: DiffViewMode.allCases.map { .init(value: $0, title: $0.title) })
+                .fixedSize()
 
             Button("Expand All") { collapsed = [] }
+                .buttonStyle(DetailToolbarButtonStyle(isBordered: true))
                 .disabled(collapsed.isEmpty)
             Button("Collapse All") { collapsed = Set(shownFiles.map(\.filename)) }
+                .buttonStyle(DetailToolbarButtonStyle(isBordered: true))
                 .disabled(collapsed.count == shownFiles.count)
         }
     }

@@ -308,6 +308,9 @@ struct DetailToolbarButtonStyle: ButtonStyle {
     var isBordered = false
     var isProminent = false
 
+    /// Toolbar buttons are round: capsules, and circles when they only hold an icon.
+    static let shape = Capsule(style: .continuous)
+
     func makeBody(configuration: Configuration) -> some View {
         ToolbarButton(configuration: configuration, style: self)
     }
@@ -319,7 +322,7 @@ struct DetailToolbarButtonStyle: ButtonStyle {
         @State private var isHovering = false
 
         var body: some View {
-            let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
+            let shape = DetailToolbarButtonStyle.shape
             configuration.label
                 .font(.system(size: 13, weight: style.isProminent ? .semibold : .medium))
                 .foregroundStyle(foreground)
@@ -382,7 +385,7 @@ struct PullRequestDetailTabBar: View {
         @State private var isHovering = false
 
         var body: some View {
-            let shape = RoundedRectangle(cornerRadius: 7, style: .continuous)
+            let shape = DetailToolbarButtonStyle.shape
             Button(action: action) {
                 HStack(spacing: 6) {
                     Text(tab.title)
