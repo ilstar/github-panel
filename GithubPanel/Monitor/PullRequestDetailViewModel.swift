@@ -51,8 +51,8 @@ final class PullRequestDetailViewModel: ObservableObject {
     @Published private(set) var content: PullRequestDetailContent?
     @Published private(set) var isLoading = false
     @Published private(set) var errorMessage: String?
-    /// Parsed diff lines for each file, keyed by filename. Parsed once per load.
-    @Published private(set) var diffLines: [String: [DiffLine]] = [:]
+    /// Each file's diff lines, parsed the first time the file is shown.
+    private var diffLines = LazyDiffLines()
     /// Filenames the viewer marked as viewed.
     @Published private(set) var viewedFiles: Set<String> = []
     /// General comments and review threads. Nil until they first load.
@@ -101,8 +101,8 @@ final class PullRequestDetailViewModel: ObservableObject {
     private let cache: PullRequestDetailCache?
     private var cacheSubscription: AnyCancellable?
     private var isApplyingCacheUpdate = false
-    /// Parsed diff lines for each file changed since the last review, keyed by filename.
-    private var diffLinesSinceLastReview: [String: [DiffLine]] = [:]
+    /// The diff lines of each file changed since the last review, parsed the first time the file is shown.
+    private var diffLinesSinceLastReview = LazyDiffLines()
     /// The commits `filesSinceLastReview` compares.
     private var loadedReviewRange: CommitRange?
     /// Presentations built so far, keyed by filename, scope, and whether whitespace changes are hidden.
@@ -329,14 +329,13 @@ final class PullRequestDetailViewModel: ObservableObject {
     private func apply(_ loaded: PullRequestDetailContent) {
         guard loaded != content else { return }
         if content?.detail.headSHA != loaded.detail.headSHA { checks = nil }
-        diffLines = Dictionary(loaded.files.map { ($0.filename, DiffParser.parse($0.patch ?? "")) },
-                               uniquingKeysWith: { first, _ in first })
+        diffLines = LazyDiffLines(loaded.files)
         presentations = [:]
         viewedFiles = Set(loaded.files.filter(\.isViewed).map(\.filename))
         content = loaded
         if reviewRange != loadedReviewRange {
             filesSinceLastReview = nil
-            diffLinesSinceLastReview = [:]
+            diffLinesSinceLastReview = LazyDiffLines()
             loadedReviewRange = nil
         }
         if loaded.detail.lastReviewedSHA == nil {
@@ -394,8 +393,7 @@ final class PullRequestDetailViewModel: ObservableObject {
             file.isOwnedByViewer = byName[file.filename]?.isOwnedByViewer ?? false
             return file
         }
-        diffLinesSinceLastReview = Dictionary(changed.map { ($0.filename, DiffParser.parse($0.patch ?? "")) },
-                                              uniquingKeysWith: { first, _ in first })
+        diffLinesSinceLastReview = LazyDiffLines(changed)
         presentations = presentations.filter { $0.key.scope == .all }
         loadedReviewRange = range
         filesSinceLastReview = changed
@@ -404,7 +402,7 @@ final class PullRequestDetailViewModel: ObservableObject {
 
     /// The parsed diff lines of a file in the shown scope.
     func lines(for filename: String) -> [DiffLine]? {
-        fileScope == .sinceLastReview ? diffLinesSinceLastReview[filename] : diffLines[filename]
+        fileScope == .sinceLastReview ? diffLinesSinceLastReview.lines(for: filename) : diffLines.lines(for: filename)
     }
 
     private func apply(_ loaded: PullRequestComments) {

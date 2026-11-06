@@ -55,6 +55,18 @@ final class PRMonitorPrefetchTests: XCTestCase {
         XCTAssertNotNil(monitor.detailCache.entry(for: reference(3))?.comments)
     }
 
+    func testPreloadTakesTheTopRowsOfBothTabsFirst() async {
+        let api = prefetchingAPI(rows: [row(number: 1, status: .success), row(number: 2, status: .success),
+                                        row(number: 3, status: .success)])
+        api.reviewRequests = ReviewRequests(fromMe: [reviewRequestRow(number: 8)],
+                                           fromMyTeams: [reviewRequestRow(number: 7)])
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+        await monitor.refreshNow()
+        await monitor.waitForPrefetch()
+
+        XCTAssertEqual(api.detailCalls.map(\.reference.number), [1, 8, 2, 7, 3])
+    }
+
     func testStandaloneReviewRefreshPreloadsDetails() async {
         let api = prefetchingAPI(rows: [])
         api.reviewRequests = ReviewRequests(fromMe: [reviewRequestRow(number: 2)], fromMyTeams: [])

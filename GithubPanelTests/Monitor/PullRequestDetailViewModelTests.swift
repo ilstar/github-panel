@@ -33,8 +33,9 @@ final class PullRequestDetailViewModelTests: XCTestCase {
 
         await viewModel.load()
 
-        XCTAssertEqual(viewModel.diffLines["a.swift"]?.map(\.kind), [.hunk, .deletion, .addition])
-        XCTAssertEqual(viewModel.diffLines["logo.png"], [])
+        XCTAssertEqual(viewModel.lines(for: "a.swift")?.map(\.kind), [.hunk, .deletion, .addition])
+        XCTAssertEqual(viewModel.lines(for: "logo.png"), [])
+        XCTAssertNil(viewModel.lines(for: "missing.swift"))
     }
 
     func testLoadReadsViewedFiles() async {
@@ -274,7 +275,7 @@ final class PullRequestDetailViewModelTests: XCTestCase {
 
         XCTAssertEqual(viewModel.content?.detail.title, "Cached")
         XCTAssertEqual(viewModel.viewedFiles, ["a.swift"])
-        XCTAssertEqual(viewModel.diffLines["a.swift"]?.count, 3)
+        XCTAssertEqual(viewModel.lines(for: "a.swift")?.count, 3)
         XCTAssertEqual(viewModel.comments, comments)
         XCTAssertEqual(viewModel.threadIndex(for: "a.swift").threads.map(\.id), ["t1"])
     }

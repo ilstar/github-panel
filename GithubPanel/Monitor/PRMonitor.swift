@@ -85,7 +85,7 @@ final class PRMonitor: ObservableObject {
     private var refreshQueued = false
     private var refreshRevision = 0
     private var prefetchTask: Task<Void, Never>?
-    private var pendingPrefetch: [PullRequestReference: Date] = [:]
+    private var pendingPrefetch: [PullRequestReference: PendingPrefetch] = [:]
     private var lastStates: [String: CheckState] = [:]
     private var lastReviewStatuses: [String: PullRequestReviewStatus] = [:]
     /// Review requests seen since the token was set. Nil until the first load, so the first list posts nothing.
@@ -441,13 +441,14 @@ final class PRMonitor: ObservableObject {
     }
 
     /// Both tabs share a queue. A refresh arriving during preloading queues another pass rather than being dropped.
+    /// The queue takes the two lists' rows in turn from the top, so the rows each tab selects first load first.
     private func prefetchDetails() {
         guard let token = loadSessionToken() else { return }
-        for row in prRows {
-            pendingPrefetch[row.reference] = max(pendingPrefetch[row.reference] ?? .distantPast, row.updatedAt)
+        for (position, row) in prRows.enumerated() {
+            queuePrefetch(row.reference, updatedAt: row.updatedAt, position: position)
         }
-        for row in reviewRequests.rows {
-            pendingPrefetch[row.reference] = max(pendingPrefetch[row.reference] ?? .distantPast, row.updatedAt)
+        for (position, row) in reviewRequests.rows.enumerated() {
+            queuePrefetch(row.reference, updatedAt: row.updatedAt, position: position)
         }
         guard prefetchTask == nil, !pendingPrefetch.isEmpty else { return }
         let session = credentialSession
@@ -456,12 +457,18 @@ final class PRMonitor: ObservableObject {
         }
     }
 
+    private func queuePrefetch(_ reference: PullRequestReference, updatedAt: Date, position: Int) {
+        let queued = pendingPrefetch[reference]
+        pendingPrefetch[reference] = PendingPrefetch(updatedAt: max(queued?.updatedAt ?? .distantPast, updatedAt),
+                                                     position: min(queued?.position ?? position, position))
+    }
+
     private func prefetch(token: String, session: UUID) async {
         defer {
             if session == credentialSession { prefetchTask = nil }
         }
-        while let reference = pendingPrefetch.keys.sorted(by: { $0.id < $1.id }).first,
-              let updatedAt = pendingPrefetch.removeValue(forKey: reference) {
+        while let reference = PendingPrefetch.next(in: pendingPrefetch),
+              let updatedAt = pendingPrefetch.removeValue(forKey: reference)?.updatedAt {
             guard !Task.isCancelled, session == credentialSession else { return }
             do {
                 let cached = detailCache.entry(for: reference)
@@ -919,5 +926,18 @@ private enum DefaultsKeys {
 
     static func mergeMethod(for repoFullName: String) -> String {
         "GithubPanel.mergeMethod.\(repoFullName)"
+    }
+}
+
+/// A pull request waiting for its details to preload.
+struct PendingPrefetch: Equatable {
+    /// The newest update seen, so the cache refreshes when it is older.
+    let updatedAt: Date
+    /// The row's place in its list. A pull request in both lists keeps the higher place.
+    let position: Int
+
+    /// The pull request to preload next: the highest in its list, with ties broken by id.
+    static func next(in queue: [PullRequestReference: PendingPrefetch]) -> PullRequestReference? {
+        queue.min { ($0.value.position, $0.key.id) < ($1.value.position, $1.key.id) }?.key
     }
 }

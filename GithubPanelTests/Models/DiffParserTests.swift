@@ -106,4 +106,20 @@ final class DiffParserTests: XCTestCase {
             "Gone.swift": "@@ -1 +0,0 @@\n-bye"
         ])
     }
+
+    func testLazyDiffLinesParsesEachFileOnFirstUse() {
+        var diffs = LazyDiffLines([
+            PullRequestFile(filename: "a.swift", previousFilename: nil, status: .modified,
+                            additions: 1, deletions: 1, patch: "@@ -1 +1 @@\n-a\n+b"),
+            PullRequestFile(filename: "logo.png", previousFilename: nil, status: .added,
+                            additions: 0, deletions: 0, patch: nil)
+        ])
+
+        XCTAssertEqual(diffs.lines(for: "a.swift"), DiffParser.parse("@@ -1 +1 @@\n-a\n+b"))
+        XCTAssertEqual(diffs.lines(for: "a.swift")?.count, 3, "Asking again returns the same lines")
+        XCTAssertEqual(diffs.lines(for: "logo.png"), [])
+        XCTAssertNil(diffs.lines(for: "missing.swift"))
+        var empty = LazyDiffLines()
+        XCTAssertNil(empty.lines(for: "a.swift"))
+    }
 }
