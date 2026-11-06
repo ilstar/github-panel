@@ -1,7 +1,7 @@
 import Foundation
 
 /// What a run of code is, for coloring it in the diff.
-enum SyntaxKind: Equatable {
+enum SyntaxKind: Equatable, CaseIterable {
     case keyword
     case string
     case number

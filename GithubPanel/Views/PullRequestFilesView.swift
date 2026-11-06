@@ -431,8 +431,8 @@ struct PullRequestFilesView: View {
 
                     ForEach(diffSections) { section in
                         Section {
-                            ForEach(section.rows) { row in
-                                diffRow(row)
+                            ForEach(section.items) { item in
+                                diffItem(item)
                             }
                             // The gap before the next file. It sits inside the section so the pinned header
                             // has no gap above it.
@@ -493,14 +493,9 @@ struct PullRequestFilesView: View {
         case .header:
             // Drawn as the section header instead; see `diffList`.
             EmptyView()
-        case let .unified(path, _, line):
-            DiffLineRow(line: line,
-                        onAddComment: addCommentAction(DiffCommentAnchor.unified(path: path, line: line)),
-                        scrollActivity: scrollActivity)
-                .fileCardEdges(.middle)
-        case let .split(path, _, row):
-            splitRow(row, path: path)
-                .fileCardEdges(.middle)
+        case .unified, .split:
+            // Drawn in blocks instead; see `diffItem`.
+            diffLines([row])
         case let .message(_, text):
             fileMessage(text)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -529,16 +524,31 @@ struct PullRequestFilesView: View {
     }
 
     @ViewBuilder
-    private func splitRow(_ row: SplitDiffRow, path: String) -> some View {
-        switch row {
-        case .full:
-            SplitDiffRowView(row: row, scrollActivity: scrollActivity)
-        case let .pair(left, right):
-            SplitDiffRowView(row: row,
-                             onAddLeftComment: addCommentAction(DiffCommentAnchor.split(path: path, line: left, side: .left)),
-                             onAddRightComment: addCommentAction(DiffCommentAnchor.split(path: path, line: right, side: .right)),
-                             scrollActivity: scrollActivity)
+    private func diffItem(_ item: DiffListItem) -> some View {
+        switch item {
+        case let .lines(rows):
+            diffLines(rows)
+        case let .row(row):
+            diffRow(row)
         }
+    }
+
+    /// A block of diff lines, drawn by one view.
+    private func diffLines(_ rows: [DiffListRow]) -> some View {
+        DiffLinesCanvas(rows: rows.map { row in
+            switch row {
+            case let .unified(path, _, line):
+                return DiffLineColumns.unified(line, onAddComment: addCommentAction(.unified(path: path, line: line)))
+            case let .split(path, _, splitRow):
+                guard case let .pair(left, right) = splitRow else { return DiffLineColumns.split(splitRow) }
+                return DiffLineColumns.split(splitRow,
+                                             onAddLeftComment: addCommentAction(.split(path: path, line: left, side: .left)),
+                                             onAddRightComment: addCommentAction(.split(path: path, line: right, side: .right)))
+            default:
+                return []
+            }
+        }, scrollActivity: scrollActivity)
+        .fileCardEdges(.middle)
     }
 
     private func addCommentAction(_ anchor: DiffCommentAnchor?) -> (() -> Void)? {
@@ -837,146 +847,27 @@ extension View {
     }
 }
 
-/// One line of the unified view. Line numbers and the +/- marker are one text, so each line builds two texts
-/// instead of four; building rows is most of the cost of fast scrolling.
-struct DiffLineRow: View {
-    let line: DiffDisplayLine
-    /// Opens a new-comment box on this line. Nil for lines GitHub cannot take comments on.
-    var onAddComment: (() -> Void)?
-    var scrollActivity: ScrollActivity?
-
-    var body: some View {
-        DiffLineHalf(line: line, numbers: [line.oldLineNumber, line.newLineNumber], onAddComment: onAddComment,
-                     scrollActivity: scrollActivity)
+/// The sides ``DiffLinesCanvas`` draws for each diff row.
+enum DiffLineColumns {
+    /// One side with the old and new line numbers.
+    static func unified(_ line: DiffDisplayLine, onAddComment: (() -> Void)? = nil) -> [DiffRowColumn] {
+        [DiffRowColumn(line: line, numbers: [line.oldLineNumber, line.newLineNumber], onAddComment: onAddComment)]
     }
-}
 
-/// One row of the split view: the old line on the left and the new line on the right.
-struct SplitDiffRowView: View {
-    let row: SplitDiffRow
-    var onAddLeftComment: (() -> Void)?
-    var onAddRightComment: (() -> Void)?
-    var scrollActivity: ScrollActivity?
-
-    var body: some View {
+    /// Hunk headers and notes span the whole row; a pair has the old side on the left and the new on the right.
+    static func split(_ row: SplitDiffRow, onAddLeftComment: (() -> Void)? = nil,
+                      onAddRightComment: (() -> Void)? = nil) -> [DiffRowColumn] {
         switch row {
         case let .full(line):
-            DiffLineHalf(line: line, numbers: [nil], onAddComment: nil, scrollActivity: scrollActivity)
+            return [DiffRowColumn(line: line, numbers: [nil])]
         case let .pair(left, right):
-            // The backgrounds fill the row behind both halves, so a half with a shorter line needs no
-            // stretching to match the taller one.
-            HStack(alignment: .top, spacing: 1) {
-                half(left, number: left?.oldLineNumber, onAddComment: onAddLeftComment)
-                half(right, number: right?.newLineNumber, onAddComment: onAddRightComment)
-            }
-            .background {
-                HStack(spacing: 0) {
-                    halfBackground(left)
-                    Divider()
-                    halfBackground(right)
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func half(_ line: DiffDisplayLine?, number: Int?, onAddComment: (() -> Void)?) -> some View {
-        if let line {
-            DiffLineHalf(line: line, numbers: [number], onAddComment: onAddComment, scrollActivity: scrollActivity,
-                         fillsBackground: false)
-        } else {
-            Color.clear
-                .frame(maxWidth: .infinity, maxHeight: 0)
-        }
-    }
-
-    private func halfBackground(_ line: DiffDisplayLine?) -> Color {
-        line.map { DiffColors.background(for: $0.kind) } ?? Color.secondary.opacity(0.06)
-    }
-}
-
-/// Line numbers, marker, and text for one diff line.
-private struct DiffLineHalf: View {
-    @Environment(\.pullRequestTextSize) private var textSize
-    @Environment(\.colorScheme) private var colorScheme
-    private var font: NSFont { PullRequestTextSize.codeFont(setting: textSize) }
-    /// Keep line numbers and comment targets aligned with the chosen font.
-    private var characterWidth: CGFloat { PullRequestTextSize.codeCharacterWidth(setting: textSize) }
-
-    let line: DiffDisplayLine
-    /// The line number columns; nil leaves a column blank.
-    let numbers: [Int?]
-    var onAddComment: (() -> Void)?
-    /// While this says the list is scrolling, the line does not react to the pointer. See `ScrollActivity`.
-    var scrollActivity: ScrollActivity?
-    /// Off in the split view, which fills each half's background across the whole row.
-    var fillsBackground = true
-
-    @State private var isHovering = false
-    /// Selectable text is slow to build, so a line turns selectable only once the pointer reaches it. It stays
-    /// selectable after the pointer leaves, so a selection can still be copied.
-    @State private var isSelectable = false
-
-    private var gutterWidth: CGFloat {
-        CGFloat(numbers.count * DiffGutterText.columnWidth) * characterWidth
-    }
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 0) {
-            Text(DiffGutterText.prefix(numbers: numbers, kind: line.kind))
-                .foregroundStyle(.secondary)
-                .fixedSize()
-            lineText
-                .foregroundStyle(line.kind == .hunk || line.kind == .note ? Color.secondary : Color.primary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(.vertical, 1)
-        .font(Font(font))
-        .background(alignment: .leading) {
-            DiffColors.gutterBackground(for: line.kind)
-                .frame(width: gutterWidth)
-        }
-        .background(fillsBackground ? DiffColors.background(for: line.kind) : .clear)
-        // The marker column turns into an add-comment button under the pointer, like on GitHub.
-        .overlay(alignment: .topLeading) {
-            if isHovering, let onAddComment {
-                Button(action: onAddComment) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 16, height: 16)
-                        .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(Color.accentColor))
-                }
-                .buttonStyle(.plain)
-                .frame(width: CGFloat(DiffGutterText.markerWidth) * characterWidth)
-                .padding(.leading, gutterWidth)
-                .help("Add a comment on this line")
-            }
-        }
-        // Continuous so a line skipped while the list scrolled still reacts once the pointer moves again.
-        .onContinuousHover { phase in
-            switch phase {
-            case .active:
-                guard !isHovering, scrollActivity?.isScrolling() != true else { return }
-                isHovering = true
-                if !isSelectable { isSelectable = true }
-            case .ended:
-                if isHovering { isHovering = false }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var lineText: some View {
-        if isSelectable {
-            Text(DiffColors.attributedText(line, colorScheme: colorScheme))
-                .textSelection(.enabled)
-        } else {
-            Text(DiffColors.attributedText(line, colorScheme: colorScheme))
+            return [DiffRowColumn(line: left, numbers: [left?.oldLineNumber],
+                                  onAddComment: left == nil ? nil : onAddLeftComment),
+                    DiffRowColumn(line: right, numbers: [right?.newLineNumber],
+                                  onAddComment: right == nil ? nil : onAddRightComment)]
         }
     }
 }
-
 
 struct CodeOwnerShield: View {
     let file: PullRequestFile

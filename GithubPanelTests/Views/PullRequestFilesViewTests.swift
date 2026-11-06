@@ -64,38 +64,6 @@ final class PullRequestFilesViewTests: XCTestCase {
         XCTAssertEqual(pasteboard.string(forType: .string), "Sources/New.swift")
     }
 
-    func testAttributedTextFillsOnlyChangedWords() {
-        let line = DiffDisplayLine(kind: .addition, oldLineNumber: nil, newLineNumber: 1, segments: [
-            DiffSegment(text: "hello ", isChanged: false),
-            DiffSegment(text: "claude", isChanged: true)
-        ])
-
-        let text = DiffColors.attributedText(line)
-
-        XCTAssertEqual(String(text.characters), "hello claude")
-        let highlighted = text.runs.filter { $0.backgroundColor != nil }.map { String(text[$0.range].characters) }
-        XCTAssertEqual(highlighted, ["claude"])
-    }
-
-    func testAttributedTextColorsCode() {
-        let line = DiffDisplayLine(kind: .context, oldLineNumber: 1, newLineNumber: 1, segments: [
-            DiffSegment(text: "let", isChanged: false, syntax: .keyword),
-            DiffSegment(text: " a", isChanged: false)
-        ])
-
-        let text = DiffColors.attributedText(line)
-
-        let colored = text.runs.filter { $0.foregroundColor != nil }.map { String(text[$0.range].characters) }
-        XCTAssertEqual(colored, ["let"])
-    }
-
-    func testAttributedTextKeepsEmptyLinesVisible() {
-        let line = DiffDisplayLine(kind: .context, oldLineNumber: 1, newLineNumber: 1,
-                                   segments: [DiffSegment(text: "", isChanged: false)])
-
-        XCTAssertEqual(String(DiffColors.attributedText(line).characters), " ")
-    }
-
     /// Lines ignore the pointer while the diff scrolls, which needs a monitor on the diff list's own scroll view.
     @MainActor
     func testDiffListMonitorsItsOwnScrolling() async throws {

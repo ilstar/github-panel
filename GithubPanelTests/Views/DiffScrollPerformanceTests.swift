@@ -31,16 +31,16 @@ final class DiffScrollPerformanceTests: XCTestCase {
 
     func testUnifiedDiffScrollsNearlyAsFastAsPlainText() async throws {
         let ratio = try await scrollCostRatio(mode: .unified)
-        // Measured 4.8–4.9 with syntax colors (#148), whose extra text runs cost about 3 ms a step; 3.8 without them.
-        // Making every line selectable again gave 5.6 before #148; the four-text rows before #51 gave 6.6–6.8.
-        XCTAssertLessThan(ratio, 5.5, "Unified diff rows are \(ratio)× slower to scroll than plain text rows")
+        // Measured 1.6–1.8 with lines drawn in blocks of 20 by DiffLinesCanvas. One SwiftUI row per line measured
+        // 4.8–4.9 with syntax colors (#148); one AppKit view per line was worse still, at about 5.
+        XCTAssertLessThan(ratio, 2.5, "Unified diff rows are \(ratio)× slower to scroll than plain text rows")
     }
 
     func testSplitDiffScrollsNearlyAsFastAsPlainText() async throws {
         let ratio = try await scrollCostRatio(mode: .split)
-        // Measured 5.2–5.5 with syntax colors (#148), whose extra text runs cost about 3 ms a step; 4.0–4.2 without them.
-        // Making every line selectable again gave 6.2 before #148; the four-text rows before #51 gave 6.5–6.6.
-        XCTAssertLessThan(ratio, 6.0, "Split diff rows are \(ratio)× slower to scroll than plain text rows")
+        // Measured 2.0 with lines drawn in blocks of 20 by DiffLinesCanvas. One SwiftUI row per line measured
+        // 5.2–5.5 with syntax colors (#148).
+        XCTAssertLessThan(ratio, 3.0, "Split diff rows are \(ratio)× slower to scroll than plain text rows")
     }
 
     /// The diff list's median frame time over the plain list's. The two take turns three times and each keeps its

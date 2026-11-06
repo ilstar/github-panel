@@ -101,6 +101,13 @@ struct DiffListSection: Identifiable, Equatable {
 
     var id: String { file.filename }
 
+    /// The most diff lines drawn by one view. Large enough that scrolling seldom builds a new block, small enough
+    /// that building one stays well under a frame.
+    static let linesPerBlock = 20
+
+    /// The rows grouped for the list: runs of diff lines become blocks, everything else stays a row.
+    var items: [DiffListItem] { DiffListItem.items(rows, linesPerBlock: Self.linesPerBlock) }
+
     /// Splits `rows` at each header.
     static func sections(_ rows: [DiffListRow]) -> [DiffListSection] {
         var sections: [DiffListSection] = []
@@ -117,5 +124,42 @@ struct DiffListSection: Identifiable, Equatable {
         }
         if let file { sections.append(DiffListSection(file: file, rows: fileRows)) }
         return sections
+    }
+}
+
+/// What the list shows under a file's header: a block of diff lines drawn by one view, or any other row.
+enum DiffListItem: Identifiable, Equatable {
+    case lines([DiffListRow])
+    case row(DiffListRow)
+
+    var id: String {
+        switch self {
+        case let .lines(rows): return "\(rows[0].id)+block"
+        case let .row(row): return row.id
+        }
+    }
+
+    /// Groups runs of unified or split rows into blocks of at most `linesPerBlock`. Blocks also break at every
+    /// multiple of `linesPerBlock`, so a comment opening on one line splits only that line's block and the
+    /// blocks after it keep their ids.
+    static func items(_ rows: [DiffListRow], linesPerBlock: Int) -> [DiffListItem] {
+        var items: [DiffListItem] = []
+        var block: [DiffListRow] = []
+        func closeBlock() {
+            if !block.isEmpty { items.append(.lines(block)) }
+            block = []
+        }
+        for row in rows {
+            switch row {
+            case let .unified(_, index, _), let .split(_, index, _):
+                if index % linesPerBlock == 0 { closeBlock() }
+                block.append(row)
+            default:
+                closeBlock()
+                items.append(.row(row))
+            }
+        }
+        closeBlock()
+        return items
     }
 }
