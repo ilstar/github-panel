@@ -62,3 +62,22 @@ struct ListPaneDivider: View {
             .zIndex(1)
     }
 }
+
+/// The board behind the whole main window: one color under both the sidebar and the pull request
+/// pane, so the gap around the floating sidebar matches the pane beside it, with the sidebar panel on top.
+struct WindowBackdrop<Sidebar: View>: View {
+    let listPaneWidth: Double
+    @ViewBuilder let sidebar: () -> Sidebar
+
+    var body: some View {
+        GeometryReader { proxy in
+            let listWidth = ListPaneLayout.clampedWidth(listPaneWidth, totalWidth: proxy.size.width)
+            ZStack(alignment: .topLeading) {
+                Theme.windowBackground
+                sidebar()
+                    .frame(width: listWidth - Theme.sidebarInset * 2 + ListPaneLayout.dividerWidth)
+                    .padding(Theme.sidebarInset)
+            }
+        }
+    }
+}

@@ -1,4 +1,6 @@
 import XCTest
+import AppKit
+import SwiftUI
 @testable import GithubPanel
 
 final class ListPaneLayoutTests: XCTestCase {
@@ -43,5 +45,29 @@ final class ListPaneLayoutTests: XCTestCase {
     func testMainWindowOpensAtTheDefaultSize() throws {
         let source = try String(contentsOf: TestPaths.url("GithubPanel/App/GithubPanelApp.swift"), encoding: .utf8)
         XCTAssertTrue(source.contains(".environmentObject(monitor)\n        }\n        .defaultSize(ListPaneLayout.defaultWindowSize)"))
+    }
+
+    @MainActor
+    func testBackdropIsOneColorBesideTheSidebarAndUnderThePullRequestPane() throws {
+        // A red sidebar marks where the panel is, so the samples below are known to miss it.
+        let size = CGSize(width: 1000, height: 300)
+        let listWidth = 400.0
+        let backdrop = WindowBackdrop(listPaneWidth: listWidth) { Color(red: 1, green: 0, blue: 0) }
+            .frame(width: size.width, height: size.height)
+            .environment(\.colorScheme, .light)
+        let renderer = ImageRenderer(content: backdrop)
+        renderer.scale = 1
+        let image = try XCTUnwrap(renderer.cgImage)
+        let bitmap = NSBitmapImageRep(cgImage: image)
+
+        let gapBesideSidebar = try XCTUnwrap(bitmap.colorAt(x: 2, y: 150)?.usingColorSpace(.sRGB))
+        let underSidebar = try XCTUnwrap(bitmap.colorAt(x: 100, y: 150)?.usingColorSpace(.sRGB))
+        let underPullRequest = try XCTUnwrap(bitmap.colorAt(x: 800, y: 150)?.usingColorSpace(.sRGB))
+
+        XCTAssertGreaterThan(underSidebar.redComponent, 0.9)
+        XCTAssertLessThan(underSidebar.greenComponent, 0.3)
+        XCTAssertEqual(gapBesideSidebar.redComponent, underPullRequest.redComponent, accuracy: 0.01)
+        XCTAssertEqual(gapBesideSidebar.greenComponent, underPullRequest.greenComponent, accuracy: 0.01)
+        XCTAssertEqual(gapBesideSidebar.blueComponent, underPullRequest.blueComponent, accuracy: 0.01)
     }
 }
