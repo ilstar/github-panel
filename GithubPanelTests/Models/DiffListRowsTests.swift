@@ -138,3 +138,50 @@ final class DiffListRowsCommentTests: XCTestCase {
                      isResolved: false, isOutdated: line == nil, comments: [])
     }
 }
+
+final class DiffListItemTests: XCTestCase {
+    private func line(_ index: Int) -> DiffListRow {
+        .unified(filename: "a.swift", index: index,
+                 line: DiffDisplayLine(kind: .context, oldLineNumber: index + 1, newLineNumber: index + 1,
+                                       segments: [DiffSegment(text: "line \(index)", isChanged: false)]))
+    }
+
+    private func ids(_ items: [DiffListItem]) -> [String] {
+        items.map { item in
+            switch item {
+            case let .lines(rows): return rows.map(\.id).joined(separator: ",")
+            case let .row(row): return row.id
+            }
+        }
+    }
+
+    func testRunsOfLinesBecomeBlocksAtFixedBoundaries() {
+        let rows = (0..<7).map(line) + [.footer(filename: "a.swift")]
+
+        let items = DiffListItem.items(rows, linesPerBlock: 3)
+
+        XCTAssertEqual(ids(items), ["a.swift#u0,a.swift#u1,a.swift#u2", "a.swift#u3,a.swift#u4,a.swift#u5",
+                                    "a.swift#u6", "a.swift#footer"])
+        XCTAssertEqual(items.map(\.id), ["a.swift#u0+block", "a.swift#u3+block", "a.swift#u6+block", "a.swift#footer"])
+    }
+
+    /// A comment box opening on a line splits only that line's block, so the blocks after it keep their ids and
+    /// the list does not rebuild them.
+    func testCommentsSplitOnlyTheirOwnBlock() {
+        let comments = DiffListRow.lineComments(filename: "a.swift", index: 1, threads: [], composing: nil)
+        let rows = [line(0), line(1), comments, line(2), line(3), line(4)]
+
+        let items = DiffListItem.items(rows, linesPerBlock: 3)
+
+        XCTAssertEqual(ids(items), ["a.swift#u0,a.swift#u1", "a.swift#c1", "a.swift#u2", "a.swift#u3,a.swift#u4"])
+        XCTAssertEqual(items.last?.id, "a.swift#u3+block")
+    }
+
+    func testSplitRowsAreGroupedToo() {
+        let row = SplitDiffRow.full(DiffDisplayLine(kind: .hunk, oldLineNumber: nil, newLineNumber: nil, segments: []))
+        let rows: [DiffListRow] = [.split(filename: "a.swift", index: 0, row: row),
+                                   .split(filename: "a.swift", index: 1, row: row)]
+
+        XCTAssertEqual(ids(DiffListItem.items(rows, linesPerBlock: 20)), ["a.swift#s0,a.swift#s1"])
+    }
+}

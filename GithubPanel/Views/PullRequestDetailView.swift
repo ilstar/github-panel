@@ -1392,23 +1392,6 @@ enum DiffColors {
         case .attribute: return dark ? Color(red: 0.82, green: 0.66, blue: 1.00) : Color(red: 0.51, green: 0.31, blue: 0.87)
         }
     }
-
-    /// The line's text with its changed words filled in and its code colored.
-    static func attributedText(_ line: DiffDisplayLine, colorScheme: ColorScheme = .light) -> AttributedString {
-        let highlight = line.kind == .addition ? additionHighlight : deletionHighlight
-        var text = AttributedString()
-        for segment in line.segments {
-            var part = AttributedString(segment.text)
-            if segment.isChanged {
-                part.backgroundColor = highlight
-            }
-            if let syntax = segment.syntax {
-                part.foregroundColor = syntaxColor(syntax, colorScheme: colorScheme)
-            }
-            text += part
-        }
-        return text.characters.isEmpty ? AttributedString(" ") : text
-    }
 }
 
 extension View {
