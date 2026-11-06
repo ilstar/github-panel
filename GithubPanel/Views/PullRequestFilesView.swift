@@ -191,12 +191,14 @@ struct PullRequestFilesView: View {
                                   segments: DiffViewMode.allCases.map { .init(value: $0, title: $0.title) })
                 .fixedSize()
 
-            Button("Expand All") { collapsed = [] }
-                .buttonStyle(DetailToolbarButtonStyle(isBordered: true))
-                .disabled(collapsed.isEmpty)
-            Button("Collapse All") { collapsed = Set(shownFiles.map(\.filename)) }
-                .buttonStyle(DetailToolbarButtonStyle(isBordered: true))
-                .disabled(collapsed.count == shownFiles.count)
+            // One button: Expand All once every file is folded, Collapse All otherwise.
+            let filenames = shownFiles.map(\.filename)
+            let expands = Self.offersExpandAll(filenames: filenames, collapsed: collapsed)
+            Button(expands ? "Expand All" : "Collapse All") {
+                collapsed = expands ? [] : Set(filenames)
+            }
+            .buttonStyle(DetailToolbarButtonStyle(isBordered: true))
+            .disabled(filenames.isEmpty)
         }
     }
 
@@ -219,6 +221,11 @@ struct PullRequestFilesView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 6)
         .background(Color.accentColor.opacity(0.08))
+    }
+
+    /// Whether the files toolbar's single fold button expands (every file is folded) or collapses.
+    static func offersExpandAll(filenames: [String], collapsed: Set<String>) -> Bool {
+        !filenames.isEmpty && filenames.allSatisfy(collapsed.contains)
     }
 
     static func sinceLastReviewMessage(lastReviewedSHA: String?) -> String {
