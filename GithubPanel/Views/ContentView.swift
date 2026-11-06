@@ -73,6 +73,9 @@ struct ContentView: View {
                 ListPaneDivider(width: $listPaneWidth, totalWidth: proxy.size.width)
                 detailPane
                     .environment(\.titleBarHeight, titleBarHeight)
+                    // The pane floats in its own panel, like the sidebar, so it keeps inside the panel's corners.
+                    .clipShape(WindowBackdrop<EmptyView>.panelShape)
+                    .padding([.top, .trailing, .bottom], Theme.sidebarInset)
                     .frame(minWidth: ListPaneLayout.minDetailWidth, maxWidth: .infinity, maxHeight: .infinity)
             }
             .ignoresSafeArea(.container, edges: .top)
@@ -122,7 +125,7 @@ struct ContentView: View {
 
     /// The list's floating panel. It sits in the window's background, so the rows draw over its gradient.
     private var sidebarPanel: some View {
-        let shape = RoundedRectangle(cornerRadius: Theme.sidebarCornerRadius, style: .continuous)
+        let shape = WindowBackdrop<EmptyView>.panelShape
         return EmptyPullRequestsBackground(isVisible: showsEmptyPullRequestBackground)
             .clipShape(shape)
         .glassSurface(.panel, in: shape)

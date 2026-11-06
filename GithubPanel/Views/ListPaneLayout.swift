@@ -63,20 +63,31 @@ struct ListPaneDivider: View {
     }
 }
 
-/// The board behind the whole main window: one color under both the sidebar and the pull request
-/// pane, so the gap around the floating sidebar matches the pane beside it, with the sidebar panel on top.
+/// The board behind the whole main window: one color, with two floating panels on it, the sidebar
+/// and the pull request pane. Both panels have the same corners and edges, and the same gap to the
+/// window's edges and to each other.
 struct WindowBackdrop<Sidebar: View>: View {
     let listPaneWidth: Double
     @ViewBuilder let sidebar: () -> Sidebar
 
+    static var panelShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: Theme.sidebarCornerRadius, style: .continuous)
+    }
+
     var body: some View {
         GeometryReader { proxy in
             let listWidth = ListPaneLayout.clampedWidth(listPaneWidth, totalWidth: proxy.size.width)
+            let detailLeading = listWidth + ListPaneLayout.dividerWidth
             ZStack(alignment: .topLeading) {
                 Theme.windowBackground
                 sidebar()
                     .frame(width: listWidth - Theme.sidebarInset * 2 + ListPaneLayout.dividerWidth)
                     .padding(Theme.sidebarInset)
+                Theme.contentBackground
+                    .clipShape(Self.panelShape)
+                    .glassEdges(in: Self.panelShape, shadowRadius: 18)
+                    .padding([.top, .trailing, .bottom], Theme.sidebarInset)
+                    .padding(.leading, detailLeading)
             }
         }
     }

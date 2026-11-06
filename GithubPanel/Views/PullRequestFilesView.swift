@@ -19,6 +19,8 @@ struct PullRequestFilesView: View {
     static let viewModeDefaultsKey = "diffViewMode"
     static let hideWhitespaceDefaultsKey = "diffHideWhitespace"
     static let showsFileTreeDefaultsKey = "diffShowsFileTree"
+    /// The left edge shared by the files toolbar, the file tree and the pull request header above them.
+    static let leadingInset: CGFloat = 24
 
     @ObservedObject var viewModel: PullRequestDetailViewModel
     /// Every file the pull request changes.
@@ -49,7 +51,8 @@ struct PullRequestFilesView: View {
     var body: some View {
         VStack(spacing: 0) {
             toolbar
-                .padding(.horizontal, 16)
+                .padding(.leading, Self.leadingInset)
+                .padding(.trailing, 16)
                 .padding(.vertical, 8)
 
             Divider()
@@ -298,7 +301,8 @@ struct PullRequestFilesView: View {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(Color.secondary.opacity(0.1))
             )
-            .padding(8)
+            .padding(.leading, Self.leadingInset)
+            .padding([.top, .trailing, .bottom], 8)
 
             let rows = FileTree.visibleRows(treeRows, collapsed: collapsedDirectories)
             let filesByName = Dictionary(shownFiles.map { ($0.filename, $0) }, uniquingKeysWith: { first, _ in first })
@@ -315,7 +319,9 @@ struct PullRequestFilesView: View {
                             treeRow(row, file: filesByName[row.id])
                         }
                     }
-                    .padding(.horizontal, 8)
+                    // Rows start on the shared left edge, under the filter field.
+                    .padding(.leading, Self.leadingInset)
+                    .padding(.trailing, 8)
                     .padding(.bottom, 8)
                     .mouseWheelStep()
                 }
