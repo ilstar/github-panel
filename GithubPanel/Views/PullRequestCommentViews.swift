@@ -31,9 +31,67 @@ struct PullRequestCommentView: View {
                     .help("Open comment on GitHub")
                 }
             }
-            MarkdownView(markdown: comment.body)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            CollapsibleCommentBody {
+                MarkdownView(markdown: comment.body)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
+    }
+}
+
+/// Caps a long comment body, such as a bot's report, so it does not stretch the page.
+/// A capped body fades out at the bottom and shows an Expand button.
+struct CollapsibleCommentBody<Content: View>: View {
+    /// How tall a body may grow before it is capped.
+    static var maxCollapsedHeight: CGFloat { 360 }
+    /// A body only a little taller than the cap shows in full, so Expand never reveals just a line or two.
+    static var slack: CGFloat { 120 }
+
+    @ViewBuilder let content: Content
+
+    @State private var contentHeight: CGFloat = 0
+    @State private var isExpanded = false
+
+    var body: some View {
+        let capped = Self.isCapped(contentHeight: contentHeight) && !isExpanded
+        VStack(alignment: .leading, spacing: 6) {
+            content
+                .fixedSize(horizontal: false, vertical: true)
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear
+                            .onAppear { contentHeight = proxy.size.height }
+                            .onChange(of: proxy.size.height) { contentHeight = $0 }
+                    }
+                )
+                .frame(maxHeight: capped ? Self.maxCollapsedHeight : nil, alignment: .top)
+                .clipped()
+                .mask(
+                    LinearGradient(stops: capped
+                                       ? [.init(color: .black, location: 0.75), .init(color: .clear, location: 1)]
+                                       : [.init(color: .black, location: 0), .init(color: .black, location: 1)],
+                                   startPoint: .top, endPoint: .bottom)
+                )
+            if Self.isCapped(contentHeight: contentHeight) {
+                Button {
+                    isExpanded.toggle()
+                } label: {
+                    Label(Self.toggleTitle(isExpanded: isExpanded),
+                          systemImage: isExpanded ? "chevron.up" : "chevron.down")
+                        .prFont(.callout, weight: .medium)
+                }
+                .buttonStyle(.link)
+                .help(isExpanded ? "Show less of this comment" : "Show the whole comment")
+            }
+        }
+    }
+
+    static func isCapped(contentHeight: CGFloat) -> Bool {
+        contentHeight > maxCollapsedHeight + slack
+    }
+
+    static func toggleTitle(isExpanded: Bool) -> String {
+        isExpanded ? "Collapse" : "Expand"
     }
 }
 

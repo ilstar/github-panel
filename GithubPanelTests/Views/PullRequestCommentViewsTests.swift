@@ -1,3 +1,4 @@
+import SwiftUI
 import XCTest
 @testable import GithubPanel
 
@@ -33,6 +34,21 @@ final class PullRequestCommentViewsTests: XCTestCase {
                        "Comment on old line 4…")
         XCTAssertEqual(PullRequestFilesView.composerPlaceholder(DiffCommentAnchor(path: "a", line: 5, side: .right)),
                        "Comment on line 5…")
+    }
+
+    func testLongCommentBodiesAreCapped() {
+        typealias Body = CollapsibleCommentBody<EmptyView>
+        let cap = Body.maxCollapsedHeight
+        XCTAssertFalse(Body.isCapped(contentHeight: 0))
+        XCTAssertFalse(Body.isCapped(contentHeight: cap))
+        XCTAssertFalse(Body.isCapped(contentHeight: cap + Body.slack), "A body just past the cap shows in full")
+        XCTAssertTrue(Body.isCapped(contentHeight: cap + Body.slack + 1))
+        XCTAssertTrue(Body.isCapped(contentHeight: 5_000))
+    }
+
+    func testCapToggleTitleFollowsTheState() {
+        XCTAssertEqual(CollapsibleCommentBody<EmptyView>.toggleTitle(isExpanded: false), "Expand")
+        XCTAssertEqual(CollapsibleCommentBody<EmptyView>.toggleTitle(isExpanded: true), "Collapse")
     }
 
     private func thread(line: Int?, startLine: Int?, commentCount: Int = 1) -> ReviewThread {
