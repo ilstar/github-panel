@@ -19,6 +19,8 @@ struct PullRequestFilesView: View {
     static let viewModeDefaultsKey = "diffViewMode"
     static let hideWhitespaceDefaultsKey = "diffHideWhitespace"
     static let showsFileTreeDefaultsKey = "diffShowsFileTree"
+    /// The left edge shared by the files toolbar, the file tree and the pull request header above them.
+    static let leadingInset: CGFloat = 24
 
     @ObservedObject var viewModel: PullRequestDetailViewModel
     /// Every file the pull request changes.
@@ -49,7 +51,8 @@ struct PullRequestFilesView: View {
     var body: some View {
         VStack(spacing: 0) {
             toolbar
-                .padding(.horizontal, 16)
+                .padding(.leading, Self.leadingInset)
+                .padding(.trailing, 16)
                 .padding(.vertical, 8)
 
             Divider()
@@ -163,6 +166,7 @@ struct PullRequestFilesView: View {
             } label: {
                 Image(systemName: "sidebar.left")
             }
+            .buttonStyle(DetailToolbarButtonStyle(isIconOnly: true, isBordered: true))
             .help(showsFileTree ? "Hide file tree" : "Show file tree")
 
             Text("\(viewedCount) / \(shownFiles.count) files viewed")
@@ -170,13 +174,10 @@ struct PullRequestFilesView: View {
                 .foregroundStyle(.secondary)
 
             if viewModel.canShowChangesSinceLastReview {
-                Picker("", selection: Binding(get: { viewModel.fileScope },
-                                              set: { scope in Task { await viewModel.showFiles(scope) } })) {
-                    Text("All changes").tag(PullRequestDetailViewModel.FileScope.all)
-                    Text("Since your last review").tag(PullRequestDetailViewModel.FileScope.sinceLastReview)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+                GlassSegmentedControl(selection: Binding(get: { viewModel.fileScope },
+                                                         set: { scope in Task { await viewModel.showFiles(scope) } }),
+                                      segments: [.init(value: .all, title: "All changes"),
+                                                 .init(value: .sinceLastReview, title: "Since your last review")])
                 .fixedSize()
                 .help("Show every change, or only the commits pushed since you last reviewed")
             }
@@ -186,19 +187,18 @@ struct PullRequestFilesView: View {
             Toggle("Hide whitespace", isOn: $hideWhitespace)
                 .toggleStyle(.checkbox)
 
-            Picker("", selection: $mode) {
-                ForEach(DiffViewMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize()
+            GlassSegmentedControl(selection: $mode,
+                                  segments: DiffViewMode.allCases.map { .init(value: $0, title: $0.title) })
+                .fixedSize()
 
-            Button("Expand All") { collapsed = [] }
-                .disabled(collapsed.isEmpty)
-            Button("Collapse All") { collapsed = Set(shownFiles.map(\.filename)) }
-                .disabled(collapsed.count == shownFiles.count)
+            // One button: Expand All once every file is folded, Collapse All otherwise.
+            let filenames = shownFiles.map(\.filename)
+            let expands = Self.offersExpandAll(filenames: filenames, collapsed: collapsed)
+            Button(expands ? "Expand All" : "Collapse All") {
+                collapsed = expands ? [] : Set(filenames)
+            }
+            .buttonStyle(DetailToolbarButtonStyle(isBordered: true))
+            .disabled(filenames.isEmpty)
         }
     }
 
@@ -221,6 +221,11 @@ struct PullRequestFilesView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 6)
         .background(Color.accentColor.opacity(0.08))
+    }
+
+    /// Whether the files toolbar's single fold button expands (every file is folded) or collapses.
+    static func offersExpandAll(filenames: [String], collapsed: Set<String>) -> Bool {
+        !filenames.isEmpty && filenames.allSatisfy(collapsed.contains)
     }
 
     static func sinceLastReviewMessage(lastReviewedSHA: String?) -> String {
@@ -298,7 +303,8 @@ struct PullRequestFilesView: View {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(Color.secondary.opacity(0.1))
             )
-            .padding(8)
+            .padding(.leading, Self.leadingInset)
+            .padding([.top, .trailing, .bottom], 8)
 
             let rows = FileTree.visibleRows(treeRows, collapsed: collapsedDirectories)
             let filesByName = Dictionary(shownFiles.map { ($0.filename, $0) }, uniquingKeysWith: { first, _ in first })
@@ -315,7 +321,9 @@ struct PullRequestFilesView: View {
                             treeRow(row, file: filesByName[row.id])
                         }
                     }
-                    .padding(.horizontal, 8)
+                    // Rows start on the shared left edge, under the filter field.
+                    .padding(.leading, Self.leadingInset)
+                    .padding(.trailing, 8)
                     .padding(.bottom, 8)
                     .mouseWheelStep()
                 }

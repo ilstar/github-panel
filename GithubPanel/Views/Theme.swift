@@ -6,10 +6,10 @@ import AppKit
 /// and color appears only where it carries meaning. Nothing shows the desktop through, so the window
 /// looks the same whatever is behind it.
 enum Theme {
-    /// The window behind the floating sidebar, around its edges.
+    /// The main window's board, behind both the floating sidebar and the pull request pane.
     static let windowBackground = Color(light: NSColor(red: 0.925, green: 0.933, blue: 0.953, alpha: 1),
                                         dark: NSColor(red: 0.106, green: 0.106, blue: 0.125, alpha: 1))
-    /// The pull request pane.
+    /// A standalone pull request window, which has no sidebar.
     static let contentBackground = Color(light: NSColor(red: 0.992, green: 0.992, blue: 0.996, alpha: 1),
                                          dark: NSColor(red: 0.118, green: 0.118, blue: 0.137, alpha: 1))
     static let rowHover = Color(light: NSColor(white: 1, alpha: 0.4),

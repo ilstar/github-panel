@@ -4,6 +4,16 @@ import SwiftUI
 @testable import GithubPanel
 
 final class PullRequestFilesViewTests: XCTestCase {
+    func testFoldButtonExpandsOnlyOnceEveryFileIsFolded() {
+        let files = ["a.swift", "b.swift"]
+        XCTAssertFalse(PullRequestFilesView.offersExpandAll(filenames: files, collapsed: []))
+        XCTAssertFalse(PullRequestFilesView.offersExpandAll(filenames: files, collapsed: ["a.swift"]))
+        XCTAssertTrue(PullRequestFilesView.offersExpandAll(filenames: files, collapsed: ["a.swift", "b.swift"]))
+        // Folded files from another scope, such as all changes, do not count toward the shown ones.
+        XCTAssertFalse(PullRequestFilesView.offersExpandAll(filenames: files, collapsed: ["a.swift", "c.swift"]))
+        XCTAssertFalse(PullRequestFilesView.offersExpandAll(filenames: [], collapsed: []))
+    }
+
     func testFileTreeChangeSummaryUsesFileTotalsWithoutAPatch() {
         for (additions, deletions, expected) in [(10, 5, "+10/−5"), (0, 0, "+0/−0"),
                                                  (1234, 0, "+1234/−0"), (0, 12, "+0/−12")] {

@@ -58,13 +58,13 @@ struct PullRequestDetailView: View {
                     PullRequestDetailHeader(detail: content.detail,
                                             isEditingTitle: $isEditingTitle,
                                             onSaveTitle: { title in try await viewModel.edit(title: title) })
-                        .padding(.horizontal, 32)
+                        .padding(.horizontal, Self.headerInset(for: selectedTab))
                         .padding(.top, 24)
                         .padding(.bottom, 16)
 
                     if let error = viewModel.errorMessage {
                         errorText(error)
-                            .padding(.horizontal, 32)
+                            .padding(.horizontal, Self.headerInset(for: selectedTab))
                             .padding(.bottom, 8)
                     }
 
@@ -72,7 +72,7 @@ struct PullRequestDetailView: View {
                         Label(review.confirmation, systemImage: "checkmark.circle.fill")
                             .font(.callout.weight(.medium))
                             .foregroundStyle(Theme.green)
-                            .padding(.horizontal, 32)
+                            .padding(.horizontal, Self.headerInset(for: selectedTab))
                             .padding(.bottom, 10)
                     }
                 }
@@ -84,7 +84,7 @@ struct PullRequestDetailView: View {
                     Rectangle()
                         .fill(Theme.hairline)
                         .frame(height: 1)
-                        .padding(.horizontal, 32)
+                        .padding(.horizontal, Self.headerInset(for: selectedTab))
                 }
 
                 switch selectedTab {
@@ -143,6 +143,15 @@ struct PullRequestDetailView: View {
     }
 
     /// The conversation's content is capped and centered, so its header is too; the diff uses the whole pane.
+    /// The header's side padding. On the conversation tab it lines up with the centered content; on the
+    /// files tab it lines up with the files toolbar, the file tree and the diff below it.
+    static func headerInset(for tab: PullRequestDetailTab) -> CGFloat {
+        switch tab {
+        case .conversation: return 32
+        case .files: return PullRequestFilesView.leadingInset
+        }
+    }
+
     static func headerMaxWidth(for tab: PullRequestDetailTab) -> CGFloat {
         switch tab {
         case .conversation: return PullRequestConversationView.contentMaxWidth
@@ -299,6 +308,9 @@ struct DetailToolbarButtonStyle: ButtonStyle {
     var isBordered = false
     var isProminent = false
 
+    /// Toolbar buttons are round: capsules, and circles when they only hold an icon.
+    static let shape = Capsule(style: .continuous)
+
     func makeBody(configuration: Configuration) -> some View {
         ToolbarButton(configuration: configuration, style: self)
     }
@@ -310,7 +322,7 @@ struct DetailToolbarButtonStyle: ButtonStyle {
         @State private var isHovering = false
 
         var body: some View {
-            let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
+            let shape = DetailToolbarButtonStyle.shape
             configuration.label
                 .font(.system(size: 13, weight: style.isProminent ? .semibold : .medium))
                 .foregroundStyle(foreground)
@@ -373,7 +385,7 @@ struct PullRequestDetailTabBar: View {
         @State private var isHovering = false
 
         var body: some View {
-            let shape = RoundedRectangle(cornerRadius: 7, style: .continuous)
+            let shape = DetailToolbarButtonStyle.shape
             Button(action: action) {
                 HStack(spacing: 6) {
                     Text(tab.title)
