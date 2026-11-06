@@ -18,6 +18,28 @@ struct DiffLine: Equatable {
     let newLineNumber: Int?
 }
 
+/// A pull request's file diffs, each parsed the first time it is asked for. A big pull request has many
+/// files, and parsing them all up front would hold up opening it.
+struct LazyDiffLines {
+    private var patches: [String: String] = [:]
+    private var parsed: [String: [DiffLine]] = [:]
+
+    init() {}
+
+    init(_ files: [PullRequestFile]) {
+        patches = Dictionary(files.map { ($0.filename, $0.patch ?? "") }, uniquingKeysWith: { first, _ in first })
+    }
+
+    /// Nil when no file has this name.
+    mutating func lines(for filename: String) -> [DiffLine]? {
+        if let lines = parsed[filename] { return lines }
+        guard let patch = patches[filename] else { return nil }
+        let lines = DiffParser.parse(patch)
+        parsed[filename] = lines
+        return lines
+    }
+}
+
 /// Parses the `patch` field GitHub returns for each changed file.
 enum DiffParser {
     static func parse(_ patch: String) -> [DiffLine] {
