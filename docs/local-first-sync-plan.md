@@ -75,9 +75,12 @@ The detail table keeps the current limit: the 100 most recently used PRs.
 - **Freshness**: `sync_state.fetchedAt` per resource. A request newer than a
   caller-given `maxAge` is skipped. Views can show how stale data is.
 - **Backoff**: the throttled/auth backoff moves here from `PRMonitor` and applies
-  to every request. Until step 3 moves the lists, the engine backs off its own
-  requests (60 s, doubling to 30 min, reset by a success or a new token) and only
-  shares `isThrottlingError` with `PRMonitor`'s list backoff.
+  to every request, lists and details alike. After a throttled or rejected
+  request, every request fails with that error without being sent, for two
+  refresh intervals, doubling after each failure up to 30 minutes, less half an
+  interval so the timer tick due when it ends isn't skipped. Requests that were
+  already sent and fail with it count as the same failure. A success sent after
+  the backoff began, or a new token, ends it.
 - **Credentials**: the engine reads the token and a session ID from `PRMonitor`.
   A result is saved only if the session still matches, checked on the main actor
   in the same step as the save, so nothing loaded with an old token lands after
@@ -141,7 +144,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
        changed-files fetches into it. `PullRequestDetailViewModel` observes the
        store and calls `engine.request(...)` instead of its fetch closures.
        `PRMonitor.prefetch` makes `.background` requests.
-3. [ ] **SyncEngine for lists.** Move the My PRs, History, and To Review
+3. [x] **SyncEngine for lists.** Move the My PRs, History, and To Review
        refreshes and the timer into the engine. `PRMonitor` and the list views
        observe the store; notification and hook logic reacts to store changes.
        Shrink `PRMonitor` to settings, notifications, and hooks.
@@ -176,3 +179,13 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   resources use `start` to register the detail first, so comments and checks wait for it rather than being
   dropped; opening a PR passes a 30 s `maxAge`, so it joins or reuses a preload, while "Try Again" and
   refreshes after writes pass zero (see Dedupe above).
+- 2026-11-07: Step 3 done. The engine loads `.openList`, `.history(page)`, `.reviewRequests` and `.currentUser`
+  into `PullRequestListCache`, an in-memory copy of `pull_request_list` (now with `history:<page>` rows) that
+  publishes `updates` like the details cache, plus each list's loading flag and error; `lastRefreshAt` comes from
+  `sync_state`. `ListRefreshScheduler` owns the timer: ticks are `.background` with a `maxAge` of half the
+  interval, which replaces `PRMonitor`'s "next refresh at". `PRMonitor` shows the cache, posts notifications and
+  runs hooks when a list loads, and no longer fetches. Design changes: one backoff, measured in refresh intervals
+  (see Backoff above), so a manual refresh during it sends nothing and keeps the last error; list refreshes that
+  don't follow a write pass `joinsLoadInFlight`, so they share a load already sent; a list load superseded by a
+  refresh after a write drops its result instead of saving it first, as `PRMonitor` did, so a merged row doesn't
+  come back; a History page shows from the cache while it reloads; the SSO-authorization URL stays in memory.

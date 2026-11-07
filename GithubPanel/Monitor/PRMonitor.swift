@@ -1,45 +1,56 @@
 import Foundation
 import Combine
+/// Shows the lists the sync engine loads into `listCache`, and keeps the settings, notifications, check hooks,
+/// For Later and hidden review requests. It asks the engine for everything it shows rather than fetching itself.
 @MainActor
 final class PRMonitor: ObservableObject {
-    @Published var prRows: [PullRequestRow] = []
+    @Published private(set) var prRows: [PullRequestRow] = []
     /// My PRs parked under For Later, keyed by pull request ID. Also saved to defaults.
     @Published private(set) var forLaterIDs: Set<String> = []
-    @Published var historyRows: [PullRequestHistoryRow] = []
-    @Published var reviewRequests: ReviewRequests = .empty
+    @Published private(set) var historyRows: [PullRequestHistoryRow] = []
+    @Published private(set) var reviewRequests: ReviewRequests = .empty
     @Published var selectedTab: PullRequestTab = .open {
         didSet {
             guard selectedTab != oldValue else { return }
             loadSelectedTab()
         }
     }
-    @Published var isLoading: Bool = false
-    @Published var isHistoryLoading: Bool = false
-    @Published var isReviewRequestsLoading: Bool = false
+    @Published private(set) var isLoading: Bool = false
+    @Published private(set) var isHistoryLoading: Bool = false
+    @Published private(set) var isReviewRequestsLoading: Bool = false
     @Published var hasToken: Bool = false
-    @Published var lastError: String?
-    @Published var lastHistoryError: String?
-    @Published var lastReviewRequestsError: String?
+    @Published private(set) var lastError: String?
+    @Published private(set) var lastHistoryError: String?
+    @Published private(set) var lastReviewRequestsError: String?
     /// Set when the last open pull request refresh left some out because the token isn't SSO-authorized.
-    @Published var openPullRequestsSSOAuthorizationURL: URL?
-    @Published var lastRefreshAt: Date?
-    @Published var lastHistoryRefreshAt: Date?
-    @Published var lastReviewRequestsRefreshAt: Date?
-    @Published var historyPage: Int = 1
-    @Published var historyTotalCount: Int = 0
+    @Published private(set) var openPullRequestsSSOAuthorizationURL: URL?
+    @Published private(set) var lastRefreshAt: Date?
+    @Published private(set) var lastHistoryRefreshAt: Date?
+    @Published private(set) var lastReviewRequestsRefreshAt: Date?
+    @Published private(set) var historyPage: Int = 1
+    @Published private(set) var historyTotalCount: Int = 0
     let isUsingMockData: Bool
     /// A pull request a clicked notification asked to show. The main window selects it, then clears this.
     @Published var pullRequestToShow: PullRequestToShow?
     /// Details and comments of pull requests loaded so far, shared by every detail view.
     let detailCache: PullRequestDetailCache
-    /// Loads pull request details into `detailCache` with the session token.
-    private(set) lazy var syncEngine = SyncEngine(api: api, store: store, cache: detailCache) { [weak self] in
-        self?.syncCredential
-    }
+    /// My PRs, To Review and History as last loaded, with their loading and error state.
+    let listCache: PullRequestListCache
+    /// Loads pull requests and lists into the caches with the session token.
+    private(set) lazy var syncEngine = SyncEngine(
+        api: api, store: store, cache: detailCache, lists: listCache,
+        credential: { [weak self] in self?.syncCredential },
+        refreshInterval: { [weak self] in self?.refreshInterval ?? 60 },
+        now: { [dateProvider] in dateProvider.now })
+    /// Refreshes My PRs and To Review every `refreshInterval`.
+    private(set) lazy var refreshScheduler = ListRefreshScheduler(
+        timerScheduler: timerScheduler,
+        interval: { [weak self] in self?.refreshInterval ?? 60 },
+        refresh: { [weak self] priority, maxAge in await self?.refreshLists(priority: priority, maxAge: maxAge) })
     @Published var refreshInterval: TimeInterval {
         didSet {
             defaults.set(refreshInterval, forKey: DefaultsKeys.refreshInterval)
-            scheduleTimer()
+            refreshScheduler.schedule()
         }
     }
     @Published var allSucceededHookScript: String {
@@ -83,28 +94,21 @@ final class PRMonitor: ObservableObject {
     private var credentialSession = UUID()
     private var didLoadSessionToken = false
     private var sessionToken: String?
-    private var cachedLogin: String?
-    private var timer: RefreshTimer?
-    private var activeRefreshTask: Task<Void, Never>?
-    private var activeRefreshID: UUID?
-    private var refreshQueued = false
-    private var refreshRevision = 0
+    private var listSubscription: AnyCancellable?
+    /// How many times My PRs or To Review loaded, so a timer tick that loaded neither preloads nothing.
+    private var listLoadCount = 0
+    /// The History page shown, or being loaded to replace it.
+    private var requestedHistoryPage = 1
     private var prefetchTask: Task<Void, Never>?
     private var pendingPrefetch: [PullRequestReference: PendingPrefetch] = [:]
     private var lastStates: [String: CheckState] = [:]
     private var lastReviewStatuses: [String: PullRequestReviewStatus] = [:]
     /// Review requests seen since the token was set. Nil until the first load, so the first list posts nothing.
     private var knownReviewRequestIDs: [ReviewRequestGroup: Set<String>]?
-    /// The last review requests GitHub returned, hidden ones included.
-    private var fetchedReviewRequests: ReviewRequests = .empty
     /// Review requests hidden from To Review, keyed by pull request ID. Also saved to defaults.
     private var hiddenReviewRequests: [String: HiddenReviewRequest] = [:]
     /// Main windows showing the list. A clicked notification opens GitHub while there are none.
     private var listWindowCount = 0
-    private var nextTimerRefreshAt: Date?
-    private var consecutiveThrottledFailures = 0
-    private let maxThrottledBackoff: TimeInterval = 30 * 60
-    private let historyPageSize = 10
     private let relativeFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .short
@@ -124,6 +128,7 @@ final class PRMonitor: ObservableObject {
         // Mock data never reads or writes the saved store, so it can't mix with real pull requests.
         self.store = isUsingMockData ? .inMemory() : store
         detailCache = PullRequestDetailCache(store: self.store)
+        listCache = PullRequestListCache(store: self.store)
         self.tokenStore = tokenStore
         self.notificationPoster = notificationPoster
         self.defaults = defaults
@@ -147,41 +152,22 @@ final class PRMonitor: ObservableObject {
         hiddenReviewRequests = defaults.string(forKey: DefaultsKeys.hiddenReviewRequests)
             .flatMap { try? JSONDecoder().decode([String: HiddenReviewRequest].self, from: Data($0.utf8)) } ?? [:]
         forLaterIDs = ForLaterStorage.decode(defaults.string(forKey: DefaultsKeys.forLaterPullRequests))
-        restoreCachedLists()
-    }
-
-    /// Shows the lists saved by the last run until the first refresh replaces them.
-    /// Mock data never reads or writes them, so it can't mix with the real lists.
-    private func restoreCachedLists() {
-        guard !isUsingMockData else { return }
-        // The lists used to be saved to defaults. They're only caches, so they're dropped rather than imported.
-        defaults.removeObject(forKey: DefaultsKeys.legacyCachedMyPullRequests)
-        defaults.removeObject(forKey: DefaultsKeys.legacyCachedReviewRequests)
-        if let cached = store.pullRequestList(.open, as: [PullRequestRow].self) {
-            prRows = cached.rows
-            lastRefreshAt = cached.savedAt
+        if !isUsingMockData {
+            // The lists used to be saved to defaults. They're only caches, so they're dropped rather than imported.
+            defaults.removeObject(forKey: DefaultsKeys.legacyCachedMyPullRequests)
+            defaults.removeObject(forKey: DefaultsKeys.legacyCachedReviewRequests)
         }
-        if let cached = store.pullRequestList(.reviewRequests, as: ReviewRequests.self) {
-            fetchedReviewRequests = cached.rows
-            showReviewRequests()
-            lastReviewRequestsRefreshAt = cached.savedAt
-        }
-    }
-
-    private func saveCachedList<Rows: Codable & Equatable>(_ rows: Rows, savedAt: Date, as kind: PullRequestListKind) {
-        guard !isUsingMockData else { return }
-        store.savePullRequestList(CachedPullRequestList(savedAt: savedAt, rows: rows), as: kind)
-    }
-
-    private func clearCachedLists() {
-        guard !isUsingMockData else { return }
-        store.removePullRequestLists()
+        // The lists saved by the last run show until the first refresh replaces them. They post no notifications.
+        showOpenPullRequests()
+        showReviewRequests()
+        showHistory()
+        listSubscription = listCache.updates.sink { [weak self] change in self?.listChanged(change) }
     }
 
     func start() {
         hasToken = loadSessionToken() != nil
         refresh()
-        scheduleTimer()
+        refreshScheduler.schedule()
     }
 
     func lastRefreshText(relativeTo now: Date) -> String {
@@ -206,52 +192,27 @@ final class PRMonitor: ObservableObject {
         sessionToken = nil
         didLoadSessionToken = true
         hasToken = false
-        setPRRows([])
-        openPullRequestsSSOAuthorizationURL = nil
-        setHistoryRows([])
-        fetchedReviewRequests = .empty
-        setReviewRequests(.empty)
+        lastStates = [:]
+        listCache.removeAll()
+        requestedHistoryPage = 1
         historyPage = 1
         historyTotalCount = 0
-        lastStates = [:]
-        clearCachedLists()
+        setHistoryRows([])
+        showOpenPullRequests()
+        showReviewRequests()
+        showHistory()
     }
 
     private func invalidateLogin() {
         credentialSession = UUID()
         Task { [syncEngine] in await syncEngine.reset() }
-        cachedLogin = nil
-        activeRefreshTask?.cancel()
-        activeRefreshTask = nil
-        activeRefreshID = nil
-        refreshQueued = false
-        nextTimerRefreshAt = nil
-        consecutiveThrottledFailures = 0
         prefetchTask?.cancel()
         prefetchTask = nil
         pendingPrefetch = [:]
         lastReviewStatuses = [:]
         knownReviewRequestIDs = nil
         detailCache.removeAll()
-        isLoading = false
-        isHistoryLoading = false
-        isReviewRequestsLoading = false
-    }
-
-    func scheduleTimer() {
-        timer?.invalidate()
-        timer = timerScheduler.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { [weak self] in
-            Task { await self?.handleTimerTick() }
-        }
-    }
-
-    /// Timer-driven refresh. Skips the fetch when another refresh finished recently
-    /// or while backing off from auth/rate-limit failures.
-    func handleTimerTick() async {
-        if let nextTimerRefreshAt, dateProvider.now < nextTimerRefreshAt {
-            return
-        }
-        await refreshNow()
+        listCache.stopAllLoading()
     }
 
     private func refresh() {
@@ -274,19 +235,21 @@ final class PRMonitor: ObservableObject {
     /// Refreshes My PRs and To Review together. App start, timer ticks and manual refresh on
     /// either tab all come through here, so switching between the two tabs never fetches.
     func refreshNow() async {
-        guard loadSessionToken() != nil else { return }
-        let session = credentialSession
-        async let reviewRequests: Void = refreshReviewRequests(preload: false)
-        await refreshOpenPullRequests()
-        await reviewRequests
-        guard session == credentialSession else { return }
-        prefetchDetails()
+        await refreshLists(priority: .userVisible, maxAge: 0)
     }
 
-    private func refreshOpenPullRequests() async {
+    /// Asks the engine for both lists, sharing a load already in flight, then preloads their rows.
+    private func refreshLists(priority: SyncEngine.Priority, maxAge: TimeInterval) async {
         guard loadSessionToken() != nil else { return }
-        let task = startRefreshIfNeeded()
-        await task.value
+        let session = credentialSession
+        let loadCount = listLoadCount
+        let engine = syncEngine
+        async let reviewRequests: Void? = try? engine.request(.reviewRequests, priority: priority, maxAge: maxAge,
+                                                              joinsLoadInFlight: true)
+        _ = try? await engine.request(.openList, priority: priority, maxAge: maxAge, joinsLoadInFlight: true)
+        _ = await reviewRequests
+        guard session == credentialSession, priority == .userVisible || listLoadCount != loadCount else { return }
+        prefetchDetails()
     }
 
     var isSelectedTabLoading: Bool {
@@ -330,128 +293,33 @@ final class PRMonitor: ObservableObject {
     }
 
     var canLoadNextHistoryPage: Bool {
-        historyPage * historyPageSize < historyTotalCount && !isHistoryLoading
+        historyPage * SyncEngine.historyPageSize < historyTotalCount && !isHistoryLoading
     }
 
     var historyRangeText: String {
         guard !historyRows.isEmpty else {
             return historyTotalCount == 0 ? "No history" : "Page \(historyPage)"
         }
-        let start = ((historyPage - 1) * historyPageSize) + 1
+        let start = ((historyPage - 1) * SyncEngine.historyPageSize) + 1
         let end = start + historyRows.count - 1
         return "\(start)-\(end) of \(historyTotalCount)"
     }
 
+    /// Shows the page as last loaded, if it has been, while it loads again.
     private func refreshHistory(page: Int) async {
-        guard let token = loadSessionToken() else { return }
-        guard !isHistoryLoading else { return }
-        let session = credentialSession
-        isHistoryLoading = true
-        lastHistoryError = nil
-        do {
-            let login: String
-            if let cachedLogin {
-                login = cachedLogin
-            } else {
-                login = try await api.fetchCurrentUser(token: token).login
-                guard session == credentialSession else { return }
-                cachedLogin = login
-            }
-            let page = try await api.fetchClosedPRs(token: token,
-                                                    username: login,
-                                                    page: page,
-                                                    perPage: historyPageSize)
-            guard session == credentialSession else { return }
-            setHistoryRows(page.rows)
-            historyPage = page.page
-            historyTotalCount = page.totalCount
-            lastHistoryRefreshAt = dateProvider.now
-        } catch {
-            guard session == credentialSession else { return }
-            setHistoryRows([])
-            historyTotalCount = 0
-            lastHistoryError = error.localizedDescription
-        }
-        isHistoryLoading = false
+        guard loadSessionToken() != nil else { return }
+        requestedHistoryPage = page
+        showHistory()
+        _ = try? await syncEngine.request(.history(page: page), joinsLoadInFlight: true)
     }
 
-    func refreshReviewRequests(preload: Bool = true) async {
-        guard let token = loadSessionToken() else { return }
-        guard !isReviewRequestsLoading else { return }
+    /// Refreshes To Review alone, such as after submitting a review, then preloads its rows.
+    func refreshReviewRequests() async {
+        guard loadSessionToken() != nil else { return }
         let session = credentialSession
-        isReviewRequestsLoading = true
-        lastReviewRequestsError = nil
-        do {
-            let requests = try await api.fetchReviewRequests(token: token)
-            guard session == credentialSession else { return }
-            notifyAboutNewReviewRequests(requests)
-            fetchedReviewRequests = requests
-            showReviewRequests()
-            lastReviewRequestsRefreshAt = dateProvider.now
-            saveCachedList(requests, savedAt: dateProvider.now, as: .reviewRequests)
-            if preload { prefetchDetails() }
-        } catch {
-            guard session == credentialSession else { return }
-            // Keep the last list on screen; the error shows above it until a refresh succeeds.
-            lastReviewRequestsError = error.localizedDescription
-        }
-        isReviewRequestsLoading = false
-    }
-
-    private func startRefreshIfNeeded() -> Task<Void, Never> {
-        if let activeRefreshTask {
-            return activeRefreshTask
-        }
-
-        let session = credentialSession
-        let refreshID = UUID()
-        isLoading = true
-        lastError = nil
-        let task = Task { @MainActor [weak self] in
-            guard let self else { return }
-            await self.runRefresh(session: session, refreshID: refreshID)
-        }
-        activeRefreshTask = task
-        activeRefreshID = refreshID
-        return task
-    }
-
-    private func runRefresh(session: UUID, refreshID: UUID) async {
-        while true {
-            guard let token = loadSessionToken() else { break }
-            let requestRevision = refreshRevision
-
-            do {
-                let result = try await api.fetchOpenPRs(token: token)
-                guard session == credentialSession else { return }
-                scheduleNextTimerRefresh(after: nil)
-                if requestRevision == refreshRevision {
-                    cachedLogin = result.login
-                    updateNotificationsForRows(result.rows)
-                    setPRRows(result.rows)
-                    openPullRequestsSSOAuthorizationURL = result.ssoAuthorizationURL
-                    forgetClosedForLater(openRows: result.rows, isComplete: result.ssoAuthorizationURL == nil)
-                    lastRefreshAt = dateProvider.now
-                    saveCachedList(result.rows, savedAt: dateProvider.now, as: .open)
-                }
-            } catch {
-                guard session == credentialSession else { return }
-                scheduleNextTimerRefresh(after: error)
-                if requestRevision == refreshRevision {
-                    // Keep the last list on screen; the error shows above it until a refresh succeeds.
-                    lastError = error.localizedDescription
-                }
-            }
-
-            guard session == credentialSession else { return }
-            guard refreshQueued else { break }
-            refreshQueued = false
-        }
-
-        guard session == credentialSession, activeRefreshID == refreshID else { return }
-        activeRefreshTask = nil
-        activeRefreshID = nil
-        isLoading = false
+        _ = try? await syncEngine.request(.reviewRequests)
+        guard session == credentialSession else { return }
+        prefetchDetails()
     }
 
     /// Both tabs share a queue. A refresh arriving during preloading queues another pass rather than being dropped.
@@ -511,30 +379,62 @@ final class PRMonitor: ObservableObject {
         await prefetchTask?.value
     }
 
-    private func scheduleNextTimerRefresh(after error: Error?) {
-        let delay: TimeInterval
-        if let error, SyncEngine.isThrottlingError(error) {
-            consecutiveThrottledFailures += 1
-            let backoff = refreshInterval * pow(2, Double(consecutiveThrottledFailures))
-            delay = min(backoff, max(refreshInterval, maxThrottledBackoff))
-        } else {
-            consecutiveThrottledFailures = 0
-            delay = refreshInterval
-        }
-        // Ticks run on a fixed cadence that started before this fetch completed, so allow
-        // half an interval of slack; otherwise the tick due after `delay` would be skipped.
-        nextTimerRefreshAt = dateProvider.now.addingTimeInterval(delay - refreshInterval / 2)
-    }
-
     private func requireFreshRefresh(for session: UUID) async {
         guard session == credentialSession else { return }
-        refreshRevision += 1
-        if activeRefreshTask != nil {
-            refreshQueued = true
-        }
-        await refreshOpenPullRequests()
+        _ = try? await syncEngine.request(.openList)
         guard session == credentialSession else { return }
         prefetchDetails()
+    }
+
+    // MARK: - Showing the lists
+
+    private func listChanged(_ change: PullRequestListCache.Change) {
+        switch change {
+        case .loaded(.open):
+            listLoadCount += 1
+            let rows = listCache.open ?? []
+            updateNotificationsForRows(rows)
+            forgetClosedForLater(openRows: rows, isComplete: listCache.openSSOAuthorizationURL == nil)
+            showOpenPullRequests()
+        case .loaded(.reviewRequests):
+            listLoadCount += 1
+            notifyAboutNewReviewRequests(listCache.reviewRequests ?? .empty)
+            showReviewRequests()
+        case .changed(.open):
+            showOpenPullRequests()
+        case .changed(.reviewRequests):
+            showReviewRequests()
+        case .loaded(.history(let page)), .changed(.history(let page)):
+            guard page == requestedHistoryPage else { return }
+            showHistory()
+        }
+    }
+
+    private func showOpenPullRequests() {
+        let state = listCache.state(of: .open)
+        setPRRows(listCache.open ?? [])
+        openPullRequestsSSOAuthorizationURL = listCache.openSSOAuthorizationURL
+        isLoading = state.isLoading
+        // Keep the last list on screen; the error shows above it until a refresh succeeds.
+        lastError = state.lastError
+        lastRefreshAt = state.fetchedAt
+    }
+
+    /// Shows the History page asked for, as last loaded. A failed load empties it.
+    private func showHistory() {
+        let page = listCache.historyPage(requestedHistoryPage)
+        let state = listCache.state(of: .history(page: requestedHistoryPage))
+        isHistoryLoading = state.isLoading
+        lastHistoryError = state.lastError
+        if state.lastError != nil {
+            setHistoryRows([])
+            historyTotalCount = 0
+        } else if let page {
+            setHistoryRows(page.rows)
+            historyPage = page.page
+            historyTotalCount = page.totalCount
+        }
+        if let fetchedAt = state.fetchedAt { lastHistoryRefreshAt = fetchedAt }
     }
 
     private func setPRRows(_ rows: [PullRequestRow]) {
@@ -587,9 +487,16 @@ final class PRMonitor: ObservableObject {
         setReviewRequests(reviewRequests.removing { $0.id == row.id })
     }
 
-    /// Shows the fetched review requests that are not hidden. Forgets hidden requests that changed
+    /// Shows the loaded review requests that are not hidden. Forgets hidden requests that changed
     /// or are no longer waiting on me, so they show again if they come back.
     private func showReviewRequests() {
+        let state = listCache.state(of: .reviewRequests)
+        isReviewRequestsLoading = state.isLoading
+        // Keep the last list on screen; the error shows above it until a refresh succeeds.
+        lastReviewRequestsError = state.lastError
+        lastReviewRequestsRefreshAt = state.fetchedAt
+        // Before any list loads there is nothing to tell which hidden requests are gone.
+        guard let fetchedReviewRequests = listCache.reviewRequests else { return setReviewRequests(.empty) }
         let rows = Dictionary(fetchedReviewRequests.rows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let stillHidden = hiddenReviewRequests.filter { id, hidden in rows[id].map(hidden.hides) ?? false }
         if stillHidden != hiddenReviewRequests {
@@ -799,7 +706,7 @@ final class PRMonitor: ObservableObject {
             await requireFreshRefresh(for: session)
         } catch {
             guard session == credentialSession else { return }
-            lastError = error.localizedDescription
+            listCache.showError(error.localizedDescription, on: .open)
         }
     }
 
@@ -817,7 +724,7 @@ final class PRMonitor: ObservableObject {
                                                             number: row.number, method: mergeMethod(for: row))
                 guard session == credentialSession else { return }
                 if merged {
-                    setPRRows(prRows.filter { $0.id != row.id })
+                    listCache.removeOpenPullRequest(id: row.id)
                     lastStates.removeValue(forKey: row.id)
                     await requireFreshRefresh(for: session)
                 }
@@ -833,7 +740,7 @@ final class PRMonitor: ObservableObject {
             }
         } catch {
             guard session == credentialSession else { return }
-            lastError = error.localizedDescription
+            listCache.showError(error.localizedDescription, on: .open)
         }
     }
 }

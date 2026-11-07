@@ -31,7 +31,8 @@ extension PullRequestDetailViewModel {
         api.commentsHandler = fetchComments
         api.checksHandler = fetchChecks
         let session = UUID()
-        let engine = SyncEngine(api: api, store: .inMemory(), cache: cache ?? PullRequestDetailCache()) {
+        let engine = SyncEngine(api: api, store: .inMemory(), cache: cache ?? PullRequestDetailCache(),
+                                lists: PullRequestListCache()) {
             SyncEngine.Credential(token: "token", session: session)
         }
         self.init(reference: reference, engine: engine, setViewed: setViewed, postComment: postComment,

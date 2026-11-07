@@ -36,7 +36,7 @@ final class PRMonitorReviewRequestsTests: XCTestCase {
         api.reviewRequestsHandler = { _ in throw TestError(message: "reviews offline") }
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
         let requests = ReviewRequests(fromMe: [reviewRequestRow(number: 1)], fromMyTeams: [])
-        monitor.reviewRequests = requests
+        monitor.listCache.store(requests, fetchedAt: Date(timeIntervalSince1970: 0))
 
         await monitor.refreshReviewRequests()
 
@@ -224,7 +224,7 @@ final class PRMonitorReviewRequestsTests: XCTestCase {
 
     func testSelectedTabLoadingFollowsTheVisibleTab() {
         let monitor = makeMonitor()
-        monitor.isReviewRequestsLoading = true
+        monitor.listCache.startLoading(.reviewRequests, id: UUID())
 
         XCTAssertFalse(monitor.isSelectedTabLoading)
         monitor.selectedTab = .reviews

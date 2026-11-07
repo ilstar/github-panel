@@ -108,14 +108,18 @@ final class PRMonitorSessionTests: XCTestCase {
         XCTAssertEqual(api.fetchCurrentUserTokens, ["old"])
     }
 
-    func testClearTokenResetsState() {
+    func testClearTokenResetsState() async {
+        let api = FakeGitHubAPI()
+        api.rows = [row(number: 1, status: .pending)]
+        api.historyPages[1] = PullRequestHistoryPage(rows: [historyRow(number: 1)], page: 1, perPage: 10, totalCount: 11)
+        api.historyPages[2] = PullRequestHistoryPage(rows: [historyRow(number: 11)], page: 2, perPage: 10, totalCount: 11)
         let tokenStore = FakeTokenStore(token: "token")
-        let monitor = makeMonitor(tokenStore: tokenStore)
+        let monitor = makeMonitor(api: api, tokenStore: tokenStore)
         monitor.hasToken = true
-        monitor.prRows = [row(number: 1, status: .pending)]
-        monitor.historyRows = [historyRow(number: 1)]
-        monitor.historyTotalCount = 1
-        monitor.historyPage = 2
+        await monitor.refreshNow()
+        await monitor.refreshCurrentHistoryPage()
+        await monitor.loadNextHistoryPage()
+        XCTAssertEqual(monitor.historyPage, 2)
 
         monitor.clearToken()
 
