@@ -472,6 +472,9 @@ final class PRMonitor: ObservableObject {
             guard !Task.isCancelled, session == credentialSession else { return }
             do {
                 let cached = detailCache.entry(for: reference)
+                // Check results can change without changing the PR's updatedAt, so they load on every pass.
+                // They load alongside the content, so the content is cached without waiting for them.
+                async let loadedChecks = api.fetchPullRequestChecks(token: token, reference: reference)
                 if detailCache.needsRefresh(reference, updatedAt: updatedAt) {
                     let limits = cached?.commentLimits ?? PullRequestCommentLimits()
                     async let comments = api.fetchPullRequestComments(token: token, reference: reference, limits: limits)
@@ -481,9 +484,8 @@ final class PRMonitor: ObservableObject {
                     detailCache.store(content)
                     detailCache.store(loadedComments, for: reference, limits: limits)
                 }
-                // Check results can change without changing the PR's updatedAt.
                 guard let headSHA = detailCache.entry(for: reference)?.content.detail.headSHA else { continue }
-                let checks = try await api.fetchPullRequestChecks(token: token, reference: reference)
+                let checks = try await loadedChecks
                 guard !Task.isCancelled, session == credentialSession else { return }
                 detailCache.store(checks, for: reference, headSHA: headSHA)
             } catch {
