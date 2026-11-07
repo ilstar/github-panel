@@ -18,6 +18,7 @@ final class SyntaxHighlighterTests: XCTestCase {
         XCTAssertEqual(SyntaxLanguage(filename: "web/index.TSX"), .javaScript)
         XCTAssertEqual(SyntaxLanguage(filename: "Gemfile"), .ruby)
         XCTAssertEqual(SyntaxLanguage(filename: "docker/Dockerfile"), .shell)
+        XCTAssertEqual(SyntaxLanguage(filename: "api/v1/orders.proto"), .protobuf)
         XCTAssertNil(SyntaxLanguage(filename: "README"))
         XCTAssertNil(SyntaxLanguage(filename: "image.png"))
     }
@@ -32,6 +33,32 @@ final class SyntaxHighlighterTests: XCTestCase {
             "\"hi\"": .string,
             "42": .number,
             "// greet": .comment
+        ])
+    }
+
+    func testColorsProtobufKeywordsScalarTypesMessageTypesAndComments() {
+        let tokens = colored("repeated LineItem items = 3; // the cart", .protobuf)
+
+        XCTAssertEqual(tokens, [
+            "repeated": .keyword,
+            "LineItem": .type,
+            "3": .number,
+            "// the cart": .comment
+        ])
+        XCTAssertEqual(colored("map<string, int64> counts = 4;", .protobuf), [
+            "map": .keyword,
+            "string": .keyword,
+            "int64": .keyword,
+            "4": .number
+        ])
+        XCTAssertEqual(colored("syntax = \"proto3\";", .protobuf), ["syntax": .keyword, "\"proto3\"": .string])
+        XCTAssertEqual(colored("rpc GetOrder(GetOrderRequest) returns (stream Order);", .protobuf), [
+            "rpc": .keyword,
+            "GetOrder": .type,
+            "GetOrderRequest": .type,
+            "returns": .keyword,
+            "stream": .keyword,
+            "Order": .type
         ])
     }
 
