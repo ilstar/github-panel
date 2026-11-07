@@ -1,4 +1,5 @@
 import XCTest
+import GRDB
 @testable import GithubPanel
 
 @MainActor
@@ -102,8 +103,8 @@ final class PullRequestDetailCacheTests: XCTestCase {
         XCTAssertEqual(PullRequestDetailCache().capacity, 100)
     }
 
-    func testRestoresSavedEntriesFromTheFile() async {
-        let url = temporaryFileURL()
+    func testRestoresSavedEntriesFromTheStore() async {
+        let store = LocalStore.inMemory()
         let comment = PullRequestComment(id: "c1", databaseID: 1, authorLogin: "octocat", body: "Looks good",
                                          createdAt: Date(timeIntervalSince1970: 10), htmlURL: nil)
         let thread = ReviewThread(id: "t1", path: "README.md", line: 3, startLine: nil, side: .right,
@@ -120,14 +121,14 @@ final class PullRequestDetailCacheTests: XCTestCase {
             PullRequestReviewer(name: "hubot", kind: .user, state: .approved)
         ])
 
-        let saving = PullRequestDetailCache(fileURL: url)
+        let saving = PullRequestDetailCache(store: store)
         saving.store(PullRequestDetailContent(detail: detail, files: [file]))
         saving.store(comments, for: reference(1))
         saving.store(checks, for: reference(1), headSHA: detail.headSHA)
         saving.store(content(number: 2))
         await saving.saveNow()
 
-        let restored = PullRequestDetailCache(fileURL: url)
+        let restored = PullRequestDetailCache(store: store)
         await restored.waitForRestore()
 
         XCTAssertEqual(restored.count, 2)
@@ -136,14 +137,14 @@ final class PullRequestDetailCacheTests: XCTestCase {
     }
 
     func testRestoreKeepsTheUseOrderAndCapacity() async {
-        let url = temporaryFileURL()
-        let saving = PullRequestDetailCache(fileURL: url)
+        let store = LocalStore.inMemory()
+        let saving = PullRequestDetailCache(store: store)
         saving.store(content(number: 1))
         saving.store(content(number: 2))
         saving.store(content(number: 3))
         await saving.saveNow()
 
-        let restored = PullRequestDetailCache(capacity: 2, fileURL: url)
+        let restored = PullRequestDetailCache(capacity: 2, store: store)
         await restored.waitForRestore()
 
         XCTAssertNil(restored.entry(for: reference(1)), "The least recently used entry does not fit")
@@ -152,12 +153,12 @@ final class PullRequestDetailCacheTests: XCTestCase {
     }
 
     func testEntriesStoredBeforeTheRestoreFinishesWin() async {
-        let url = temporaryFileURL()
-        let saving = PullRequestDetailCache(fileURL: url)
+        let store = LocalStore.inMemory()
+        let saving = PullRequestDetailCache(store: store)
         saving.store(content(number: 1, title: "Saved"))
         await saving.saveNow()
 
-        let restored = PullRequestDetailCache(fileURL: url)
+        let restored = PullRequestDetailCache(store: store)
         restored.store(content(number: 1, title: "Fresh"))
         await restored.waitForRestore()
 
@@ -165,49 +166,75 @@ final class PullRequestDetailCacheTests: XCTestCase {
     }
 
     func testSavesOnItsOwnAfterChanges() async throws {
-        let url = temporaryFileURL()
-        let saving = PullRequestDetailCache(fileURL: url, saveDelay: 0.01)
+        let store = LocalStore.inMemory()
+        let saving = PullRequestDetailCache(store: store, saveDelay: 0.01)
         saving.store(content(number: 1))
 
-        for _ in 0..<200 where !FileManager.default.fileExists(atPath: url.path) {
+        for _ in 0..<200 where await store.pullRequestDetails().isEmpty {
             try await Task.sleep(nanoseconds: 10_000_000)
         }
 
-        let restored = PullRequestDetailCache(fileURL: url)
+        let restored = PullRequestDetailCache(store: store)
         await restored.waitForRestore()
         XCTAssertNotNil(restored.entry(for: reference(1)))
     }
 
-    func testRemoveAllDeletesTheFile() async {
-        let url = temporaryFileURL()
-        let saving = PullRequestDetailCache(fileURL: url)
+    func testSavesUseOrderAndEvictions() async {
+        let store = LocalStore.inMemory()
+        let saving = PullRequestDetailCache(capacity: 2, store: store)
+        saving.store(content(number: 1))
+        saving.store(content(number: 2))
+        await saving.saveNow()
+        _ = saving.entry(for: reference(1))
+        saving.store(content(number: 3))
+        await saving.saveNow()
+
+        let saved = await store.pullRequestDetails().map(\.entry.content.detail.reference.number)
+        XCTAssertEqual(saved, [1, 3])
+    }
+
+    func testAnEvictedEntryStoredAgainIsSaved() async {
+        let store = LocalStore.inMemory()
+        let saving = PullRequestDetailCache(capacity: 1, store: store)
+        saving.store(content(number: 1))
+        saving.store(content(number: 2))
+        saving.store(content(number: 1))
+        await saving.saveNow()
+
+        let saved = await store.pullRequestDetails().map(\.entry.content.detail.reference.number)
+        XCTAssertEqual(saved, [1])
+    }
+
+    func testRemoveAllDeletesTheSavedEntries() async {
+        let store = LocalStore.inMemory()
+        let saving = PullRequestDetailCache(store: store)
         saving.store(content(number: 1))
         await saving.saveNow()
 
         saving.removeAll()
+        saving.store(content(number: 2))
+        await saving.saveNow()
 
-        for _ in 0..<200 where FileManager.default.fileExists(atPath: url.path) {
-            try? await Task.sleep(nanoseconds: 10_000_000)
-        }
-        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+        let saved = await store.pullRequestDetails().map(\.entry.content.detail.reference.number)
+        XCTAssertEqual(saved, [2])
     }
 
-    func testIgnoresAnUnreadableFile() async throws {
-        let url = temporaryFileURL()
-        try Data("not json".utf8).write(to: url)
+    func testIgnoresASavedEntryThatNoLongerDecodes() async throws {
+        let store = LocalStore.inMemory()
+        let saving = PullRequestDetailCache(store: store)
+        saving.store(content(number: 1))
+        saving.store(content(number: 2))
+        await saving.saveNow()
+        try await store.database.write { db in
+            try db.execute(sql: "UPDATE pull_request_detail SET content = ? WHERE number = 1",
+                           arguments: [Data("not json".utf8)])
+        }
 
-        let cache = PullRequestDetailCache(fileURL: url)
+        let cache = PullRequestDetailCache(store: store)
         await cache.waitForRestore()
 
-        XCTAssertEqual(cache.count, 0)
-    }
-
-    private func temporaryFileURL() -> URL {
-        let folder = FileManager.default.temporaryDirectory
-            .appendingPathComponent("PullRequestDetailCacheTests-\(UUID().uuidString)", isDirectory: true)
-        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        addTeardownBlock { try? FileManager.default.removeItem(at: folder) }
-        return folder.appendingPathComponent("PullRequestDetails.json")
+        XCTAssertEqual(cache.count, 1)
+        XCTAssertNotNil(cache.entry(for: reference(2)))
     }
 
     private func reference(_ number: Int) -> PullRequestReference {

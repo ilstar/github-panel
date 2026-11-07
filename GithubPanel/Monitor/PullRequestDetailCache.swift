@@ -3,7 +3,7 @@ import Combine
 
 /// Pull request content loaded so far, so a pull request shows right away when it is opened again
 /// or after a refresh loaded it in the background. Keeps the most recently used entries.
-/// With a file, the entries are saved there and restored when the app starts again.
+/// With a store, the entries are saved there and restored when the app starts again.
 @MainActor
 final class PullRequestDetailCache {
     struct Entry: Equatable, Codable {
@@ -21,27 +21,28 @@ final class PullRequestDetailCache {
     private var entries: [PullRequestReference: Entry] = [:]
     /// References from least to most recently used.
     private var order: [PullRequestReference] = []
+    /// When each entry was last used, saved with it so the order survives a restart.
+    private var lastUsedAt: [PullRequestReference: Date] = [:]
+    private var lastUseTime = Date.distantPast
 
-    private let file: PullRequestDetailCacheFile?
+    private let store: LocalStore?
     private let saveDelay: TimeInterval
     private var saveTask: Task<Void, Never>?
     private var loadTask: Task<Void, Never>?
+    /// The last write sent to the store. Each write waits for the one before it, so they land in order.
+    private var writeTask: Task<Void, Never>?
+    /// Entries stored, used, or evicted since the last save.
+    private var changed: Set<PullRequestReference> = []
+    private var used: Set<PullRequestReference> = []
+    private var removed: Set<PullRequestReference> = []
     /// Bumped by `removeAll`, so a load or save started before it does not bring the old entries back.
     private var generation = 0
 
-    init(capacity: Int = 100, fileURL: URL? = nil, saveDelay: TimeInterval = 1) {
+    init(capacity: Int = 100, store: LocalStore? = nil, saveDelay: TimeInterval = 1) {
         self.capacity = capacity
-        self.file = fileURL.map(PullRequestDetailCacheFile.init(url:))
+        self.store = store
         self.saveDelay = saveDelay
-        restoreFromFile()
-    }
-
-    /// Where the app keeps the cache: a file in its Caches folder, since everything in it can be loaded again.
-    static var defaultFileURL: URL? {
-        guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return nil }
-        let folder = Bundle.main.bundleIdentifier ?? "GithubPanel"
-        return caches.appendingPathComponent(folder, isDirectory: true)
-            .appendingPathComponent("PullRequestDetails.json")
+        restoreFromStore()
     }
 
     var count: Int { entries.count }
@@ -105,17 +106,21 @@ final class PullRequestDetailCache {
         return updatedAt > cachedAt
     }
 
-    /// Empties the cache and deletes its file, such as when the account changes.
+    /// Empties the cache and deletes its saved entries, such as when the account changes.
     func removeAll() {
         entries = [:]
         order = []
+        lastUsedAt = [:]
+        changed = []
+        used = []
+        removed = []
         generation += 1
         loadTask?.cancel()
         loadTask = nil
         saveTask?.cancel()
         saveTask = nil
-        if let file {
-            Task { await file.delete() }
+        if let store {
+            enqueueWrite { await store.removeAllPullRequestDetails() }
         }
     }
 
@@ -124,7 +129,7 @@ final class PullRequestDetailCache {
         await loadTask?.value
     }
 
-    /// Writes the entries to the file now rather than after the save delay. Used by tests.
+    /// Writes the changes to the store now rather than after the save delay. Used by tests.
     func saveNow() async {
         saveTask?.cancel()
         saveTask = nil
@@ -132,38 +137,44 @@ final class PullRequestDetailCache {
     }
 
     /// Loads the saved entries off the main thread. Entries stored meanwhile are newer, so they win.
-    private func restoreFromFile() {
-        guard let file else { return }
+    private func restoreFromStore() {
+        guard let store else { return }
         let generation = generation
         loadTask = Task { [weak self] in
-            let saved = await file.load()
+            let saved = await store.pullRequestDetails()
             guard let self, !Task.isCancelled, generation == self.generation else { return }
             self.restore(saved)
         }
     }
 
-    private func restore(_ saved: [Entry]) {
-        let restored = saved.filter { entries[$0.content.detail.reference] == nil }
+    private func restore(_ saved: [LocalStore.SavedPullRequestDetail]) {
+        let restored = saved.filter { entries[$0.entry.content.detail.reference] == nil }
         guard !restored.isEmpty else { return }
-        for entry in restored {
-            entries[entry.content.detail.reference] = entry
+        for saved in restored {
+            let reference = saved.entry.content.detail.reference
+            entries[reference] = saved.entry
+            lastUsedAt[reference] = saved.lastUsedAt
         }
         // Saved entries were used before anything this run, so they go first in the order.
-        order = restored.map(\.content.detail.reference) + order
+        order = restored.map(\.entry.content.detail.reference) + order
         evictIfNeeded()
-        for entry in restored {
-            publish(entry.content.detail.reference, save: false)
+        for saved in restored {
+            publish(saved.entry.content.detail.reference, save: false)
         }
     }
 
     private func publish(_ reference: PullRequestReference, save: Bool = true) {
         if let entry = entries[reference] { updates.send((reference, entry)) }
-        if save { scheduleSave() }
+        if save {
+            changed.insert(reference)
+            removed.remove(reference)
+            scheduleSave()
+        }
     }
 
     /// Saves once after a burst of changes, such as a background refresh storing many pull requests.
     private func scheduleSave() {
-        guard file != nil, saveTask == nil else { return }
+        guard store != nil, saveTask == nil else { return }
         let delay = saveDelay
         saveTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
@@ -174,55 +185,49 @@ final class PullRequestDetailCache {
     }
 
     private func writeSnapshot() async {
-        guard let file else { return }
-        let snapshot = order.compactMap { entries[$0] }
-        await file.save(snapshot)
+        guard let store else { return }
+        var changes = LocalStore.PullRequestDetailChanges(removed: Array(removed))
+        for reference in changed {
+            guard let entry = entries[reference], let lastUsedAt = lastUsedAt[reference] else { continue }
+            changes.saved.append(LocalStore.SavedPullRequestDetail(entry: entry, lastUsedAt: lastUsedAt))
+        }
+        for reference in used.subtracting(changed) {
+            changes.used[reference] = lastUsedAt[reference]
+        }
+        changed = []
+        used = []
+        removed = []
+        await enqueueWrite { await store.savePullRequestDetails(changes) }.value
+    }
+
+    @discardableResult
+    private func enqueueWrite(_ write: @escaping () async -> Void) -> Task<Void, Never> {
+        let previous = writeTask
+        let task = Task {
+            await previous?.value
+            await write()
+        }
+        writeTask = task
+        return task
     }
 
     private func touch(_ reference: PullRequestReference) {
         order.removeAll { $0 == reference }
         order.append(reference)
+        // Always later than the last use, so entries used in the same instant still restore in order.
+        lastUseTime = max(Date(), lastUseTime.addingTimeInterval(0.000_001))
+        lastUsedAt[reference] = lastUseTime
+        used.insert(reference)
     }
 
     private func evictIfNeeded() {
         while order.count > capacity {
-            entries.removeValue(forKey: order.removeFirst())
+            let reference = order.removeFirst()
+            entries.removeValue(forKey: reference)
+            lastUsedAt.removeValue(forKey: reference)
+            changed.remove(reference)
+            used.remove(reference)
+            if store != nil { removed.insert(reference) }
         }
-    }
-}
-
-/// Reads and writes the cache file one operation at a time, off the main thread.
-actor PullRequestDetailCacheFile {
-    /// Changes when the saved shape changes, so an old file is ignored rather than misread.
-    static let version = 1
-
-    private struct Saved: Codable {
-        let version: Int
-        /// Least recently used first.
-        let entries: [PullRequestDetailCache.Entry]
-    }
-
-    let url: URL
-
-    init(url: URL) {
-        self.url = url
-    }
-
-    /// The saved entries, least recently used first. Empty when there is no file or it no longer decodes.
-    func load() -> [PullRequestDetailCache.Entry] {
-        guard let data = try? Data(contentsOf: url),
-              let saved = try? JSONDecoder().decode(Saved.self, from: data),
-              saved.version == Self.version else { return [] }
-        return saved.entries
-    }
-
-    func save(_ entries: [PullRequestDetailCache.Entry]) {
-        guard let data = try? JSONEncoder().encode(Saved(version: Self.version, entries: entries)) else { return }
-        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? data.write(to: url, options: .atomic)
-    }
-
-    func delete() {
-        try? FileManager.default.removeItem(at: url)
     }
 }

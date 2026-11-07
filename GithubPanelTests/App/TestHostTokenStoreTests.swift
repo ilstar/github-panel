@@ -6,7 +6,7 @@ final class TestHostTokenStoreTests: XCTestCase {
         let source = try String(contentsOf: TestPaths.url("GithubPanel/App/GithubPanelApp.swift"), encoding: .utf8)
 
         let testGuard = try XCTUnwrap(source.range(of: "if ProcessInfo.processInfo.isRunningTests {\n            return PRMonitor(tokenStore: InMemoryTokenStore())")?.lowerBound)
-        let defaultMonitor = try XCTUnwrap(source.range(of: "return PRMonitor(detailCacheURL:")?.lowerBound)
+        let defaultMonitor = try XCTUnwrap(source.range(of: "return PRMonitor(store: LocalStore.openDefault())")?.lowerBound)
         XCTAssertLessThan(testGuard, defaultMonitor)
     }
 }

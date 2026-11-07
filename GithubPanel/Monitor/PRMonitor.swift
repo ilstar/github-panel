@@ -69,6 +69,7 @@ final class PRMonitor: ObservableObject {
     @Published private var mergeMethodChoices: [String: MergeMethod] = [:]
 
     private let api: GitHubAPIClient
+    private let store: LocalStore
     private let tokenStore: TokenStoring
     private let notificationPoster: NotificationPosting
     private let defaults: DefaultsStoring
@@ -114,10 +115,11 @@ final class PRMonitor: ObservableObject {
          dateProvider: DateProviding = SystemDateProvider(),
          hookRunner: PullRequestHookRunning = SystemPullRequestHookRunner(),
          isUsingMockData: Bool = false,
-         detailCacheURL: URL? = nil) {
+         store: LocalStore = .inMemory()) {
         self.api = api
-        // Mock data never reads or writes the saved cache, so it can't mix with real pull requests.
-        detailCache = PullRequestDetailCache(fileURL: isUsingMockData ? nil : detailCacheURL)
+        // Mock data never reads or writes the saved store, so it can't mix with real pull requests.
+        self.store = isUsingMockData ? .inMemory() : store
+        detailCache = PullRequestDetailCache(store: self.store)
         self.tokenStore = tokenStore
         self.notificationPoster = notificationPoster
         self.defaults = defaults
@@ -148,28 +150,28 @@ final class PRMonitor: ObservableObject {
     /// Mock data never reads or writes them, so it can't mix with the real lists.
     private func restoreCachedLists() {
         guard !isUsingMockData else { return }
-        if let cached = CachedPullRequestList<[PullRequestRow]>.decode(
-            defaults.string(forKey: DefaultsKeys.cachedMyPullRequests)) {
+        // The lists used to be saved to defaults. They're only caches, so they're dropped rather than imported.
+        defaults.removeObject(forKey: DefaultsKeys.legacyCachedMyPullRequests)
+        defaults.removeObject(forKey: DefaultsKeys.legacyCachedReviewRequests)
+        if let cached = store.pullRequestList(.open, as: [PullRequestRow].self) {
             prRows = cached.rows
             lastRefreshAt = cached.savedAt
         }
-        if let cached = CachedPullRequestList<ReviewRequests>.decode(
-            defaults.string(forKey: DefaultsKeys.cachedReviewRequests)) {
+        if let cached = store.pullRequestList(.reviewRequests, as: ReviewRequests.self) {
             fetchedReviewRequests = cached.rows
             showReviewRequests()
             lastReviewRequestsRefreshAt = cached.savedAt
         }
     }
 
-    private func saveCachedList<Rows: Codable & Equatable>(_ rows: Rows, savedAt: Date, forKey key: String) {
+    private func saveCachedList<Rows: Codable & Equatable>(_ rows: Rows, savedAt: Date, as kind: PullRequestListKind) {
         guard !isUsingMockData else { return }
-        defaults.set(CachedPullRequestList(savedAt: savedAt, rows: rows).encode(), forKey: key)
+        store.savePullRequestList(CachedPullRequestList(savedAt: savedAt, rows: rows), as: kind)
     }
 
     private func clearCachedLists() {
         guard !isUsingMockData else { return }
-        defaults.set("", forKey: DefaultsKeys.cachedMyPullRequests)
-        defaults.set("", forKey: DefaultsKeys.cachedReviewRequests)
+        store.removePullRequestLists()
     }
 
     func start() {
@@ -377,7 +379,7 @@ final class PRMonitor: ObservableObject {
             fetchedReviewRequests = requests
             showReviewRequests()
             lastReviewRequestsRefreshAt = dateProvider.now
-            saveCachedList(requests, savedAt: dateProvider.now, forKey: DefaultsKeys.cachedReviewRequests)
+            saveCachedList(requests, savedAt: dateProvider.now, as: .reviewRequests)
             if preload { prefetchDetails() }
         } catch {
             guard session == credentialSession else { return }
@@ -421,7 +423,7 @@ final class PRMonitor: ObservableObject {
                     openPullRequestsSSOAuthorizationURL = result.ssoAuthorizationURL
                     forgetClosedForLater(openRows: result.rows, isComplete: result.ssoAuthorizationURL == nil)
                     lastRefreshAt = dateProvider.now
-                    saveCachedList(result.rows, savedAt: dateProvider.now, forKey: DefaultsKeys.cachedMyPullRequests)
+                    saveCachedList(result.rows, savedAt: dateProvider.now, as: .open)
                 }
             } catch {
                 guard session == credentialSession else { return }
@@ -926,8 +928,9 @@ private enum DefaultsKeys {
     static let anyFailuresHookScript = "GithubPanel.hooks.anyFailuresScript"
     static let hiddenReviewRequests = "GithubPanel.hiddenReviewRequests"
     static let forLaterPullRequests = "GithubPanel.forLaterPullRequests"
-    static let cachedMyPullRequests = "GithubPanel.cache.myPullRequests"
-    static let cachedReviewRequests = "GithubPanel.cache.reviewRequests"
+    /// Where the lists were saved before the local store. Removed at launch.
+    static let legacyCachedMyPullRequests = "GithubPanel.cache.myPullRequests"
+    static let legacyCachedReviewRequests = "GithubPanel.cache.reviewRequests"
 
     static func mergeMethod(for repoFullName: String) -> String {
         "GithubPanel.mergeMethod.\(repoFullName)"

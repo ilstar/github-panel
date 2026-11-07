@@ -7,6 +7,7 @@ protocol DefaultsStoring {
     func string(forKey defaultName: String) -> String?
     func set(_ value: Double, forKey defaultName: String)
     func set(_ value: String, forKey defaultName: String)
+    func removeObject(forKey defaultName: String)
 }
 
 extension UserDefaults: DefaultsStoring {
