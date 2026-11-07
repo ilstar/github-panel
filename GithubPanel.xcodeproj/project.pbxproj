@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		1A1110302B12345600000001 /* KeyboardShortcuts in Frameworks */ = {isa = PBXBuildFile; productRef = 1A1110322B12345600000001 /* KeyboardShortcuts */; };
 		1A1110602B12345600000001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 1A1110622B12345600000001 /* Sparkle */; };
+		1A1110802B12345600000001 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 1A1110822B12345600000001 /* GRDB */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -59,6 +60,7 @@
 			files = (
 				1A1110302B12345600000001 /* KeyboardShortcuts in Frameworks */,
 				1A1110602B12345600000001 /* Sparkle in Frameworks */,
+				1A1110802B12345600000001 /* GRDB in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -112,6 +114,7 @@
 			packageProductDependencies = (
 				1A1110322B12345600000001 /* KeyboardShortcuts */,
 				1A1110622B12345600000001 /* Sparkle */,
+				1A1110822B12345600000001 /* GRDB */,
 			);
 			productName = GithubPanel;
 			productReference = 1A11100E2B12345600000001 /* GithubPanel.app */;
@@ -167,6 +170,7 @@
 			packageReferences = (
 				1A1110332B12345600000001 /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */,
 				1A1110632B12345600000001 /* XCRemoteSwiftPackageReference "Sparkle" */,
+				1A1110832B12345600000001 /* XCRemoteSwiftPackageReference "GRDB.swift" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 1A1110122B12345600000001 /* Products */;
@@ -232,6 +236,11 @@
 			package = 1A1110632B12345600000001 /* XCRemoteSwiftPackageReference "Sparkle" */;
 			productName = Sparkle;
 		};
+		1A1110822B12345600000001 /* GRDB */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 1A1110832B12345600000001 /* XCRemoteSwiftPackageReference "GRDB.swift" */;
+			productName = GRDB;
+		};
 /* End XCSwiftPackageProductDependency section */
 
 /* Begin XCRemoteSwiftPackageReference section */
@@ -249,6 +258,14 @@
 			requirement = {
 				kind = upToNextMajorVersion;
 				minimumVersion = 2.9.6;
+			};
+		};
+		1A1110832B12345600000001 /* XCRemoteSwiftPackageReference "GRDB.swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/groue/GRDB.swift";
+			requirement = {
+				kind = exactVersion;
+				version = 7.11.1;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */

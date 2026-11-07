@@ -98,7 +98,7 @@ struct GithubPanelApp: App {
         }
         #endif
 
-        return PRMonitor(detailCacheURL: PullRequestDetailCache.defaultFileURL)
+        return PRMonitor(store: LocalStore.openDefault())
     }
 
     private static var shouldStartUpdater: Bool {

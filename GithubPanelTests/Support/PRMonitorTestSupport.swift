@@ -9,14 +9,16 @@ func makeMonitor(api: FakeGitHubAPI = FakeGitHubAPI(),
                          defaults: FakeDefaults = FakeDefaults(),
                          timerScheduler: FakeTimerScheduler = FakeTimerScheduler(),
                          dateProvider: FakeDateProvider = FakeDateProvider(now: Date(timeIntervalSince1970: 0)),
-                         hookRunner: FakeHookRunner = FakeHookRunner()) -> PRMonitor {
+                         hookRunner: FakeHookRunner = FakeHookRunner(),
+                         store: LocalStore = .inMemory()) -> PRMonitor {
     PRMonitor(api: api,
               tokenStore: tokenStore,
               notificationPoster: notificationPoster,
               defaults: defaults,
               timerScheduler: timerScheduler,
               dateProvider: dateProvider,
-              hookRunner: hookRunner)
+              hookRunner: hookRunner,
+              store: store)
 }
 
 final class FakeGitHubAPI: GitHubAPIClient {
@@ -324,6 +326,12 @@ final class FakeDefaults: DefaultsStoring {
 
     func set(_ value: String, forKey defaultName: String) {
         stringValues[defaultName] = value
+    }
+
+    func removeObject(forKey defaultName: String) {
+        boolValues.removeValue(forKey: defaultName)
+        values.removeValue(forKey: defaultName)
+        stringValues.removeValue(forKey: defaultName)
     }
 }
 

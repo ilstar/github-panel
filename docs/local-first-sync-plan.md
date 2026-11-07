@@ -117,7 +117,7 @@ merges, and leaves the app working. Every step adds tests and passes
 
 Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
-1. [ ] **LocalStore behind today's caches.** Add GRDB and `LocalStore` with
+1. [x] **LocalStore behind today's caches.** Add GRDB and `LocalStore` with
        migrations and the `pull_request_detail`, `pull_request_list`, and
        `sync_state` tables. Back `PullRequestDetailCache` and the saved PR lists
        with it, keeping their public interfaces (`entry`, `store`,
@@ -153,3 +153,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   follow-up to step 2.
 
 ## Log
+
+- 2026-11-07: Step 1 done. GRDB 7.11.1 (exact pin); `LocalStore` in Application Support
+  (`<bundle id>/Store.sqlite`) backs `PullRequestDetailCache` and the saved My PRs / To Review lists.
+  `sync_state` is created but not written yet; step 2 fills it.
