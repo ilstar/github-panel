@@ -84,7 +84,7 @@ struct ReviewThread: Identifiable, Equatable, Codable {
 
 /// How much of a pull request's discussion to load. A busy pull request loads part of it, and the "more"
 /// buttons raise these by a step each.
-struct PullRequestCommentLimits: Equatable, Codable {
+struct PullRequestCommentLimits: Hashable, Codable {
     static let commentStep = 30
     static let threadStep = 50
 

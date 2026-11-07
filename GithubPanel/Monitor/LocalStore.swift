@@ -212,3 +212,42 @@ extension LocalStore {
         }
     }
 }
+
+// MARK: - Sync state
+
+extension LocalStore {
+    struct SyncState: Equatable {
+        var fetchedAt: Date?
+        var lastAttemptAt: Date?
+        var lastError: String?
+    }
+
+    func syncState(for resource: String) async -> SyncState? {
+        try? await database.read { db in
+            guard let row = try Row.fetchOne(db, sql: "SELECT * FROM sync_state WHERE resource = ?",
+                                             arguments: [resource]) else { return nil }
+            return SyncState(fetchedAt: (row["fetchedAt"] as Double?).map(Date.init(timeIntervalSince1970:)),
+                             lastAttemptAt: (row["lastAttemptAt"] as Double?).map(Date.init(timeIntervalSince1970:)),
+                             lastError: row["lastError"])
+        }
+    }
+
+    /// Records an attempt to load `resource`. A failed attempt keeps the last `fetchedAt`.
+    func recordSync(for resource: String, attemptedAt: Date, fetchedAt: Date? = nil, error: String? = nil) async {
+        _ = try? await database.write { db in
+            try db.execute(sql: """
+                INSERT INTO sync_state (resource, fetchedAt, lastError, lastAttemptAt) VALUES (?, ?, ?, ?)
+                ON CONFLICT(resource) DO UPDATE SET
+                    fetchedAt = COALESCE(excluded.fetchedAt, fetchedAt),
+                    lastError = excluded.lastError,
+                    lastAttemptAt = excluded.lastAttemptAt
+                """, arguments: [resource, fetchedAt?.timeIntervalSince1970, error, attemptedAt.timeIntervalSince1970])
+        }
+    }
+
+    func removeSyncStates() async {
+        _ = try? await database.write { db in
+            try db.execute(sql: "DELETE FROM sync_state")
+        }
+    }
+}

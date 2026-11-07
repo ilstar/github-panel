@@ -72,29 +72,36 @@ final class PullRequestDetailCache {
     }
 
     /// Stores a pull request's comments. Ignored until its detail is cached, since comments alone cannot be shown.
+    /// Returns whether they were stored, as do the other stores below.
+    @discardableResult
     func store(_ comments: PullRequestComments, for reference: PullRequestReference,
-               limits: PullRequestCommentLimits = PullRequestCommentLimits()) {
-        guard entries[reference] != nil else { return }
+               limits: PullRequestCommentLimits = PullRequestCommentLimits()) -> Bool {
+        guard entries[reference] != nil else { return false }
         entries[reference]?.comments = comments
         entries[reference]?.commentLimits = limits
         touch(reference)
         publish(reference)
+        return true
     }
 
-    func store(_ checks: PullRequestChecks, for reference: PullRequestReference, headSHA: String) {
-        guard entries[reference]?.content.detail.headSHA == headSHA else { return }
+    @discardableResult
+    func store(_ checks: PullRequestChecks, for reference: PullRequestReference, headSHA: String) -> Bool {
+        guard entries[reference]?.content.detail.headSHA == headSHA else { return false }
         entries[reference]?.checks = checks
         touch(reference)
         publish(reference)
+        return true
     }
 
+    @discardableResult
     func storeChanges(_ files: [PullRequestFile], for reference: PullRequestReference,
-                      baseSHA: String, headSHA: String) {
+                      baseSHA: String, headSHA: String) -> Bool {
         guard let detail = entries[reference]?.content.detail,
-              detail.lastReviewedSHA == baseSHA, detail.headSHA == headSHA else { return }
+              detail.lastReviewedSHA == baseSHA, detail.headSHA == headSHA else { return false }
         entries[reference]?.filesSinceLastReview = files
         touch(reference)
         publish(reference)
+        return true
     }
 
     /// Whether the cached copy is missing, incomplete, or older than the list's `updatedAt`.

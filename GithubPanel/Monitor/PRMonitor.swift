@@ -32,6 +32,10 @@ final class PRMonitor: ObservableObject {
     @Published var pullRequestToShow: PullRequestToShow?
     /// Details and comments of pull requests loaded so far, shared by every detail view.
     let detailCache: PullRequestDetailCache
+    /// Loads pull request details into `detailCache` with the session token.
+    private(set) lazy var syncEngine = SyncEngine(api: api, store: store, cache: detailCache) { [weak self] in
+        self?.syncCredential
+    }
     @Published var refreshInterval: TimeInterval {
         didSet {
             defaults.set(refreshInterval, forKey: DefaultsKeys.refreshInterval)
@@ -215,6 +219,7 @@ final class PRMonitor: ObservableObject {
 
     private func invalidateLogin() {
         credentialSession = UUID()
+        Task { [syncEngine] in await syncEngine.reset() }
         cachedLogin = nil
         activeRefreshTask?.cancel()
         activeRefreshTask = nil
@@ -260,6 +265,10 @@ final class PRMonitor: ObservableObject {
         sessionToken = tokenStore.loadToken()
         didLoadSessionToken = true
         return sessionToken
+    }
+
+    private var syncCredential: SyncEngine.Credential? {
+        loadSessionToken().map { SyncEngine.Credential(token: $0, session: credentialSession) }
     }
 
     /// Refreshes My PRs and To Review together. App start, timer ticks and manual refresh on
@@ -448,7 +457,7 @@ final class PRMonitor: ObservableObject {
     /// Both tabs share a queue. A refresh arriving during preloading queues another pass rather than being dropped.
     /// The queue takes the two lists' rows in turn from the top, so the rows each tab selects first load first.
     private func prefetchDetails() {
-        guard let token = loadSessionToken() else { return }
+        guard loadSessionToken() != nil else { return }
         for (position, row) in prRows.enumerated() {
             queuePrefetch(row.reference, updatedAt: row.updatedAt, position: position)
         }
@@ -458,7 +467,7 @@ final class PRMonitor: ObservableObject {
         guard prefetchTask == nil, !pendingPrefetch.isEmpty else { return }
         let session = credentialSession
         prefetchTask = Task { @MainActor [weak self] in
-            await self?.prefetch(token: token, session: session)
+            await self?.prefetch(session: session)
         }
     }
 
@@ -468,7 +477,8 @@ final class PRMonitor: ObservableObject {
                                                      position: min(queued?.position ?? position, position))
     }
 
-    private func prefetch(token: String, session: UUID) async {
+    /// Asks the sync engine for each queued pull request in the background, one pull request at a time.
+    private func prefetch(session: UUID) async {
         defer {
             if session == credentialSession { prefetchTask = nil }
         }
@@ -477,24 +487,18 @@ final class PRMonitor: ObservableObject {
             guard !Task.isCancelled, session == credentialSession else { return }
             do {
                 let cached = detailCache.entry(for: reference)
-                // Check results can change without changing the PR's updatedAt, so they load on every pass.
-                // They load alongside the content, so the content is cached without waiting for them.
-                async let loadedChecks = api.fetchPullRequestChecks(token: token, reference: reference)
+                var loads: [Task<Void, Error>] = []
                 if detailCache.needsRefresh(reference, updatedAt: updatedAt) {
                     let limits = cached?.commentLimits ?? PullRequestCommentLimits()
-                    async let comments = api.fetchPullRequestComments(token: token, reference: reference, limits: limits)
-                    let content = try await api.fetchPullRequestDetail(token: token, reference: reference)
-                    let loadedComments = try await comments
-                    guard !Task.isCancelled, session == credentialSession else { return }
-                    detailCache.store(content)
-                    detailCache.store(loadedComments, for: reference, limits: limits)
+                    loads.append(await syncEngine.start(.detail(reference), priority: .background))
+                    loads.append(await syncEngine.start(.comments(reference, limits), priority: .background))
                 }
-                guard let headSHA = detailCache.entry(for: reference)?.content.detail.headSHA else { continue }
-                let checks = try await loadedChecks
-                guard !Task.isCancelled, session == credentialSession else { return }
-                detailCache.store(checks, for: reference, headSHA: headSHA)
+                // Check results can change without changing the PR's updatedAt, so they load on every pass.
+                // They load alongside the content, so the content is cached without waiting for them.
+                loads.append(await syncEngine.start(.checks(reference), priority: .background))
+                for load in loads { try await load.value }
             } catch {
-                if Self.isThrottlingError(error) {
+                if SyncEngine.isThrottlingError(error) {
                     pendingPrefetch = [:]
                     return
                 }
@@ -509,7 +513,7 @@ final class PRMonitor: ObservableObject {
 
     private func scheduleNextTimerRefresh(after error: Error?) {
         let delay: TimeInterval
-        if let error, Self.isThrottlingError(error) {
+        if let error, SyncEngine.isThrottlingError(error) {
             consecutiveThrottledFailures += 1
             let backoff = refreshInterval * pow(2, Double(consecutiveThrottledFailures))
             delay = min(backoff, max(refreshInterval, maxThrottledBackoff))
@@ -520,12 +524,6 @@ final class PRMonitor: ObservableObject {
         // Ticks run on a fixed cadence that started before this fetch completed, so allow
         // half an interval of slack; otherwise the tick due after `delay` would be skipped.
         nextTimerRefreshAt = dateProvider.now.addingTimeInterval(delay - refreshInterval / 2)
-    }
-
-    private static func isThrottlingError(_ error: Error) -> Bool {
-        let statusCode = (error as? GraphQLError)?.statusCode ?? (error as? GitHubAPIError)?.statusCode
-        guard let statusCode else { return false }
-        return [401, 403, 429].contains(statusCode)
     }
 
     private func requireFreshRefresh(for session: UUID) async {
@@ -706,25 +704,9 @@ final class PRMonitor: ObservableObject {
         }
     }
 
-    func fetchPullRequestDetail(_ reference: PullRequestReference) async throws -> PullRequestDetailContent {
-        guard let token = loadSessionToken() else { throw MissingTokenError() }
-        return try await api.fetchPullRequestDetail(token: token, reference: reference)
-    }
-
-    func fetchChangedFiles(in repoFullName: String, from baseSHA: String, to headSHA: String) async throws -> [PullRequestFile] {
-        guard let token = loadSessionToken() else { throw MissingTokenError() }
-        return try await api.fetchChangedFiles(token: token, repoFullName: repoFullName, baseSHA: baseSHA, headSHA: headSHA)
-    }
-
     func setFileViewed(pullRequestID: String, path: String, viewed: Bool) async throws {
         guard let token = loadSessionToken() else { throw MissingTokenError() }
         try await api.setFileViewed(token: token, pullRequestID: pullRequestID, path: path, viewed: viewed)
-    }
-
-    func fetchPullRequestComments(_ reference: PullRequestReference,
-                                  limits: PullRequestCommentLimits = PullRequestCommentLimits()) async throws -> PullRequestComments {
-        guard let token = loadSessionToken() else { throw MissingTokenError() }
-        return try await api.fetchPullRequestComments(token: token, reference: reference, limits: limits)
     }
 
     func postPullRequestComment(_ comment: NewPullRequestComment, on reference: PullRequestReference) async throws {
@@ -770,11 +752,6 @@ final class PRMonitor: ObservableObject {
         let session = credentialSession
         try await api.setReviewRequested(token: token, reference: reference, name: name, kind: kind, requested: requested)
         await requireFreshRefresh(for: session)
-    }
-
-    func fetchPullRequestChecks(_ reference: PullRequestReference) async throws -> PullRequestChecks {
-        guard let token = loadSessionToken() else { throw MissingTokenError() }
-        return try await api.fetchPullRequestChecks(token: token, reference: reference)
     }
 
     /// Reruns failed checks, then refreshes the list, whose check state goes back to pending.
