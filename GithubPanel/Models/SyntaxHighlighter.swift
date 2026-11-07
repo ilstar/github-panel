@@ -198,6 +198,15 @@ struct SyntaxLanguage: Equatable {
 
     static let toml = SyntaxLanguage(lineComments: ["#"], keywords: ["true", "false"])
 
+    static let protobuf = SyntaxLanguage(
+        lineComments: ["//"], blocks: [cComment],
+        keywords: ["bool", "bytes", "double", "edition", "enum", "extend", "extensions", "false", "fixed32",
+                   "fixed64", "float", "group", "import", "inf", "int32", "int64", "map", "max", "message",
+                   "nan", "oneof", "option", "optional", "package", "public", "repeated", "required", "reserved",
+                   "returns", "rpc", "service", "sfixed32", "sfixed64", "sint32", "sint64", "stream", "string",
+                   "syntax", "to", "true", "uint32", "uint64", "weak"],
+        capitalizedTypes: true)
+
     private static let byExtension: [String: SyntaxLanguage] = {
         var map: [String: SyntaxLanguage] = [:]
         func add(_ language: SyntaxLanguage, _ extensions: [String]) {
@@ -219,6 +228,7 @@ struct SyntaxLanguage: Equatable {
         add(sql, ["sql"])
         add(php, ["php"])
         add(toml, ["toml", "ini", "cfg", "conf"])
+        add(protobuf, ["proto"])
         return map
     }()
 }
