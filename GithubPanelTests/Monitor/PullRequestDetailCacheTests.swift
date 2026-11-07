@@ -237,6 +237,76 @@ final class PullRequestDetailCacheTests: XCTestCase {
         XCTAssertNotNil(cache.entry(for: reference(2)))
     }
 
+    // MARK: - Pending changes
+
+    func testPendingChangesShowOnTopOfGitHubsCopy() {
+        let cache = PullRequestDetailCache()
+        cache.store(content(number: 1, title: "Old"))
+        var shown: [String] = []
+        let subscription = cache.updates.sink { shown.append($0.1.content.detail.title) }
+
+        cache.add(.title("New"), to: reference(1))
+        cache.store(content(number: 1, title: "Reloaded"))
+        subscription.cancel()
+
+        XCTAssertEqual(shown, ["New", "New"], "A reload landing while the change waits doesn't show the old title")
+        XCTAssertEqual(cache.shownEntry(for: reference(1))?.content.detail.title, "New")
+        XCTAssertEqual(cache.entry(for: reference(1))?.content.detail.title, "Reloaded")
+    }
+
+    func testAChangeReplacesAnEarlierOneToTheSameFieldUntilItStartsSending() {
+        let cache = PullRequestDetailCache()
+        cache.store(content(number: 1))
+
+        cache.add(.body("First"), to: reference(1))
+        let second = cache.add(.body("Second"), to: reference(1))
+        cache.add(.title("Title"), to: reference(1))
+        XCTAssertEqual(cache.pendingChanges(for: reference(1)).map(\.kind), [.body("Second"), .title("Title")])
+
+        cache.markSending(second.id)
+        cache.add(.body("Third"), to: reference(1))
+
+        XCTAssertEqual(cache.pendingChanges(for: reference(1)).map(\.kind),
+                       [.body("Second"), .title("Title"), .body("Third")])
+        XCTAssertEqual(cache.nextChangeToSend(for: reference(1))?.kind, .title("Title"))
+    }
+
+    func testPendingChangesAreSavedAndRestoredAndOnesThatWereSendingSendAgain() async {
+        let store = LocalStore.inMemory()
+        let saving = PullRequestDetailCache(store: store)
+        saving.store(content(number: 1, title: "Old"))
+        let sending = saving.add(.title("New"), to: reference(1))
+        saving.markSending(sending.id)
+        let failed = saving.add(.body("Body"), to: reference(1))
+        saving.markFailed(failed.id, error: "Nope")
+        await saving.saveNow()
+
+        let restored = PullRequestDetailCache(store: store)
+        await restored.waitForRestore()
+
+        let changes = restored.pendingChanges(for: reference(1))
+        XCTAssertEqual(changes.map(\.id), [sending.id, failed.id])
+        XCTAssertEqual(changes.map(\.state), [.pending, .failed])
+        XCTAssertEqual(changes.map(\.error), [nil, "Nope"])
+        XCTAssertEqual(restored.shownEntry(for: reference(1))?.content.detail.title, "New")
+        XCTAssertEqual(restored.referencesWithChangesToSend, [reference(1)])
+    }
+
+    func testRemoveAllDropsPendingChanges() async {
+        let store = LocalStore.inMemory()
+        let saving = PullRequestDetailCache(store: store)
+        saving.store(content(number: 1))
+        saving.add(.title("New"), to: reference(1))
+        await saving.saveNow()
+
+        saving.removeAll()
+        await saving.saveNow()
+
+        XCTAssertTrue(saving.pendingChanges(for: reference(1)).isEmpty)
+        let saved = await store.pendingChanges()
+        XCTAssertTrue(saved.isEmpty)
+    }
+
     private func reference(_ number: Int) -> PullRequestReference {
         PullRequestReference(repoFullName: "acme/widgets", number: number)
     }

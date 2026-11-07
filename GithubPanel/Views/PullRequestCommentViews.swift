@@ -278,21 +278,23 @@ struct ReviewThreadView: View {
     let thread: ReviewThread
     /// Whether a reply joins the viewer's pending review instead of posting right away.
     var isReviewPending = false
+    /// A resolve or unresolve GitHub hasn't confirmed: saving, or failed with Retry and Discard.
+    var resolveStatus: ChangeStatus?
     let onReply: (String) async throws -> Void
-    /// Resolves (true) or unresolves (false) the thread. Throws to show the error.
-    let onSetResolved: (Bool) async throws -> Void
+    /// Resolves (true) or unresolves (false) the thread, which shows right away.
+    let onSetResolved: (Bool) -> Void
 
     @State private var isExpanded: Bool
     @State private var isReplying = false
-    @State private var isResolving = false
-    @State private var resolveError: String?
 
     init(thread: ReviewThread,
          isReviewPending: Bool = false,
+         resolveStatus: ChangeStatus? = nil,
          onReply: @escaping (String) async throws -> Void,
-         onSetResolved: @escaping (Bool) async throws -> Void = { _ in }) {
+         onSetResolved: @escaping (Bool) -> Void = { _ in }) {
         self.thread = thread
         self.isReviewPending = isReviewPending
+        self.resolveStatus = resolveStatus
         self.onReply = onReply
         self.onSetResolved = onSetResolved
         _isExpanded = State(initialValue: !thread.isResolved)
@@ -301,6 +303,13 @@ struct ReviewThreadView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
+            // Shown folded too, since a resolve folds the thread straight away.
+            if let failure = FailedChangeNotice(resolveStatus) {
+                Divider()
+                failure
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+            }
             if isExpanded {
                 ForEach(thread.comments) { comment in
                     Divider()
@@ -318,34 +327,25 @@ struct ReviewThreadView: View {
                                             isReplying = false
                                         })
                     } else {
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack(spacing: 8) {
-                                Button {
-                                    isReplying = true
-                                } label: {
-                                    Text("Reply…")
-                                        .foregroundStyle(.secondary)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 6)
-                                        .background(
-                                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                                .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
-                                        )
-                                        .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                                // GitHub cannot resolve a thread that is still a draft.
-                                if !thread.isPending {
-                                    resolveButton
-                                }
+                        HStack(spacing: 8) {
+                            Button {
+                                isReplying = true
+                            } label: {
+                                Text("Reply…")
+                                    .foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 6)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                            .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                                    )
+                                    .contentShape(Rectangle())
                             }
-                            if let resolveError {
-                                Text(resolveError)
-                                    .prFont(.caption1)
-                                    .foregroundStyle(.red)
-                                    .textSelection(.enabled)
-                                    .lineLimit(3)
+                            .buttonStyle(.plain)
+                            // GitHub cannot resolve a thread that is still a draft.
+                            if !thread.isPending {
+                                resolveButton
                             }
                         }
                     }
@@ -364,30 +364,19 @@ struct ReviewThreadView: View {
 
     private var resolveButton: some View {
         HStack(spacing: 6) {
-            if isResolving {
-                ProgressView().controlSize(.small)
+            if resolveStatus?.isSaving == true {
+                SavingIndicator()
             }
             Button(Self.resolveTitle(thread), action: toggleResolved)
-                .disabled(isResolving)
                 .help(thread.isResolved ? "Mark this conversation as unresolved" : "Mark this conversation as resolved")
         }
     }
 
     private func toggleResolved() {
-        guard !isResolving else { return }
         let resolved = !thread.isResolved
-        isResolving = true
-        resolveError = nil
-        Task {
-            do {
-                try await onSetResolved(resolved)
-                // Fold a thread once it is resolved, like GitHub does.
-                if resolved { isExpanded = false }
-            } catch {
-                resolveError = error.localizedDescription
-            }
-            isResolving = false
-        }
+        onSetResolved(resolved)
+        // Fold a thread once it is resolved, like GitHub does.
+        if resolved { isExpanded = false }
     }
 
     static func resolveTitle(_ thread: ReviewThread) -> String {

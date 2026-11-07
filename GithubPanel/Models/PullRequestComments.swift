@@ -80,6 +80,11 @@ struct ReviewThread: Identifiable, Equatable, Codable {
     var isPending: Bool {
         !comments.isEmpty && comments.allSatisfy(\.isPending)
     }
+
+    func settingResolved(_ isResolved: Bool) -> ReviewThread {
+        ReviewThread(id: id, path: path, line: line, startLine: startLine, side: side, isResolved: isResolved,
+                     isOutdated: isOutdated, comments: comments)
+    }
 }
 
 /// How much of a pull request's discussion to load. A busy pull request loads part of it, and the "more"
@@ -143,6 +148,13 @@ struct PullRequestComments: Equatable, Codable {
     /// Draft comments in the viewer's pending review.
     var pendingCommentCount: Int {
         threads.reduce(0) { $0 + $1.comments.filter(\.isPending).count }
+    }
+
+    func settingThread(_ threadID: String, resolved: Bool) -> PullRequestComments {
+        PullRequestComments(comments: comments,
+                            threads: threads.map { $0.id == threadID ? $0.settingResolved(resolved) : $0 },
+                            pendingReviewID: pendingReviewID, totalCommentCount: totalCommentCount,
+                            totalThreadCount: totalThreadCount)
     }
 }
 

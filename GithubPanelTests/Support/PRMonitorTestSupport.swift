@@ -50,13 +50,16 @@ final class FakeGitHubAPI: GitHubAPIClient {
     var changedFilesHandler: ((String, String, String) async throws -> [PullRequestFile])?
     private(set) var changedFilesCalls: [(token: String, repoFullName: String, baseSHA: String, headSHA: String)] = []
     private(set) var setFileViewedCalls: [(token: String, pullRequestID: String, path: String, viewed: Bool)] = []
+    var setFileViewedHandler: ((String, String, Bool) async throws -> Void)?
     var comments: PullRequestComments = .empty
     private(set) var commentsLimits: [PullRequestCommentLimits] = []
     private(set) var setResolvedCalls: [(token: String, threadID: String, resolved: Bool)] = []
+    var setResolvedHandler: ((String, Bool) async throws -> Void)?
     var commentsHandler: ((PullRequestReference, PullRequestCommentLimits) async throws -> PullRequestComments)?
     private(set) var commentsCalls: [(token: String, reference: PullRequestReference)] = []
     private(set) var postCommentCalls: [(token: String, reference: PullRequestReference, comment: NewPullRequestComment)] = []
     private(set) var editCalls: [(token: String, reference: PullRequestReference, title: String?, body: String?)] = []
+    var editHandler: ((PullRequestReference, String?, String?) async throws -> Void)?
     private(set) var reviewCalls: [(token: String, reference: PullRequestReference, review: NewPullRequestReview)] = []
     private(set) var updateBranchCalls: [(token: String, pullRequestID: String, expectedHeadSHA: String)] = []
     private(set) var startPendingReviewCalls: [(token: String, pullRequestID: String, commitID: String)] = []
@@ -71,6 +74,7 @@ final class FakeGitHubAPI: GitHubAPIClient {
     private(set) var mentionCandidateCalls: [(token: String, reference: PullRequestReference, query: String)] = []
     private(set) var setReviewRequestedCalls: [(token: String, reference: PullRequestReference, name: String,
                                                 kind: PullRequestReviewer.Kind, requested: Bool)] = []
+    var setReviewRequestedHandler: ((PullRequestReference, String, PullRequestReviewer.Kind, Bool) async throws -> Void)?
     private(set) var checksCalls: [(token: String, reference: PullRequestReference)] = []
     private(set) var rerunCalls: [(token: String, repoFullName: String, rerun: CheckRerun)] = []
     var enableHandler: ((String) async -> Void)?
@@ -157,6 +161,7 @@ final class FakeGitHubAPI: GitHubAPIClient {
     func setFileViewed(token: String, pullRequestID: String, path: String, viewed: Bool) async throws {
         if let error { throw error }
         setFileViewedCalls.append((token, pullRequestID, path, viewed))
+        try await setFileViewedHandler?(pullRequestID, path, viewed)
     }
 
     func fetchPullRequestComments(token: String, reference: PullRequestReference,
@@ -176,11 +181,13 @@ final class FakeGitHubAPI: GitHubAPIClient {
     func setReviewThreadResolved(token: String, threadID: String, resolved: Bool) async throws {
         if let error { throw error }
         setResolvedCalls.append((token, threadID, resolved))
+        try await setResolvedHandler?(threadID, resolved)
     }
 
     func editPullRequest(token: String, reference: PullRequestReference, title: String?, body: String?) async throws {
         if let error { throw error }
         editCalls.append((token, reference, title, body))
+        try await editHandler?(reference, title, body)
     }
 
     func submitReview(token: String, reference: PullRequestReference, review: NewPullRequestReview) async throws {
@@ -242,6 +249,7 @@ final class FakeGitHubAPI: GitHubAPIClient {
                             kind: PullRequestReviewer.Kind, requested: Bool) async throws {
         if let error { throw error }
         setReviewRequestedCalls.append((token, reference, name, kind, requested))
+        try await setReviewRequestedHandler?(reference, name, kind, requested)
     }
 }
 

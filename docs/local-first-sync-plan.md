@@ -98,12 +98,22 @@ top**. Pending changes live in `pending_change`. A pure function per change
 kind (`apply(_ change, to: entry)`) builds what the view renders, so a background
 refresh landing mid-write can't make the UI flicker back.
 
-- The engine sends a PR's changes one at a time, in order.
+- The engine sends a PR's changes one at a time, in order. Different PRs send
+  at the same time.
 - On success, it refetches the affected resource, then writes the new snapshot
-  and deletes the change **in the same transaction**.
+  and deletes the change **in the same transaction**. If the refetch fails, the
+  change is applied to the cached snapshot instead, so it keeps showing.
 - On failure, the change becomes `failed` with its error. The view shows it
-  inline with Retry / Discard. Composers keep their draft until the change is
-  confirmed.
+  inline with Retry / Discard, and it stays applied until the user picks one.
+  Composers keep their draft until the change is confirmed.
+- A new change to the same field (title, body, one file's viewed mark, one
+  thread, one reviewer) replaces an earlier one that hasn't started sending or
+  that failed. One that's sending stays, and the new one sends after it.
+- During a backoff, changes wait as `pending`. A failed write doesn't start the
+  backoff, since GitHub also answers a write it doesn't allow with 403.
+- A token change drops every pending and failed change, in memory and on disk.
+  They were made as the old account, so sending them with the new token could
+  act as the wrong person.
 - After a restart:
   - **Safe to replay** (idempotent: setting a value, not adding one): task
     checkbox, title/body edit, file viewed, resolve thread, reviewer
@@ -148,7 +158,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
        refreshes and the timer into the engine. `PRMonitor` and the list views
        observe the store; notification and hook logic reacts to store changes.
        Shrink `PRMonitor` to settings, notifications, and hooks.
-4. [ ] **Pending changes, idempotent writes.** Add `pending_change`, the overlay
+4. [x] **Pending changes, idempotent writes.** Add `pending_change`, the overlay
        function, the send loop, and the failed/retry UI. Move over task
        checkboxes (replacing `setTask`'s own chaining), title/body edits, file
        viewed, resolve thread, and reviewer add/remove.
@@ -189,3 +199,17 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   don't follow a write pass `joinsLoadInFlight`, so they share a load already sent; a list load superseded by a
   refresh after a write drops its result instead of saving it first, as `PRMonitor` did, so a merged row doesn't
   come back; a History page shows from the cache while it reloads; the SSO-authorization URL stays in memory.
+- 2026-11-07: Step 4 done. `pending_change` (migration `addPendingChanges`) holds title, body (task boxes send the
+  whole body), file viewed, resolve thread, and reviewer changes. `PullRequestDetailCache` keeps them beside the
+  entries, `shownEntry` and `updates` apply them with `PendingChange.apply`, and `entry(for:)` stays GitHub's copy
+  for the engine. `SyncEngine.sendPendingChanges` sends them; `PRMonitor` calls it on every list refresh, so changes
+  left by the last run (including ones that were `sending`) and ones held by a backoff go out on start and on the
+  next tick. Design changes: changes live in the details cache rather than a separate store, so the overlay and the
+  confirm are one main-actor step; the refetched snapshot lands in the cache a step before the confirm (with the
+  change still applied on top, so nothing flickers), and the confirm writes the entry row and deletes the
+  `pending_change` row in one transaction; a refetch that fails applies the change to the snapshot instead of
+  leaving it; a new change to a field also replaces a *failed* change to it, so Retry can't later send an older
+  value; failed writes don't start the backoff (see above); title and reviewer changes refresh My PRs afterwards, as
+  `PRMonitor` did. Credential change: pending changes are dropped (see above). `PRMonitor`'s `editPullRequest`,
+  `setFileViewed`, `setReviewThreadResolved` and `setReviewRequested` are gone; the title and description editors
+  close on Save, and failures show by what they changed with Retry and Discard.

@@ -239,11 +239,13 @@ final class PRMonitor: ObservableObject {
     }
 
     /// Asks the engine for both lists, sharing a load already in flight, then preloads their rows.
+    /// Also sends the changes still waiting, such as ones saved before a restart or held back by a backoff.
     private func refreshLists(priority: SyncEngine.Priority, maxAge: TimeInterval) async {
         guard loadSessionToken() != nil else { return }
         let session = credentialSession
         let loadCount = listLoadCount
         let engine = syncEngine
+        await engine.sendPendingChanges()
         async let reviewRequests: Void? = try? engine.request(.reviewRequests, priority: priority, maxAge: maxAge,
                                                               joinsLoadInFlight: true)
         _ = try? await engine.request(.openList, priority: priority, maxAge: maxAge, joinsLoadInFlight: true)
@@ -611,27 +613,9 @@ final class PRMonitor: ObservableObject {
         }
     }
 
-    func setFileViewed(pullRequestID: String, path: String, viewed: Bool) async throws {
-        guard let token = loadSessionToken() else { throw MissingTokenError() }
-        try await api.setFileViewed(token: token, pullRequestID: pullRequestID, path: path, viewed: viewed)
-    }
-
     func postPullRequestComment(_ comment: NewPullRequestComment, on reference: PullRequestReference) async throws {
         guard let token = loadSessionToken() else { throw MissingTokenError() }
         try await api.postPullRequestComment(token: token, reference: reference, comment: comment)
-    }
-
-    func setReviewThreadResolved(threadID: String, resolved: Bool) async throws {
-        guard let token = loadSessionToken() else { throw MissingTokenError() }
-        try await api.setReviewThreadResolved(token: token, threadID: threadID, resolved: resolved)
-    }
-
-    /// Saves a new title, description, or both, then refreshes the list so the row shows the new title.
-    func editPullRequest(_ reference: PullRequestReference, title: String?, body: String?) async throws {
-        guard let token = loadSessionToken() else { throw MissingTokenError() }
-        let session = credentialSession
-        try await api.editPullRequest(token: token, reference: reference, title: title, body: body)
-        await requireFreshRefresh(for: session)
     }
 
     /// Merges the base branch into the pull request's branch, then refreshes the list, whose merge state changes.
@@ -650,15 +634,6 @@ final class PRMonitor: ObservableObject {
     func searchMentionCandidates(_ reference: PullRequestReference, query: String) async throws -> [MentionCandidate] {
         guard let token = loadSessionToken() else { throw MissingTokenError() }
         return try await api.searchMentionCandidates(token: token, reference: reference, query: query)
-    }
-
-    /// Requests a review, or removes a request, then refreshes the list, whose review tag can change.
-    func setReviewRequested(_ name: String, kind: PullRequestReviewer.Kind, requested: Bool,
-                            on reference: PullRequestReference) async throws {
-        guard let token = loadSessionToken() else { throw MissingTokenError() }
-        let session = credentialSession
-        try await api.setReviewRequested(token: token, reference: reference, name: name, kind: kind, requested: requested)
-        await requireFreshRefresh(for: session)
     }
 
     /// Reruns failed checks, then refreshes the list, whose check state goes back to pending.

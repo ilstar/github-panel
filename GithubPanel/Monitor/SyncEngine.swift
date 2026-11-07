@@ -3,7 +3,7 @@ import Foundation
 /// The only code that reads pull requests and their lists from GitHub. Callers ask for a resource, and the engine
 /// fetches it, saves it to the details or lists cache, and records when in `sync_state`. Views show what lands in
 /// the caches. Requests for a resource already loading join it, and requests the user waits on never queue behind
-/// preloading.
+/// preloading. It also sends the changes the user makes, which wait in the details cache until GitHub confirms them.
 actor SyncEngine {
     enum Resource: Hashable {
         case detail(PullRequestReference)
@@ -91,6 +91,11 @@ actor SyncEngine {
     private let maxBackoff: TimeInterval = 30 * 60
     /// The login of the session's token, from My PRs or `.currentUser`.
     private var login: (session: UUID, login: String)?
+    /// The loop sending each pull request's changes.
+    private var senders: [PullRequestReference: Sender] = [:]
+    /// Pull requests asked to send since their loop last looked for a change, so a change added while the loop
+    /// finishes isn't left behind.
+    private var sendRequests: Set<PullRequestReference> = []
 
     private final class Job {
         let id = UUID()
@@ -115,6 +120,10 @@ actor SyncEngine {
             self.priority = priority
             self.previous = previous
         }
+    }
+
+    private final class Sender {
+        var task: Task<Void, Never>?
     }
 
     /// After throttled or rejected requests, every request fails with the same error until `until`.
@@ -201,6 +210,9 @@ actor SyncEngine {
     /// Results that still arrive are dropped, since their session no longer matches.
     func reset() async {
         for job in inFlight.values { job.task?.cancel() }
+        for sender in senders.values { sender.task?.cancel() }
+        senders = [:]
+        sendRequests = []
         for job in waiting {
             job.slotWaiter?.resume()
             job.slotWaiter = nil
@@ -248,7 +260,10 @@ actor SyncEngine {
                 throw CredentialChangedError()
             }
             // A request sent before the backoff began says nothing about whether GitHub has let up.
-            if let backoff, backoff.session == job.session, attemptedAt > backoff.since { self.backoff = nil }
+            if let backoff, backoff.session == job.session, attemptedAt > backoff.since {
+                self.backoff = nil
+                Task { await sendPendingChanges() }
+            }
             await store.recordSync(for: job.resource.key, attemptedAt: attemptedAt, fetchedAt: stored ? now() : nil)
         } catch {
             guard !Task.isCancelled, !(error is CredentialChangedError) else { throw CredentialChangedError() }
@@ -389,6 +404,129 @@ actor SyncEngine {
         let failedAt = now()
         backoff = Backoff(session: session, failures: failures, since: failedAt,
                           until: failedAt.addingTimeInterval(delay - interval / 2), error: error)
+    }
+
+    // MARK: - Pending changes
+
+    /// Sends the changes waiting in the cache for `reference`, or for every pull request, unless they're already
+    /// sending. Returns once sending has started. Each pull request sends one change at a time, oldest first, while
+    /// different pull requests send at the same time. During a backoff the changes wait, and send once it ends.
+    func sendPendingChanges(for reference: PullRequestReference? = nil) async {
+        let references: [PullRequestReference]
+        if let reference {
+            references = [reference]
+        } else {
+            // Changes saved by the last run are sent again: each sets a value, so sending one twice is safe.
+            await cache.waitForRestore()
+            references = await MainActor.run { [cache] in cache.referencesWithChangesToSend }
+        }
+        for reference in references {
+            sendRequests.insert(reference)
+            guard senders[reference] == nil else { continue }
+            let sender = Sender()
+            senders[reference] = sender
+            sender.task = Task { await sendChanges(of: reference, sender: sender) }
+        }
+    }
+
+    /// Waits until no changes are sending. Used by tests.
+    func waitForPendingChanges() async {
+        while let task = senders.values.first?.task {
+            await task.value
+        }
+    }
+
+    private func sendChanges(of reference: PullRequestReference, sender: Sender) async {
+        defer {
+            if senders[reference] === sender { senders[reference] = nil }
+        }
+        while !Task.isCancelled {
+            sendRequests.remove(reference)
+            let (credential, next) = await MainActor.run { [cache, credential] in
+                (credential(), cache.nextChangeToSend(for: reference))
+            }
+            guard let credential, let change = next else {
+                if sendRequests.contains(reference) { continue }
+                return
+            }
+            // The change stays pending, and the request that ends the backoff starts sending again.
+            if let backoff, backoff.session == credential.session, now() < backoff.until { return }
+            guard await updateCache(session: credential.session, { $0.markSending(change.id) }) else { return }
+            do {
+                try await send(change.kind, on: reference, token: credential.token)
+            } catch {
+                guard !Task.isCancelled else { return }
+                // GitHub answers a write it doesn't allow with 403 too, so a failed write doesn't start the backoff.
+                await updateCache(session: credential.session) {
+                    $0.markFailed(change.id, error: error.localizedDescription)
+                }
+                continue
+            }
+            await confirm(change, session: credential.session)
+        }
+    }
+
+    private func send(_ kind: PendingChange.Kind, on reference: PullRequestReference, token: String) async throws {
+        switch kind {
+        case .title(let title):
+            try await api.editPullRequest(token: token, reference: reference, title: title, body: nil)
+        case .body(let body):
+            try await api.editPullRequest(token: token, reference: reference, title: nil, body: body)
+        case .fileViewed(let pullRequestID, let path, let viewed):
+            try await api.setFileViewed(token: token, pullRequestID: pullRequestID, path: path, viewed: viewed)
+        case .threadResolved(let threadID, let resolved):
+            try await api.setReviewThreadResolved(token: token, threadID: threadID, resolved: resolved)
+        case .reviewRequested(let name, let kind, let requested):
+            try await api.setReviewRequested(token: token, reference: reference, name: name, kind: kind,
+                                             requested: requested)
+        }
+    }
+
+    /// Loads again what GitHub changed, then drops the change in the same step as saving the new copy, so the view
+    /// goes straight from the change to GitHub's copy of it. If that load fails, the change is kept in the old copy.
+    private func confirm(_ change: PendingChange, session: UUID) async {
+        // A new token dropped the change, so nothing is loaded for it with that token.
+        let current = await MainActor.run { [cache, credential] in
+            (session: credential()?.session, resource: Self.resource(changedBy: change, cache: cache))
+        }
+        guard current.session == session else { return }
+        var isRefreshed = false
+        if let resource = current.resource {
+            do {
+                try await request(resource)
+                isRefreshed = true
+            } catch {}
+        }
+        await updateCache(session: session) { $0.confirm(change.id, applyingToEntry: !isRefreshed) }
+        switch change.kind {
+        case .title, .reviewRequested:
+            // My PRs shows the title and who was asked to review.
+            _ = try? await request(.openList)
+        case .body, .fileViewed, .threadResolved:
+            break
+        }
+    }
+
+    @MainActor
+    private static func resource(changedBy change: PendingChange, cache: PullRequestDetailCache) -> Resource? {
+        let reference = change.reference
+        switch change.kind {
+        case .title, .body, .fileViewed, .reviewRequested:
+            return .detail(reference)
+        case .threadResolved:
+            guard let entry = cache.entry(for: reference), entry.comments != nil else { return nil }
+            return .comments(reference, entry.commentLimits)
+        }
+    }
+
+    /// Runs `update` if the token hasn't changed since `session`, since the cache dropped that token's changes.
+    @discardableResult
+    private func updateCache(session: UUID, _ update: @escaping @MainActor (PullRequestDetailCache) -> Void) async -> Bool {
+        await MainActor.run { [cache, credential] in
+            guard credential()?.session == session else { return false }
+            update(cache)
+            return true
+        }
     }
 
     // MARK: - Priority

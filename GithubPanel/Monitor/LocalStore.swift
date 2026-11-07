@@ -1,8 +1,9 @@
 import Foundation
 import GRDB
 
-/// The app's database: pull requests and lists as last loaded from GitHub, so they show right away.
-/// Everything in it can be loaded again, so a file that can't be opened or migrated is deleted and started over.
+/// The app's database: pull requests and lists as last loaded from GitHub, so they show right away, and the
+/// changes the user made that GitHub hasn't confirmed yet. Everything but those changes can be loaded again, so a
+/// file that can't be opened or migrated is deleted and started over.
 final class LocalStore: Sendable {
     let database: DatabaseQueue
 
@@ -87,6 +88,18 @@ final class LocalStore: Sendable {
                 t.column("lastAttemptAt", .double)
             }
         }
+        migrator.registerMigration("addPendingChanges") { db in
+            try db.create(table: "pending_change") { t in
+                t.primaryKey("id", .text)
+                t.column("repoFullName", .text).notNull()
+                t.column("number", .integer).notNull()
+                t.column("kind", .text).notNull()
+                t.column("payload", .blob).notNull()
+                t.column("createdAt", .double).notNull()
+                t.column("state", .text).notNull()
+                t.column("error", .text)
+            }
+        }
         return migrator
     }
 }
@@ -152,6 +165,8 @@ extension LocalStore {
         /// Entries only used, not changed, since the last save.
         var used: [PullRequestReference: Date] = [:]
         var removed: [PullRequestReference] = []
+        /// Pending changes GitHub confirmed, deleted in the same transaction that saves what it returned.
+        var confirmed: [UUID] = []
     }
 
     /// The saved details, least recently used first. Rows that no longer decode are left out.
@@ -213,12 +228,66 @@ extension LocalStore {
                 try db.execute(sql: "DELETE FROM pull_request_detail WHERE repoFullName = ? AND number = ?",
                                arguments: [reference.repoFullName, reference.number])
             }
+            for id in changes.confirmed {
+                try db.execute(sql: "DELETE FROM pending_change WHERE id = ?", arguments: [id.uuidString])
+            }
         }
     }
 
     func removeAllPullRequestDetails() async {
         _ = try? await database.write { db in
             try db.execute(sql: "DELETE FROM pull_request_detail")
+        }
+    }
+}
+
+// MARK: - Pending changes
+
+extension LocalStore {
+    /// The saved changes, oldest first. Ones that were sending when the app quit are pending again, since every
+    /// kind is safe to send twice. Rows that no longer decode are left out.
+    func pendingChanges() async -> [PendingChange] {
+        let rows = (try? await database.write { db -> [Row] in
+            try db.execute(sql: "UPDATE pending_change SET state = ? WHERE state = ?",
+                           arguments: [PendingChange.State.pending.rawValue, PendingChange.State.sending.rawValue])
+            return try Row.fetchAll(db, sql: "SELECT * FROM pending_change ORDER BY createdAt")
+        }) ?? []
+        return rows.compactMap { row in
+            guard let id = UUID(uuidString: row["id"]), let payload: Data = row["payload"],
+                  let kind = try? JSONDecoder().decode(PendingChange.Kind.self, from: payload),
+                  let state = PendingChange.State(rawValue: row["state"] as String) else { return nil }
+            return PendingChange(id: id, reference: PullRequestReference(repoFullName: row["repoFullName"],
+                                                                         number: row["number"]),
+                                 kind: kind, createdAt: Date(timeIntervalSince1970: row["createdAt"]),
+                                 state: state, error: row["error"])
+        }
+    }
+
+    /// Inserts or replaces each change, and deletes the ones in `removed`, in one transaction.
+    func savePendingChanges(_ changes: [PendingChange], removing removed: [UUID] = []) async {
+        let encoder = JSONEncoder()
+        _ = try? await database.write { db in
+            for id in removed {
+                try db.execute(sql: "DELETE FROM pending_change WHERE id = ?", arguments: [id.uuidString])
+            }
+            for change in changes {
+                guard let payload = try? encoder.encode(change.kind) else { continue }
+                try db.execute(sql: """
+                    INSERT OR REPLACE INTO pending_change
+                        (id, repoFullName, number, kind, payload, createdAt, state, error)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, arguments: [
+                        change.id.uuidString, change.reference.repoFullName, change.reference.number,
+                        change.kind.name, payload, change.createdAt.timeIntervalSince1970,
+                        change.state.rawValue, change.error,
+                    ])
+            }
+        }
+    }
+
+    func removeAllPendingChanges() async {
+        _ = try? await database.write { db in
+            try db.execute(sql: "DELETE FROM pending_change")
         }
     }
 }

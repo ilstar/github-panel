@@ -57,7 +57,8 @@ struct PullRequestDetailView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     PullRequestDetailHeader(detail: content.detail,
                                             isEditingTitle: $isEditingTitle,
-                                            onSaveTitle: { title in try await viewModel.edit(title: title) })
+                                            titleStatus: viewModel.status(of: .title),
+                                            onSaveTitle: { title in viewModel.edit(title: title) })
                         .padding(.horizontal, Self.headerInset(for: selectedTab))
                         .padding(.top, 24)
                         .padding(.bottom, 16)
@@ -100,15 +101,15 @@ struct PullRequestDetailView: View {
                                                 onRerunFailedChecks: { Task { await viewModel.rerunFailedChecks() } },
                                                 commentFocusRequest: commentFocusRequest,
                                                 onComment: { body in try await viewModel.post(.general(body: body)) },
-                                                onSaveBody: { body in try await viewModel.edit(body: body) },
-                                                onSetTask: { index, checked in
-                                                    Task { await viewModel.setTask(index, checked: checked) }
-                                                },
+                                                onSaveBody: { body in viewModel.edit(body: body) },
+                                                bodyStatus: viewModel.status(of: .body),
+                                                onSetTask: { index, checked in viewModel.setTask(index, checked: checked) },
                                                 reviewerActions: content.detail.canRequestReviewers ? ReviewerRequestActions(
                                                     inFlight: viewModel.reviewRequestsInFlight,
+                                                    failures: viewModel.failedReviewRequests.map(reviewRequestFailure),
                                                     loadCandidates: { query in try await viewModel.reviewerCandidates(matching: query) },
                                                     setRequested: { name, kind, requested in
-                                                        Task { await viewModel.setReviewRequested(name, kind: kind, requested: requested) }
+                                                        viewModel.setReviewRequested(name, kind: kind, requested: requested)
                                                     }) : nil)
                 case .files:
                     PullRequestFilesView(viewModel: viewModel,
@@ -180,6 +181,16 @@ struct PullRequestDetailView: View {
 
     private func reload() {
         Task { await viewModel.load() }
+    }
+
+    private func reviewRequestFailure(_ change: PendingChange) -> ReviewerRequestActions.Failure {
+        guard case .reviewRequested(let name, _, let requested) = change.kind else {
+            preconditionFailure("Only review requests are passed in")
+        }
+        let action = requested ? "Couldn't request a review from \(name)" : "Couldn't remove \(name)"
+        return ReviewerRequestActions.Failure(id: change.id,
+                                              status: viewModel.status(of: change),
+                                              message: "\(action): \(change.error ?? "GitHub refused it.")")
     }
 
     private func addComment() {
@@ -433,8 +444,10 @@ struct PullRequestDetailTabBar: View {
 struct PullRequestDetailHeader: View {
     let detail: PullRequestDetail
     @Binding var isEditingTitle: Bool
-    /// Saves a new title. Throws to keep the draft and show the error.
-    let onSaveTitle: (String) async throws -> Void
+    /// A title change GitHub hasn't confirmed: saving, or failed with Retry and Discard.
+    var titleStatus: ChangeStatus?
+    /// Saves a new title, which shows right away.
+    let onSaveTitle: (String) -> Void
     @State private var copiedBranchNotice = false
 
     var body: some View {
@@ -463,7 +476,7 @@ struct PullRequestDetailHeader: View {
                 PullRequestTitleEditor(title: detail.title,
                                        onCancel: { isEditingTitle = false },
                                        onSave: { title in
-                                           try await onSaveTitle(title)
+                                           onSaveTitle(title)
                                            isEditingTitle = false
                                        })
             } else {
@@ -472,8 +485,13 @@ struct PullRequestDetailHeader: View {
                     if Self.showsEditTitleButton(for: detail) {
                         editTitleButton
                     }
+                    if titleStatus?.isSaving == true {
+                        SavingIndicator()
+                    }
                     Spacer(minLength: 0)
                 }
+                // Editing the title again replaces the failed change.
+                FailedChangeNotice(titleStatus)
             }
 
             HStack(spacing: 6) {
@@ -607,47 +625,32 @@ struct BranchTag: View {
 }
 
 /// Edits the title in place, like GitHub. Return or ⌘Return saves and Escape cancels.
-/// Keeps the draft and shows the error when GitHub refuses it.
+/// Saving closes the editor right away; the new title shows while it saves, and a failure shows under it.
 struct PullRequestTitleEditor: View {
     let onCancel: () -> Void
-    let onSave: (String) async throws -> Void
+    let onSave: (String) -> Void
 
     @State private var title: String
-    @State private var isSaving = false
-    @State private var errorMessage: String?
     @FocusState private var isFocused: Bool
 
     init(title: String,
          onCancel: @escaping () -> Void,
-         onSave: @escaping (String) async throws -> Void) {
+         onSave: @escaping (String) -> Void) {
         self.onCancel = onCancel
         self.onSave = onSave
         _title = State(initialValue: title)
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                TextField("Title", text: $title)
-                    .textFieldStyle(.roundedBorder)
-                    .prFont(.title3)
-                    .focused($isFocused)
-                    .disabled(isSaving)
-                    .onSubmit(save)
-                    .onExitCommand(perform: onCancel)
-                if isSaving {
-                    ProgressView().controlSize(.small)
-                }
-                saveButton
-                Button("Cancel", action: onCancel)
-                    .disabled(isSaving)
-            }
-            if let errorMessage {
-                Text(errorMessage)
-                    .prFont(.caption1)
-                    .foregroundStyle(.red)
-                    .textSelection(.enabled)
-            }
+        HStack(spacing: 8) {
+            TextField("Title", text: $title)
+                .textFieldStyle(.roundedBorder)
+                .prFont(.title3)
+                .focused($isFocused)
+                .onSubmit(save)
+                .onExitCommand(perform: onCancel)
+            saveButton
+            Button("Cancel", action: onCancel)
         }
         .onAppear {
             // The text view is not in the window yet during onAppear, so focus on the next turn.
@@ -659,7 +662,7 @@ struct PullRequestTitleEditor: View {
     private var saveButton: some View {
         let button = Button("Save", action: save)
             .buttonStyle(.borderedProminent)
-            .disabled(!Self.canSave(title) || isSaving)
+            .disabled(!Self.canSave(title))
             .help("Save (⌘Return)")
         // Only answer ⌘Return while typing, so an open description editor keeps its own shortcut.
         if isFocused {
@@ -675,17 +678,8 @@ struct PullRequestTitleEditor: View {
     }
 
     private func save() {
-        guard Self.canSave(title), !isSaving else { return }
-        isSaving = true
-        errorMessage = nil
-        Task {
-            do {
-                try await onSave(title)
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-            isSaving = false
-        }
+        guard Self.canSave(title) else { return }
+        onSave(title)
     }
 }
 
@@ -697,20 +691,18 @@ enum MarkdownEditorTab: String, CaseIterable, Identifiable {
 }
 
 /// Edits the description in place with Write and Preview tabs, like GitHub.
-/// Keeps the draft and shows the error when GitHub refuses it.
+/// Saving closes the editor right away; the new description shows while it saves, and a failure shows under it.
 struct PullRequestBodyEditor: View {
     let onCancel: () -> Void
-    let onSave: (String) async throws -> Void
+    let onSave: (String) -> Void
 
     @State private var text: String
     @State private var tab: MarkdownEditorTab = .write
-    @State private var isSaving = false
-    @State private var errorMessage: String?
     @FocusState private var isFocused: Bool
 
     init(body: String,
          onCancel: @escaping () -> Void,
-         onSave: @escaping (String) async throws -> Void) {
+         onSave: @escaping (String) -> Void) {
         self.onCancel = onCancel
         self.onSave = onSave
         _text = State(initialValue: body)
@@ -762,19 +754,8 @@ struct PullRequestBodyEditor: View {
             )
 
             HStack(spacing: 8) {
-                if let errorMessage {
-                    Text(errorMessage)
-                        .prFont(.caption1)
-                        .foregroundStyle(.red)
-                        .textSelection(.enabled)
-                        .lineLimit(3)
-                }
                 Spacer(minLength: 8)
-                if isSaving {
-                    ProgressView().controlSize(.small)
-                }
                 Button("Cancel", action: onCancel)
-                    .disabled(isSaving)
                 saveButton
             }
         }
@@ -791,7 +772,6 @@ struct PullRequestBodyEditor: View {
     private var saveButton: some View {
         let button = Button("Update description", action: save)
             .buttonStyle(.borderedProminent)
-            .disabled(isSaving)
             .help("Update description (⌘Return)")
         // Only answer ⌘Return while typing, so the comment composer below keeps its own shortcut.
         if isFocused {
@@ -806,17 +786,7 @@ struct PullRequestBodyEditor: View {
     }
 
     private func save() {
-        guard !isSaving else { return }
-        isSaving = true
-        errorMessage = nil
-        Task {
-            do {
-                try await onSave(text)
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-            isSaving = false
-        }
+        onSave(text)
     }
 }
 
@@ -878,8 +848,10 @@ struct PullRequestConversationView: View {
     /// Goes up by one each time the comment box should take focus.
     var commentFocusRequest = 0
     let onComment: (String) async throws -> Void
-    /// Saves a new description. Throws to keep the draft and show the error.
-    let onSaveBody: (String) async throws -> Void
+    /// Saves a new description, which shows right away.
+    let onSaveBody: (String) -> Void
+    /// A description change GitHub hasn't confirmed, from the editor or a task box.
+    var bodyStatus: ChangeStatus?
     /// Checks or unchecks a task item in the description: its index and the new state.
     var onSetTask: (Int, Bool) -> Void = { _, _ in }
     /// Set when the viewer may request reviews.
@@ -985,7 +957,7 @@ struct PullRequestConversationView: View {
                     PullRequestBodyEditor(body: detail.body,
                                           onCancel: { isEditingBody = false },
                                           onSave: { body in
-                                              try await onSaveBody(body)
+                                              onSaveBody(body)
                                               isEditingBody = false
                                           })
                 } else if detail.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -998,9 +970,17 @@ struct PullRequestConversationView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
+            if !isEditingBody, let failure = FailedChangeNotice(bodyStatus) {
+                // Editing the description again replaces the failed change.
+                failure
+            }
+
             if detail.canEdit && !isEditingBody {
                 HStack {
                     Spacer(minLength: 0)
+                    if bodyStatus?.isSaving == true {
+                        SavingIndicator()
+                    }
                     Button {
                         isEditingBody = true
                     } label: {
