@@ -61,6 +61,7 @@ final class FakeGitHubAPI: GitHubAPIClient {
     private(set) var submitPendingReviewCalls: [(token: String, reviewID: String, event: PullRequestReviewEvent, body: String)] = []
     private(set) var deletePendingReviewCalls: [(token: String, reviewID: String)] = []
     var checks: PullRequestChecks = .empty
+    var checksHandler: ((PullRequestReference) async throws -> PullRequestChecks)?
     var reviewerCandidates: [ReviewerCandidate] = []
     private(set) var reviewerCandidateCalls: [(token: String, reference: PullRequestReference, query: String)] = []
     var mentionCandidates: [MentionCandidate] = []
@@ -212,6 +213,7 @@ final class FakeGitHubAPI: GitHubAPIClient {
     func fetchPullRequestChecks(token: String, reference: PullRequestReference) async throws -> PullRequestChecks {
         if let error { throw error }
         checksCalls.append((token, reference))
+        if let checksHandler { return try await checksHandler(reference) }
         return checks
     }
 

@@ -21,6 +21,37 @@ final class PRMonitorPrefetchTests: XCTestCase {
         XCTAssertEqual(monitor.detailCache.entry(for: reference(2))?.comments, comments)
     }
 
+    func testPreloadFetchesChecksAlongsideTheContent() async {
+        let api = prefetchingAPI(rows: [row(number: 1, status: .success)])
+        var checksStartedBeforeContentLoaded = false
+        api.detailHandler = { [api] reference in
+            for _ in 0..<100 where !api.checksCalls.contains(where: { $0.reference == reference }) {
+                await Task.yield()
+            }
+            checksStartedBeforeContentLoaded = api.checksCalls.contains { $0.reference == reference }
+            return detailContent(for: reference, title: "PR \(reference.number)")
+        }
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+
+        await monitor.refreshNow()
+        await monitor.waitForPrefetch()
+
+        XCTAssertTrue(checksStartedBeforeContentLoaded)
+        XCTAssertNotNil(monitor.detailCache.entry(for: reference(1))?.checks)
+    }
+
+    func testPreloadKeepsTheContentWhenChecksFail() async {
+        let api = prefetchingAPI(rows: [row(number: 1, status: .success)])
+        api.checksHandler = { _ in throw TestError(message: "Checks unavailable") }
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+
+        await monitor.refreshNow()
+        await monitor.waitForPrefetch()
+
+        XCTAssertEqual(monitor.detailCache.entry(for: reference(1))?.content.detail.title, "PR 1")
+        XCTAssertNil(monitor.detailCache.entry(for: reference(1))?.checks)
+    }
+
     func testRefreshOnlyPrefetchesPullRequestsThatChanged() async {
         let api = prefetchingAPI(rows: [row(number: 1, status: .success), row(number: 2, status: .success)])
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
