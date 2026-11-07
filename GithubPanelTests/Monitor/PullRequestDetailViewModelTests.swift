@@ -134,15 +134,17 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         XCTAssertNil(viewModel.errorMessage)
     }
 
-    func testMonitorFetchesDetailWithSessionToken() async throws {
+    func testMonitorLoadsDetailWithSessionToken() async throws {
         let api = FakeGitHubAPI()
         let content = detailContent(title: "From API")
         api.detailHandler = { _ in content }
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+        let viewModel = PullRequestDetailViewModel(reference: reference, monitor: monitor)
 
-        let result = try await monitor.fetchPullRequestDetail(reference)
+        await viewModel.load()
 
-        XCTAssertEqual(result, content)
+        XCTAssertEqual(viewModel.content, content)
+        XCTAssertEqual(monitor.detailCache.entry(for: reference)?.content, content)
         XCTAssertEqual(api.detailCalls.map(\.token), ["token"])
         XCTAssertEqual(api.detailCalls.map(\.reference), [reference])
     }
@@ -533,15 +535,17 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         XCTAssertEqual(commentFetches, 1)
     }
 
-    func testMonitorFetchesAndPostsCommentsWithSessionToken() async throws {
+    func testMonitorLoadsAndPostsCommentsWithSessionToken() async throws {
         let api = FakeGitHubAPI()
+        api.detailHandler = { [self] _ in detailContent(title: "Comments") }
         api.comments = PullRequestComments(comments: [comment(1)], threads: [])
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+        let viewModel = PullRequestDetailViewModel(reference: reference, monitor: monitor)
 
-        let result = try await monitor.fetchPullRequestComments(reference)
+        await viewModel.load()
         try await monitor.postPullRequestComment(.general(body: "Hi"), on: reference)
 
-        XCTAssertEqual(result, api.comments)
+        XCTAssertEqual(viewModel.comments, api.comments)
         XCTAssertEqual(api.commentsCalls.map(\.token), ["token"])
         XCTAssertEqual(api.commentsCalls.map(\.reference), [reference])
         XCTAssertEqual(api.postCommentCalls.map(\.token), ["token"])
@@ -963,16 +967,14 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         XCTAssertEqual(api.fetchOpenPRTokens, ["token"])
     }
 
-    func testMonitorFetchWithoutTokenFails() async {
+    func testMonitorLoadWithoutTokenFails() async {
         let api = FakeGitHubAPI()
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: nil))
+        let viewModel = PullRequestDetailViewModel(reference: reference, monitor: monitor)
 
-        do {
-            _ = try await monitor.fetchPullRequestDetail(reference)
-            XCTFail("Expected an error")
-        } catch {
-            XCTAssertTrue(error is MissingTokenError)
-        }
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.errorMessage, MissingTokenError().errorDescription)
         XCTAssertTrue(api.detailCalls.isEmpty)
     }
 

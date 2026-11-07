@@ -47,12 +47,13 @@ final class FakeGitHubAPI: GitHubAPIClient {
     private(set) var detailCalls: [(token: String, reference: PullRequestReference)] = []
     var detailHandler: ((PullRequestReference) async throws -> PullRequestDetailContent)?
     var changedFiles: [PullRequestFile] = []
+    var changedFilesHandler: ((String, String, String) async throws -> [PullRequestFile])?
     private(set) var changedFilesCalls: [(token: String, repoFullName: String, baseSHA: String, headSHA: String)] = []
     private(set) var setFileViewedCalls: [(token: String, pullRequestID: String, path: String, viewed: Bool)] = []
     var comments: PullRequestComments = .empty
     private(set) var commentsLimits: [PullRequestCommentLimits] = []
     private(set) var setResolvedCalls: [(token: String, threadID: String, resolved: Bool)] = []
-    var commentsHandler: ((PullRequestReference) async throws -> PullRequestComments)?
+    var commentsHandler: ((PullRequestReference, PullRequestCommentLimits) async throws -> PullRequestComments)?
     private(set) var commentsCalls: [(token: String, reference: PullRequestReference)] = []
     private(set) var postCommentCalls: [(token: String, reference: PullRequestReference, comment: NewPullRequestComment)] = []
     private(set) var editCalls: [(token: String, reference: PullRequestReference, title: String?, body: String?)] = []
@@ -149,6 +150,7 @@ final class FakeGitHubAPI: GitHubAPIClient {
     func fetchChangedFiles(token: String, repoFullName: String, baseSHA: String, headSHA: String) async throws -> [PullRequestFile] {
         if let error { throw error }
         changedFilesCalls.append((token, repoFullName, baseSHA, headSHA))
+        if let changedFilesHandler { return try await changedFilesHandler(repoFullName, baseSHA, headSHA) }
         return changedFiles
     }
 
@@ -162,7 +164,7 @@ final class FakeGitHubAPI: GitHubAPIClient {
         if let error { throw error }
         commentsCalls.append((token, reference))
         commentsLimits.append(limits)
-        if let commentsHandler { return try await commentsHandler(reference) }
+        if let commentsHandler { return try await commentsHandler(reference, limits) }
         return comments
     }
 

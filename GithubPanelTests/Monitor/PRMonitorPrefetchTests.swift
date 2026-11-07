@@ -137,6 +137,31 @@ final class PRMonitorPrefetchTests: XCTestCase {
         XCTAssertEqual(open.checks, checks)
     }
 
+    func testOpeningAPullRequestWhileItPreloadsJoinsThePreload() async {
+        let api = prefetchingAPI(rows: [row(number: 1, status: .success)])
+        let requested = expectation(description: "Detail requested")
+        let gate = AsyncGate()
+        api.detailHandler = { reference in
+            requested.fulfill()
+            await gate.wait()
+            return detailContent(for: reference, title: "Preloaded")
+        }
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+        await monitor.refreshNow()
+        await fulfillment(of: [requested], timeout: 5)
+
+        let viewModel = PullRequestDetailViewModel(reference: reference(1), monitor: monitor)
+        let opened = Task { await viewModel.load(maxAge: PullRequestDetailViewModel.openMaxAge) }
+        await gate.open()
+        await opened.value
+        await monitor.waitForPrefetch()
+
+        XCTAssertEqual(api.detailCalls.count, 1)
+        XCTAssertEqual(api.commentsCalls.count, 1)
+        XCTAssertEqual(viewModel.content?.detail.title, "Preloaded")
+        XCTAssertNil(viewModel.errorMessage)
+    }
+
     func testRefreshDuringPreloadQueuesNewRows() async {
         let api = prefetchingAPI(rows: [row(number: 1, status: .success)])
         let requested = expectation(description: "First detail request")
@@ -223,7 +248,7 @@ final class PRMonitorPrefetchTests: XCTestCase {
         let api = prefetchingAPI(rows: [row(number: 1, status: .success)])
         let commentsRequested = expectation(description: "Comments requested")
         let release = AsyncGate()
-        api.commentsHandler = { _ in
+        api.commentsHandler = { _, _ in
             commentsRequested.fulfill()
             await release.wait()
             return .empty

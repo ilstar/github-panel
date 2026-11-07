@@ -38,7 +38,7 @@ its own optimistic state, or doesn't.
   package next to KeyboardShortcuts and Sparkle. GRDB's `ValueObservation`
   is how views observe "the UI reads from the DB", and GRDB writes run off the
   main thread.
-- One database file in Application Support (`GithubPanel/Store.sqlite`), since
+- One database file in Application Support (`<bundle id>/Store.sqlite`), since
   later steps keep pending changes in it that must survive a restart. Mock mode
   and tests use an in-memory database.
 - Schema changes go through GRDB's `DatabaseMigrator`. If a migration fails,
@@ -65,14 +65,26 @@ The detail table keeps the current limit: the 100 most recently used PRs.
   `.comments(ref, limits)`, `.checks(ref)`, `.changedFiles(...)`, `.openList`,
   `.history(page)`, `.reviewRequests`.
 - **Dedupe**: a second request for a resource that's already in flight joins the
-  running one, and a higher priority raises it.
+  running one, and a higher priority raises it. A request with `maxAge` zero (a
+  refresh after a write, a reload) joins only a load that hasn't sent its request
+  yet. Otherwise it waits for the running one and loads again, so it never gets
+  data read before the write and the newer result is saved last.
 - **Priority**: `.userVisible` (the PR or list the user is looking at) runs before
   `.background` (timer refresh, prefetch). Background requests run a few at a
   time, so they never hold up a user request.
 - **Freshness**: `sync_state.fetchedAt` per resource. A request newer than a
   caller-given `maxAge` is skipped. Views can show how stale data is.
 - **Backoff**: the throttled/auth backoff moves here from `PRMonitor` and applies
-  to every request.
+  to every request. Until step 3 moves the lists, the engine backs off its own
+  requests (60 s, doubling to 30 min, reset by a success or a new token) and only
+  shares `isThrottlingError` with `PRMonitor`'s list backoff.
+- **Credentials**: the engine reads the token and a session ID from `PRMonitor`.
+  A result is saved only if the session still matches, checked on the main actor
+  in the same step as the save, so nothing loaded with an old token lands after
+  `removeAll`. A token change also cancels in-flight loads and clears `sync_state`.
+- **Freshness counts only what the cache holds**: `fetchedAt` within `maxAge`
+  skips a request only while the cache still has that resource, since it can be
+  evicted or emptied after the row was written.
 - Results go into `LocalStore` in one transaction per response. The engine never
   touches views or view models.
 
@@ -124,7 +136,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
        `needsRefresh`, `removeAll`, `updates`, `waitForRestore`, `saveNow`). Drop
        the old `PullRequestDetails.json` and the list keys in defaults. Don't
        import their contents; they're only caches. Callers don't change.
-2. [ ] **SyncEngine for PR details.** Add `SyncEngine` with dedupe, priority,
+2. [x] **SyncEngine for PR details.** Add `SyncEngine` with dedupe, priority,
        `sync_state` freshness, and backoff. Move detail, comments, checks, and
        changed-files fetches into it. `PullRequestDetailViewModel` observes the
        store and calls `engine.request(...)` instead of its fetch closures.
@@ -157,3 +169,10 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 - 2026-11-07: Step 1 done. GRDB 7.11.1 (exact pin); `LocalStore` in Application Support
   (`<bundle id>/Store.sqlite`) backs `PullRequestDetailCache` and the saved My PRs / To Review lists.
   `sync_state` is created but not written yet; step 2 fills it.
+- 2026-11-07: Step 2 done. `SyncEngine` (actor) loads detail, comments, checks, and changed files into
+  `PullRequestDetailCache` and records `sync_state`. `PullRequestDetailViewModel` asks it for data and shows
+  the cache's `updates`; `PRMonitor.prefetch` makes `.background` requests (3 at a time). Design changes:
+  `.changedFiles` takes the PR reference (to know where to save) instead of the repo; callers loading several
+  resources use `start` to register the detail first, so comments and checks wait for it rather than being
+  dropped; opening a PR passes a 30 s `maxAge`, so it joins or reuses a preload, while "Try Again" and
+  refreshes after writes pass zero (see Dedupe above).

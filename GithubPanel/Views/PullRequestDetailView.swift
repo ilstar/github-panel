@@ -133,7 +133,7 @@ struct PullRequestDetailView: View {
         .navigationTitle(navigationTitle)
         .focusedSceneValue(\.pullRequestDetail, actions)
         .task {
-            await viewModel.load()
+            await viewModel.load(maxAge: PullRequestDetailViewModel.openMaxAge)
         }
     }
 

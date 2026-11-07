@@ -1,17 +1,13 @@
 import Foundation
 import Combine
 
-/// Loads one pull request's detail and changed files for the detail window.
-/// Starts from the shared cache when it has the pull request, then reloads it in the background.
+/// Shows one pull request's detail and changed files for the detail window.
+/// Starts from the shared cache when it has the pull request, asks the sync engine to reload it,
+/// and shows what the engine saves to the cache.
 @MainActor
 final class PullRequestDetailViewModel: ObservableObject {
-    typealias Fetch = (PullRequestReference) async throws -> PullRequestDetailContent
-    /// The files changed between two commits in a repository: its full name, the older commit, and the newer one.
-    typealias FetchChangedFiles = (String, String, String) async throws -> [PullRequestFile]
     /// Marks or unmarks one file as viewed: the pull request's node ID, the file path, and the new state.
     typealias SetViewed = (String, String, Bool) async throws -> Void
-    /// The comments on a pull request, up to the given limits.
-    typealias FetchComments = (PullRequestReference, PullRequestCommentLimits) async throws -> PullRequestComments
     typealias PostComment = (NewPullRequestComment, PullRequestReference) async throws -> Void
     /// Resolves or unresolves one review thread: its node ID and the new state.
     typealias SetResolved = (String, Bool) async throws -> Void
@@ -28,7 +24,6 @@ final class PullRequestDetailViewModel: ObservableObject {
     typealias SubmitPendingReview = (String, PullRequestReviewEvent, String) async throws -> Void
     /// Discards the pending review with the given node ID.
     typealias DeletePendingReview = (String) async throws -> Void
-    typealias FetchChecks = (PullRequestReference) async throws -> PullRequestChecks
     /// Runs failed checks again in the given repository.
     typealias RerunChecks = (CheckRerun, String) async throws -> Void
     /// Users and teams the reviewer picker offers for a search.
@@ -76,10 +71,8 @@ final class PullRequestDetailViewModel: ObservableObject {
     @Published private(set) var filesSinceLastReview: [PullRequestFile]?
     @Published private(set) var isLoadingChangesSinceLastReview = false
 
-    private let fetch: Fetch
-    private let fetchChangedFiles: FetchChangedFiles
+    private let engine: SyncEngine
     private let syncViewed: SetViewed
-    private let fetchComments: FetchComments
     private let sendComment: PostComment
     private let sendResolved: SetResolved
     private let sendEdit: Edit
@@ -89,7 +82,6 @@ final class PullRequestDetailViewModel: ObservableObject {
     private let sendPendingComment: AddPendingComment
     private let sendSubmitPendingReview: SubmitPendingReview
     private let sendDeletePendingReview: DeletePendingReview
-    private let fetchChecks: FetchChecks
     private let sendRerun: RerunChecks
     private let fetchCandidates: FetchReviewerCandidates
     private let searchMentions: SearchMentionCandidates
@@ -98,7 +90,7 @@ final class PullRequestDetailViewModel: ObservableObject {
     private var startedReviewID: String?
     /// How much of the discussion loads. Reloads keep what the "more" buttons added.
     private var commentLimits = PullRequestCommentLimits()
-    private let cache: PullRequestDetailCache?
+    private let cache: PullRequestDetailCache
     private var cacheSubscription: AnyCancellable?
     private var isApplyingCacheUpdate = false
     /// The diff lines of each file changed since the last review, parsed the first time the file is shown.
@@ -121,11 +113,10 @@ final class PullRequestDetailViewModel: ObservableObject {
         let head: String
     }
 
+    /// Loads through `engine`, and shows what it saves to the engine's cache.
     init(reference: PullRequestReference,
-         fetch: @escaping Fetch,
-         fetchChangedFiles: @escaping FetchChangedFiles = { _, _, _ in [] },
+         engine: SyncEngine,
          setViewed: @escaping SetViewed = { _, _, _ in },
-         fetchComments: @escaping FetchComments = { _, _ in .empty },
          postComment: @escaping PostComment = { _, _ in },
          setResolved: @escaping SetResolved = { _, _ in },
          edit: @escaping Edit = { _, _, _ in },
@@ -135,17 +126,13 @@ final class PullRequestDetailViewModel: ObservableObject {
          addPendingComment: @escaping AddPendingComment = { _, _ in },
          submitPendingReview: @escaping SubmitPendingReview = { _, _, _ in },
          deletePendingReview: @escaping DeletePendingReview = { _ in },
-         fetchChecks: @escaping FetchChecks = { _ in .empty },
          rerunChecks: @escaping RerunChecks = { _, _ in },
          fetchReviewerCandidates: @escaping FetchReviewerCandidates = { _, _ in [] },
          setReviewRequested: @escaping SetReviewRequested = { _, _, _, _ in },
-         searchMentionCandidates: @escaping SearchMentionCandidates = { _, _ in [] },
-         cache: PullRequestDetailCache? = nil) {
+         searchMentionCandidates: @escaping SearchMentionCandidates = { _, _ in [] }) {
         self.reference = reference
-        self.fetch = fetch
-        self.fetchChangedFiles = fetchChangedFiles
+        self.engine = engine
         self.syncViewed = setViewed
-        self.fetchComments = fetchComments
         self.sendComment = postComment
         self.sendResolved = setResolved
         self.sendEdit = edit
@@ -155,13 +142,12 @@ final class PullRequestDetailViewModel: ObservableObject {
         self.sendPendingComment = addPendingComment
         self.sendSubmitPendingReview = submitPendingReview
         self.sendDeletePendingReview = deletePendingReview
-        self.fetchChecks = fetchChecks
         self.sendRerun = rerunChecks
         self.fetchCandidates = fetchReviewerCandidates
         self.sendReviewRequest = setReviewRequested
         self.searchMentions = searchMentionCandidates
-        self.cache = cache
-        if let cached = cache?.entry(for: reference) {
+        cache = engine.cache
+        if let cached = cache.entry(for: reference) {
             apply(cached.content)
             commentLimits = cached.commentLimits
             checks = cached.checks
@@ -172,7 +158,7 @@ final class PullRequestDetailViewModel: ObservableObject {
                 apply(comments)
             }
         }
-        cacheSubscription = cache?.updates.sink { [weak self] reference, entry in
+        cacheSubscription = cache.updates.sink { [weak self] reference, entry in
             guard let self, reference == self.reference, !self.isApplyingCacheUpdate else { return }
             self.isApplyingCacheUpdate = true
             defer { self.isApplyingCacheUpdate = false }
@@ -184,7 +170,8 @@ final class PullRequestDetailViewModel: ObservableObject {
                files != self.filesSinceLastReview {
                 self.setFilesSinceLastReview(files, range: range, files: entry.content.files)
             }
-            if self.fileScope == .sinceLastReview, self.filesSinceLastReview == nil {
+            // While loading, `load` compares the new commits itself once the detail is in.
+            if self.fileScope == .sinceLastReview, self.filesSinceLastReview == nil, !self.isLoading {
                 Task { [weak self] in await self?.loadChangesSinceLastReview() }
             }
         }
@@ -193,15 +180,9 @@ final class PullRequestDetailViewModel: ObservableObject {
     /// Talks to GitHub through the monitor, which holds the token.
     convenience init(reference: PullRequestReference, monitor: PRMonitor) {
         self.init(reference: reference,
-                  fetch: { [monitor] reference in try await monitor.fetchPullRequestDetail(reference) },
-                  fetchChangedFiles: { [monitor] repoFullName, baseSHA, headSHA in
-                      try await monitor.fetchChangedFiles(in: repoFullName, from: baseSHA, to: headSHA)
-                  },
+                  engine: monitor.syncEngine,
                   setViewed: { [monitor] pullRequestID, path, viewed in
                       try await monitor.setFileViewed(pullRequestID: pullRequestID, path: path, viewed: viewed)
-                  },
-                  fetchComments: { [monitor] reference, limits in
-                      try await monitor.fetchPullRequestComments(reference, limits: limits)
                   },
                   postComment: { [monitor] comment, reference in
                       try await monitor.postPullRequestComment(comment, on: reference)
@@ -230,7 +211,6 @@ final class PullRequestDetailViewModel: ObservableObject {
                   deletePendingReview: { [monitor] reviewID in
                       try await monitor.deletePendingReview(reviewID: reviewID)
                   },
-                  fetchChecks: { [monitor] reference in try await monitor.fetchPullRequestChecks(reference) },
                   rerunChecks: { [monitor] rerun, repoFullName in
                       try await monitor.rerunChecks(rerun, in: repoFullName)
                   },
@@ -242,20 +222,24 @@ final class PullRequestDetailViewModel: ObservableObject {
                   },
                   searchMentionCandidates: { [monitor] reference, query in
                       try await monitor.searchMentionCandidates(reference, query: query)
-                  },
-                  cache: monitor.detailCache)
+                  })
     }
 
-    func load() async {
+    /// How long a pull request loaded in the background still counts as fresh when its window opens.
+    static let openMaxAge: TimeInterval = 30
+
+    /// Reloads the pull request, skipping what loaded within `maxAge`. Reloads the user asks for pass zero.
+    func load(maxAge: TimeInterval = 0) async {
         guard !isLoading else { return }
         isLoading = true
         defer { isLoading = false }
         // The comments and checks load alongside the diff, which shows as soon as it arrives.
-        async let loadedComments = fetchComments(reference, commentLimits)
-        async let loadedChecks = fetchChecks(reference)
+        // The detail starts first, so the comments and checks can attach to it.
+        let detail = await engine.start(.detail(reference), maxAge: maxAge)
+        let loadedComments = await engine.start(.comments(reference, commentLimits), maxAge: maxAge)
+        let loadedChecks = await engine.start(.checks(reference), maxAge: maxAge)
         do {
-            apply(try await fetch(reference))
-            cacheContent()
+            try await detail.value
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -265,15 +249,12 @@ final class PullRequestDetailViewModel: ObservableObject {
             await loadChangesSinceLastReview()
         }
         do {
-            let comments = try await loadedComments
-            apply(comments)
-            cache?.store(comments, for: reference, limits: commentLimits)
+            try await loadedComments.value
         } catch {
             errorMessage = error.localizedDescription
         }
         do {
-            checks = try await loadedChecks
-            cacheChecks()
+            try await loadedChecks.value
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -313,16 +294,10 @@ final class PullRequestDetailViewModel: ObservableObject {
 
     private func reloadChecks() async {
         do {
-            checks = try await fetchChecks(reference)
-            cacheChecks()
+            try await engine.request(.checks(reference))
         } catch {
             errorMessage = error.localizedDescription
         }
-    }
-
-    private func cacheChecks() {
-        guard let checks, let headSHA = content?.detail.headSHA else { return }
-        cache?.store(checks, for: reference, headSHA: headSHA)
     }
 
     /// Shows loaded content. Skips identical content so a reload does not rebuild the diff.
@@ -374,10 +349,8 @@ final class PullRequestDetailViewModel: ObservableObject {
         isLoadingChangesSinceLastReview = true
         defer { isLoadingChangesSinceLastReview = false }
         do {
-            let changed = try await fetchChangedFiles(reference.repoFullName, range.base, range.head)
-            // A reload moved the head while this loaded; the next load compares the new one.
-            guard reviewRange == range else { return }
-            setFilesSinceLastReview(changed, range: range, files: content?.files ?? files)
+            // The changes show once the engine saves them, unless a reload moved the head meanwhile.
+            try await engine.request(.changedFiles(reference, base: range.base, head: range.head))
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -397,7 +370,7 @@ final class PullRequestDetailViewModel: ObservableObject {
         presentations = presentations.filter { $0.key.scope == .all }
         loadedReviewRange = range
         filesSinceLastReview = changed
-        cache?.storeChanges(changed, for: reference, baseSHA: range.base, headSHA: range.head)
+        cache.storeChanges(changed, for: reference, baseSHA: range.base, headSHA: range.head)
     }
 
     /// The parsed diff lines of a file in the shown scope.
@@ -413,7 +386,7 @@ final class PullRequestDetailViewModel: ObservableObject {
 
     /// Saves the shown content, with the current viewed marks, to the shared cache.
     private func cacheContent() {
-        guard let cache, let content else { return }
+        guard let content else { return }
         let files = content.files.map { file in
             var file = file
             file.isViewed = viewedFiles.contains(file.filename)
@@ -574,10 +547,7 @@ final class PullRequestDetailViewModel: ObservableObject {
             content = PullRequestDetailContent(detail: detail, files: current.files)
             cacheContent()
         }
-        if let fresh = try? await fetch(reference) {
-            apply(fresh)
-            cacheContent()
-        }
+        try? await engine.request(.detail(reference))
     }
 
     /// Merges the base branch into the pull request's branch, then reloads to show the new head commit.
@@ -649,9 +619,7 @@ final class PullRequestDetailViewModel: ObservableObject {
     }
 
     private func reloadComments() async throws {
-        let loaded = try await fetchComments(reference, commentLimits)
-        apply(loaded)
-        cache?.store(loaded, for: reference, limits: commentLimits)
+        try await engine.request(.comments(reference, commentLimits))
     }
 
     /// Loads the next older general comments, which show above the ones loaded.
@@ -669,10 +637,8 @@ final class PullRequestDetailViewModel: ObservableObject {
         isLoadingMoreComments = true
         defer { isLoadingMoreComments = false }
         do {
-            let loaded = try await fetchComments(reference, limits)
-            commentLimits = limits
-            apply(loaded)
-            cache?.store(loaded, for: reference, limits: commentLimits)
+            // The cache keeps the new limits with the comments, and reloads use them from then on.
+            try await engine.request(.comments(reference, limits))
         } catch {
             errorMessage = error.localizedDescription
         }
