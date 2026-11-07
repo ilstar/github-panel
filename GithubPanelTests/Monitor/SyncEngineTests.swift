@@ -590,31 +590,3 @@ final class SyncEngineTests: XCTestCase {
         PullRequestReference(repoFullName: "acme/widgets", number: number)
     }
 }
-
-private func XCTAssertThrowsAsync(_ expression: @autoclosure () async throws -> Void,
-                                  file: StaticString = #filePath, line: UInt = #line) async {
-    do {
-        try await expression()
-        XCTFail("Expected an error", file: file, line: line)
-    } catch {}
-}
-
-private final class TestClock: @unchecked Sendable {
-    var now = Date(timeIntervalSince1970: 0)
-}
-
-private actor Gate {
-    private var isOpen = false
-    private var waiters: [CheckedContinuation<Void, Never>] = []
-
-    func open() {
-        isOpen = true
-        waiters.forEach { $0.resume() }
-        waiters = []
-    }
-
-    func wait() async {
-        guard !isOpen else { return }
-        await withCheckedContinuation { waiters.append($0) }
-    }
-}

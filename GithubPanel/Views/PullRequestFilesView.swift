@@ -154,7 +154,7 @@ struct PullRequestFilesView: View {
         } else {
             collapsed.remove(filename)
         }
-        Task { await viewModel.setViewed(viewed, filename: filename) }
+        viewModel.setViewed(viewed, filename: filename)
     }
 
     // MARK: - Toolbar
@@ -643,8 +643,9 @@ struct PullRequestFilesView: View {
     private func threadView(_ thread: ReviewThread) -> some View {
         ReviewThreadView(thread: thread,
                          isReviewPending: viewModel.isReviewPending,
+                         resolveStatus: viewModel.status(of: .threadResolved(threadID: thread.id)),
                          onReply: { body in try await viewModel.reply(body, to: thread) },
-                         onSetResolved: { resolved in try await viewModel.setResolved(resolved, thread: thread) })
+                         onSetResolved: { resolved in viewModel.setResolved(resolved, thread: thread) })
     }
 
     static func composerPlaceholder(_ anchor: DiffCommentAnchor) -> String {
@@ -662,6 +663,7 @@ struct PullRequestFilesView: View {
                                      isViewed: isViewed,
                                      isChangedSinceViewed: !isViewed && changedSinceViewed.contains(file.filename),
                                      commentCount: isShowingChangesSinceLastReview ? 0 : viewModel.threadIndex(for: file.filename).threads.count,
+                                     viewedStatus: viewModel.status(of: .fileViewed(path: file.filename)),
                                      onToggle: {
                                          if isCollapsed {
                                              collapsed.remove(file.filename)
@@ -692,12 +694,30 @@ struct PullRequestFileHeader: View {
     let isViewed: Bool
     var isChangedSinceViewed = false
     var commentCount = 0
+    /// A viewed mark GitHub hasn't confirmed. A failed one shows under the header.
+    var viewedStatus: ChangeStatus?
     let onToggle: () -> Void
     let onSetViewed: (Bool) -> Void
 
     @State private var didCopy = false
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            row
+            if let failure = viewedStatus?.failure {
+                FailedChangeNotice(message: "Couldn't mark as \(isViewed ? "viewed" : "not viewed"): \(failure)",
+                                   onRetry: viewedStatus?.retry ?? {}, onDiscard: viewedStatus?.discard ?? {})
+            }
+        }
+        .font(.callout.monospacedDigit())
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.secondary.opacity(0.06))
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onToggle)
+    }
+
+    private var row: some View {
         HStack(spacing: 8) {
             Button(action: onToggle) {
                 Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
@@ -760,12 +780,6 @@ struct PullRequestFileHeader: View {
                 .toggleStyle(.checkbox)
                 .padding(.leading, 4)
         }
-        .font(.callout.monospacedDigit())
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Color.secondary.opacity(0.06))
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onToggle)
     }
 
     static func displayName(_ file: PullRequestFile) -> String {

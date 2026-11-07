@@ -51,6 +51,11 @@ struct PullRequestReviewersView: View {
                 }
             }
 
+            ForEach(actions?.failures ?? []) { failure in
+                FailedChangeNotice(message: failure.message, onRetry: failure.status.retry,
+                                   onDiscard: failure.status.discard)
+            }
+
             if !reviewers.reviewers.isEmpty || reviewers.decision != nil {
                 verdict
                     .padding(.top, 2)
@@ -179,8 +184,16 @@ struct PullRequestReviewerRow: View {
 
 /// What the reviewer picker needs from the detail window.
 struct ReviewerRequestActions {
+    /// A request GitHub refused. It stays shown in the list until it is retried or discarded.
+    struct Failure: Identifiable {
+        let id: UUID
+        let status: ChangeStatus
+        let message: String
+    }
+
     /// Reviewers whose request is being added or removed, by `PullRequestReviewer.id`.
     var inFlight: Set<String> = []
+    var failures: [Failure] = []
     let loadCandidates: (String) async throws -> [ReviewerCandidate]
     /// Requests a review from a user or team, or removes their request.
     let setRequested: (String, PullRequestReviewer.Kind, Bool) -> Void

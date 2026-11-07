@@ -3,7 +3,8 @@ import Combine
 
 /// Pull request content loaded so far, so a pull request shows right away when it is opened again
 /// or after a refresh loaded it in the background. Keeps the most recently used entries.
-/// With a store, the entries are saved there and restored when the app starts again.
+/// Also holds the changes the user made that GitHub hasn't confirmed, which show on top of the entries.
+/// With a store, the entries and changes are saved there and restored when the app starts again.
 @MainActor
 final class PullRequestDetailCache {
     struct Entry: Equatable, Codable {
@@ -15,6 +16,7 @@ final class PullRequestDetailCache {
         var filesSinceLastReview: [PullRequestFile]?
     }
 
+    /// The shown entry, with its pending changes applied, each time it or its changes change.
     let updates = PassthroughSubject<(PullRequestReference, Entry), Never>()
 
     let capacity: Int
@@ -24,6 +26,9 @@ final class PullRequestDetailCache {
     /// When each entry was last used, saved with it so the order survives a restart.
     private var lastUsedAt: [PullRequestReference: Date] = [:]
     private var lastUseTime = Date.distantPast
+    /// Changes GitHub hasn't confirmed, oldest first.
+    private var pending: [PendingChange] = []
+    private var lastChangeTime = Date.distantPast
 
     private let store: LocalStore?
     private let saveDelay: TimeInterval
@@ -47,10 +52,17 @@ final class PullRequestDetailCache {
 
     var count: Int { entries.count }
 
+    /// The pull request as GitHub last returned it.
     func entry(for reference: PullRequestReference) -> Entry? {
         guard let entry = entries[reference] else { return nil }
         touch(reference)
         return entry
+    }
+
+    /// The pull request as the detail view shows it: as GitHub last returned it, with its pending and failed
+    /// changes applied in order.
+    func shownEntry(for reference: PullRequestReference) -> Entry? {
+        entry(for: reference).map { PendingChange.apply(pendingChanges(for: reference), to: $0) }
     }
 
     /// Stores a pull request's detail and files, keeping any comments already cached for it.
@@ -114,6 +126,7 @@ final class PullRequestDetailCache {
     }
 
     /// Empties the cache and deletes its saved entries, such as when the account changes.
+    /// Pending changes go too: they were made as the old account, so they aren't sent with a new token.
     func removeAll() {
         entries = [:]
         order = []
@@ -121,14 +134,117 @@ final class PullRequestDetailCache {
         changed = []
         used = []
         removed = []
+        pending = []
         generation += 1
         loadTask?.cancel()
         loadTask = nil
         saveTask?.cancel()
         saveTask = nil
         if let store {
-            enqueueWrite { await store.removeAllPullRequestDetails() }
+            enqueueWrite {
+                await store.removeAllPullRequestDetails()
+                await store.removeAllPendingChanges()
+            }
         }
+    }
+
+    // MARK: - Pending changes
+
+    func pendingChanges(for reference: PullRequestReference) -> [PendingChange] {
+        pending.filter { $0.reference == reference }
+    }
+
+    /// Pull requests with changes waiting to be sent.
+    var referencesWithChangesToSend: [PullRequestReference] {
+        var references: [PullRequestReference] = []
+        for change in pending where change.state == .pending && !references.contains(change.reference) {
+            references.append(change.reference)
+        }
+        return references
+    }
+
+    /// The pull request's oldest change waiting to be sent. Failed ones wait for Retry.
+    func nextChangeToSend(for reference: PullRequestReference) -> PendingChange? {
+        pending.first { $0.reference == reference && $0.state == .pending }
+    }
+
+    /// Adds a change, which shows right away. It replaces an earlier change to the same field that hasn't started
+    /// sending, or that failed, since this one sets the field again.
+    @discardableResult
+    func add(_ kind: PendingChange.Kind, to reference: PullRequestReference) -> PendingChange {
+        // Always later than the last change, so changes made in the same instant still send in order.
+        lastChangeTime = max(Date(), lastChangeTime.addingTimeInterval(0.000_001))
+        let change = PendingChange(reference: reference, kind: kind, createdAt: lastChangeTime)
+        let replaced = pending.filter {
+            $0.reference == reference && $0.kind.field == kind.field && $0.state != .sending
+        }.map(\.id)
+        pending.removeAll { replaced.contains($0.id) }
+        pending.append(change)
+        publishShown(reference)
+        savePending([change], removing: replaced)
+        return change
+    }
+
+    func markSending(_ id: UUID) {
+        update(id) { $0.state = .sending }
+    }
+
+    /// Puts a failed change back in line, for Retry.
+    func markPending(_ id: UUID) {
+        update(id) {
+            $0.state = .pending
+            $0.error = nil
+        }
+    }
+
+    func markFailed(_ id: UUID, error: String) {
+        update(id) {
+            $0.state = .failed
+            $0.error = error
+        }
+    }
+
+    /// Drops a change, so the pull request shows as GitHub last returned it.
+    func discard(_ id: UUID) {
+        guard let index = pending.firstIndex(where: { $0.id == id }) else { return }
+        let change = pending.remove(at: index)
+        publishShown(change.reference)
+        savePending([], removing: [id])
+    }
+
+    /// Drops a change GitHub accepted. The entry was refreshed after it, or, when that failed, gets the change
+    /// applied, so it keeps showing until the next load. Saves the entry and deletes the change in one transaction.
+    func confirm(_ id: UUID, applyingToEntry: Bool) {
+        guard let index = pending.firstIndex(where: { $0.id == id }) else { return }
+        let change = pending.remove(at: index)
+        let reference = change.reference
+        if applyingToEntry, let entry = entries[reference] {
+            entries[reference] = PendingChange.apply(change, to: entry)
+            changed.insert(reference)
+            removed.remove(reference)
+        }
+        publishShown(reference)
+        saveTask?.cancel()
+        saveTask = nil
+        writeSnapshot(confirming: [id])
+    }
+
+    private func update(_ id: UUID, _ change: (inout PendingChange) -> Void) {
+        guard let index = pending.firstIndex(where: { $0.id == id }) else { return }
+        change(&pending[index])
+        publishShown(pending[index].reference)
+        savePending([pending[index]])
+    }
+
+    /// Changes are saved right away rather than after the save delay, so they survive the app quitting.
+    private func savePending(_ changes: [PendingChange], removing removed: [UUID] = []) {
+        guard let store else { return }
+        enqueueWrite { await store.savePendingChanges(changes, removing: removed) }
+    }
+
+    private func publishShown(_ reference: PullRequestReference) {
+        guard let entry = entries[reference] else { return }
+        updates.send((reference, PendingChange.apply(pendingChanges(for: reference), to: entry)))
     }
 
     /// Waits for the saved entries to load. Used by tests.
@@ -140,17 +256,29 @@ final class PullRequestDetailCache {
     func saveNow() async {
         saveTask?.cancel()
         saveTask = nil
-        await writeSnapshot()
+        await writeSnapshot()?.value
     }
 
-    /// Loads the saved entries off the main thread. Entries stored meanwhile are newer, so they win.
+    /// Loads the saved entries and changes off the main thread. Entries stored meanwhile are newer, so they win.
     private func restoreFromStore() {
         guard let store else { return }
         let generation = generation
         loadTask = Task { [weak self] in
+            let changes = await store.pendingChanges()
             let saved = await store.pullRequestDetails()
             guard let self, !Task.isCancelled, generation == self.generation else { return }
+            self.restore(changes)
             self.restore(saved)
+        }
+    }
+
+    private func restore(_ changes: [PendingChange]) {
+        let ids = Set(pending.map(\.id))
+        // Changes saved by the last run were made before any this run.
+        pending = changes.filter { !ids.contains($0.id) } + pending
+        lastChangeTime = max(lastChangeTime, changes.last?.createdAt ?? .distantPast)
+        for reference in Set(changes.map(\.reference)) {
+            publishShown(reference)
         }
     }
 
@@ -171,7 +299,7 @@ final class PullRequestDetailCache {
     }
 
     private func publish(_ reference: PullRequestReference, save: Bool = true) {
-        if let entry = entries[reference] { updates.send((reference, entry)) }
+        publishShown(reference)
         if save {
             changed.insert(reference)
             removed.remove(reference)
@@ -187,13 +315,15 @@ final class PullRequestDetailCache {
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             guard !Task.isCancelled, let self else { return }
             self.saveTask = nil
-            await self.writeSnapshot()
+            await self.writeSnapshot()?.value
         }
     }
 
-    private func writeSnapshot() async {
-        guard let store else { return }
-        var changes = LocalStore.PullRequestDetailChanges(removed: Array(removed))
+    /// Queues a write of what changed since the last one, deleting the `confirmed` pending changes with it.
+    @discardableResult
+    private func writeSnapshot(confirming confirmed: [UUID] = []) -> Task<Void, Never>? {
+        guard let store else { return nil }
+        var changes = LocalStore.PullRequestDetailChanges(removed: Array(removed), confirmed: confirmed)
         for reference in changed {
             guard let entry = entries[reference], let lastUsedAt = lastUsedAt[reference] else { continue }
             changes.saved.append(LocalStore.SavedPullRequestDetail(entry: entry, lastUsedAt: lastUsedAt))
@@ -204,7 +334,7 @@ final class PullRequestDetailCache {
         changed = []
         used = []
         removed = []
-        await enqueueWrite { await store.savePullRequestDetails(changes) }.value
+        return enqueueWrite { await store.savePullRequestDetails(changes) }
     }
 
     @discardableResult

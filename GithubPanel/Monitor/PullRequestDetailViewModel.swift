@@ -3,16 +3,11 @@ import Combine
 
 /// Shows one pull request's detail and changed files for the detail window.
 /// Starts from the shared cache when it has the pull request, asks the sync engine to reload it,
-/// and shows what the engine saves to the cache.
+/// and shows what the engine saves to the cache. Edits, viewed marks, resolved threads and review requests
+/// are pending changes: they show right away, and the engine sends them.
 @MainActor
 final class PullRequestDetailViewModel: ObservableObject {
-    /// Marks or unmarks one file as viewed: the pull request's node ID, the file path, and the new state.
-    typealias SetViewed = (String, String, Bool) async throws -> Void
     typealias PostComment = (NewPullRequestComment, PullRequestReference) async throws -> Void
-    /// Resolves or unresolves one review thread: its node ID and the new state.
-    typealias SetResolved = (String, Bool) async throws -> Void
-    /// Saves a new title, description, or both. Nil leaves that field as it is on GitHub.
-    typealias Edit = (PullRequestReference, String?, String?) async throws -> Void
     typealias SubmitReview = (NewPullRequestReview, PullRequestReference) async throws -> Void
     /// Merges the base branch into the head branch: the pull request's node ID and the head commit it expects.
     typealias UpdateBranch = (String, String) async throws -> Void
@@ -30,8 +25,6 @@ final class PullRequestDetailViewModel: ObservableObject {
     typealias FetchReviewerCandidates = (PullRequestReference, String) async throws -> [ReviewerCandidate]
     /// GitHub users the @mention menu offers for what was typed after the "@".
     typealias SearchMentionCandidates = (PullRequestReference, String) async throws -> [MentionCandidate]
-    /// Requests a review from a user or team, or removes the request: its name, kind, and whether it is requested.
-    typealias SetReviewRequested = (PullRequestReference, String, PullRequestReviewer.Kind, Bool) async throws -> Void
 
     /// Which changes the Files tab shows.
     enum FileScope: Equatable {
@@ -64,18 +57,15 @@ final class PullRequestDetailViewModel: ObservableObject {
     @Published private(set) var checks: PullRequestChecks?
     /// Reruns GitHub has not answered yet, so their buttons cannot be pressed twice.
     @Published private(set) var rerunsInFlight: Set<CheckRerun> = []
-    /// Reviewers whose request is being added or removed, by `PullRequestReviewer.id`.
-    @Published private(set) var reviewRequestsInFlight: Set<String> = []
+    /// This pull request's changes GitHub hasn't confirmed, oldest first. `content` and `comments` show them already.
+    @Published private(set) var pendingChanges: [PendingChange] = []
     @Published private(set) var fileScope = FileScope.all
     /// The files changed since the viewer's last review. Nil until they load for the current head commit.
     @Published private(set) var filesSinceLastReview: [PullRequestFile]?
     @Published private(set) var isLoadingChangesSinceLastReview = false
 
     private let engine: SyncEngine
-    private let syncViewed: SetViewed
     private let sendComment: PostComment
-    private let sendResolved: SetResolved
-    private let sendEdit: Edit
     private let sendReview: SubmitReview
     private let sendUpdateBranch: UpdateBranch
     private let sendStartPendingReview: StartPendingReview
@@ -85,7 +75,6 @@ final class PullRequestDetailViewModel: ObservableObject {
     private let sendRerun: RerunChecks
     private let fetchCandidates: FetchReviewerCandidates
     private let searchMentions: SearchMentionCandidates
-    private let sendReviewRequest: SetReviewRequested
     /// The pending review started here, until the comments reload with it. Keeps a failed reload from starting a second one.
     private var startedReviewID: String?
     /// How much of the discussion loads. Reloads keep what the "more" buttons added.
@@ -99,8 +88,8 @@ final class PullRequestDetailViewModel: ObservableObject {
     private var loadedReviewRange: CommitRange?
     /// Presentations built so far, keyed by filename, scope, and whether whitespace changes are hidden.
     private var presentations: [PresentationKey: DiffPresentation] = [:]
-    /// The last task box save, so quick clicks reach GitHub in order and the last one wins.
-    private var taskSave: Task<Void, Error>?
+    /// The last request for the engine to send this pull request's changes.
+    private var sendTask: Task<Void, Never>?
 
     private struct PresentationKey: Hashable {
         let filename: String
@@ -116,10 +105,7 @@ final class PullRequestDetailViewModel: ObservableObject {
     /// Loads through `engine`, and shows what it saves to the engine's cache.
     init(reference: PullRequestReference,
          engine: SyncEngine,
-         setViewed: @escaping SetViewed = { _, _, _ in },
          postComment: @escaping PostComment = { _, _ in },
-         setResolved: @escaping SetResolved = { _, _ in },
-         edit: @escaping Edit = { _, _, _ in },
          submitReview: @escaping SubmitReview = { _, _ in },
          updateBranch: @escaping UpdateBranch = { _, _ in },
          startPendingReview: @escaping StartPendingReview = { _, _ in "" },
@@ -128,14 +114,10 @@ final class PullRequestDetailViewModel: ObservableObject {
          deletePendingReview: @escaping DeletePendingReview = { _ in },
          rerunChecks: @escaping RerunChecks = { _, _ in },
          fetchReviewerCandidates: @escaping FetchReviewerCandidates = { _, _ in [] },
-         setReviewRequested: @escaping SetReviewRequested = { _, _, _, _ in },
          searchMentionCandidates: @escaping SearchMentionCandidates = { _, _ in [] }) {
         self.reference = reference
         self.engine = engine
-        self.syncViewed = setViewed
         self.sendComment = postComment
-        self.sendResolved = setResolved
-        self.sendEdit = edit
         self.sendReview = submitReview
         self.sendUpdateBranch = updateBranch
         self.sendStartPendingReview = startPendingReview
@@ -144,10 +126,10 @@ final class PullRequestDetailViewModel: ObservableObject {
         self.sendDeletePendingReview = deletePendingReview
         self.sendRerun = rerunChecks
         self.fetchCandidates = fetchReviewerCandidates
-        self.sendReviewRequest = setReviewRequested
         self.searchMentions = searchMentionCandidates
         cache = engine.cache
-        if let cached = cache.entry(for: reference) {
+        pendingChanges = cache.pendingChanges(for: reference)
+        if let cached = cache.shownEntry(for: reference) {
             apply(cached.content)
             commentLimits = cached.commentLimits
             checks = cached.checks
@@ -162,6 +144,8 @@ final class PullRequestDetailViewModel: ObservableObject {
             guard let self, reference == self.reference, !self.isApplyingCacheUpdate else { return }
             self.isApplyingCacheUpdate = true
             defer { self.isApplyingCacheUpdate = false }
+            let pendingChanges = self.cache.pendingChanges(for: reference)
+            if pendingChanges != self.pendingChanges { self.pendingChanges = pendingChanges }
             self.apply(entry.content)
             self.commentLimits = entry.commentLimits
             if let comments = entry.comments, comments != self.comments { self.apply(comments) }
@@ -181,17 +165,8 @@ final class PullRequestDetailViewModel: ObservableObject {
     convenience init(reference: PullRequestReference, monitor: PRMonitor) {
         self.init(reference: reference,
                   engine: monitor.syncEngine,
-                  setViewed: { [monitor] pullRequestID, path, viewed in
-                      try await monitor.setFileViewed(pullRequestID: pullRequestID, path: path, viewed: viewed)
-                  },
                   postComment: { [monitor] comment, reference in
                       try await monitor.postPullRequestComment(comment, on: reference)
-                  },
-                  setResolved: { [monitor] threadID, resolved in
-                      try await monitor.setReviewThreadResolved(threadID: threadID, resolved: resolved)
-                  },
-                  edit: { [monitor] reference, title, body in
-                      try await monitor.editPullRequest(reference, title: title, body: body)
                   },
                   submitReview: { [monitor] review, reference in
                       try await monitor.submitReview(review, on: reference)
@@ -216,9 +191,6 @@ final class PullRequestDetailViewModel: ObservableObject {
                   },
                   fetchReviewerCandidates: { [monitor] reference, query in
                       try await monitor.fetchReviewerCandidates(reference, query: query)
-                  },
-                  setReviewRequested: { [monitor] reference, name, kind, requested in
-                      try await monitor.setReviewRequested(name, kind: kind, requested: requested, on: reference)
                   },
                   searchMentionCandidates: { [monitor] reference, query in
                       try await monitor.searchMentionCandidates(reference, query: query)
@@ -384,17 +356,6 @@ final class PullRequestDetailViewModel: ObservableObject {
         startedReviewID = nil
     }
 
-    /// Saves the shown content, with the current viewed marks, to the shared cache.
-    private func cacheContent() {
-        guard let content else { return }
-        let files = content.files.map { file in
-            var file = file
-            file.isViewed = viewedFiles.contains(file.filename)
-            return file
-        }
-        cache.store(PullRequestDetailContent(detail: content.detail, files: files))
-    }
-
     /// Posts a comment, then reloads the comments so it shows with GitHub's IDs.
     /// Throws when GitHub refuses the comment, so the composer can keep the draft.
     func post(_ comment: NewPullRequestComment) async throws {
@@ -407,47 +368,54 @@ final class PullRequestDetailViewModel: ObservableObject {
         }
     }
 
-    /// Saves a new title, description, or both and shows them right away. A blank title is ignored, since GitHub requires one.
-    /// Throws when GitHub refuses the edit, so the editor can keep the draft.
-    func edit(title: String? = nil, body: String? = nil) async throws {
+    /// Saves a new title, description, or both, which show right away. A blank title is ignored, since GitHub
+    /// requires one. If GitHub refuses, the edit stays shown as failed, with Retry and Discard.
+    func edit(title: String? = nil, body: String? = nil) {
         let title = title?.trimmingCharacters(in: .whitespacesAndNewlines)
         guard content?.detail.canEdit == true, title != nil || body != nil, title?.isEmpty != true else { return }
-        try await sendEdit(reference, title, body)
-        guard let current = content else { return }
-        var detail = current.detail
-        detail.title = title ?? detail.title
-        detail.body = body ?? detail.body
-        content = PullRequestDetailContent(detail: detail, files: current.files)
-        cacheContent()
+        if let title { cache.add(.title(title), to: reference) }
+        if let body { cache.add(.body(body), to: reference) }
+        sendPendingChanges()
     }
 
     /// Checks or unchecks a task item in the description, like clicking its box on GitHub.
-    /// Shows the change right away and puts the old description back if GitHub refuses it.
-    func setTask(_ index: Int, checked: Bool) async {
+    /// Saves the whole description with the box changed, so quick clicks each build on the last and the last one wins.
+    func setTask(_ index: Int, checked: Bool) {
         guard let old = content?.detail.body, content?.detail.canEdit == true,
               let body = MarkdownBlocks.settingTask(index, checked: checked, in: old), body != old else { return }
-        setBody(body)
-        let previous = taskSave
-        let save = Task { [sendEdit, reference] in
-            _ = await previous?.result
-            try await sendEdit(reference, nil, body)
-        }
-        taskSave = save
-        do {
-            try await save.value
-        } catch {
-            // A later click already changed the description again; leave that one showing.
-            if content?.detail.body == body { setBody(old) }
-            errorMessage = error.localizedDescription
+        cache.add(.body(body), to: reference)
+        sendPendingChanges()
+    }
+
+    /// The newest change to `field` GitHub hasn't confirmed, to show it saving or failed.
+    func change(to field: PendingChange.Field) -> PendingChange? {
+        pendingChanges.last { $0.kind.field == field }
+    }
+
+    /// Sends a failed change again.
+    func retry(_ change: PendingChange) {
+        cache.markPending(change.id)
+        sendPendingChanges()
+    }
+
+    /// Drops a change, putting back what GitHub last returned.
+    func discard(_ change: PendingChange) {
+        cache.discard(change.id)
+    }
+
+    /// Changes show as soon as they're added, so the engine starts sending them afterwards.
+    private func sendPendingChanges() {
+        let previous = sendTask
+        sendTask = Task { [engine, reference] in
+            await previous?.value
+            await engine.sendPendingChanges(for: reference)
         }
     }
 
-    private func setBody(_ body: String) {
-        guard let current = content else { return }
-        var detail = current.detail
-        detail.body = body
-        content = PullRequestDetailContent(detail: detail, files: current.files)
-        cacheContent()
+    /// Waits until this view's changes are sent. Used by tests.
+    func waitForPendingChanges() async {
+        await sendTask?.value
+        await engine.waitForPendingChanges()
     }
 
     /// Whether the viewer may approve or request changes. GitHub does not let authors review their own pull request.
@@ -528,26 +496,27 @@ final class PullRequestDetailViewModel: ObservableObject {
     }
 
     /// Requests a review from a user or team, or removes their request, like toggling them in GitHub's reviewer picker.
-    /// Shows the change once GitHub accepts it, then reloads the detail for GitHub's own view of the reviewers.
-    func setReviewRequested(_ name: String, kind: PullRequestReviewer.Kind, requested: Bool) async {
-        let id = PullRequestReviewer.id(name: name, kind: kind)
-        guard content?.detail.canRequestReviewers == true, !reviewRequestsInFlight.contains(id) else { return }
-        reviewRequestsInFlight.insert(id)
-        defer { reviewRequestsInFlight.remove(id) }
-        do {
-            try await sendReviewRequest(reference, name, kind, requested)
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-            return
+    /// Shows the change right away; once GitHub accepts it, the detail reloads for GitHub's own view of the reviewers.
+    func setReviewRequested(_ name: String, kind: PullRequestReviewer.Kind, requested: Bool) {
+        guard content?.detail.canRequestReviewers == true else { return }
+        cache.add(.reviewRequested(name: name, kind: kind, requested: requested), to: reference)
+        sendPendingChanges()
+    }
+
+    /// Reviewers whose request is being added or removed, by `PullRequestReviewer.id`.
+    var reviewRequestsInFlight: Set<String> {
+        Set(pendingChanges.compactMap { change in
+            guard change.state != .failed, case .reviewRequested(let id) = change.kind.field else { return nil }
+            return id
+        })
+    }
+
+    /// Review requests GitHub refused, oldest first.
+    var failedReviewRequests: [PendingChange] {
+        pendingChanges.filter { change in
+            guard change.state == .failed, case .reviewRequested = change.kind else { return false }
+            return true
         }
-        if let current = content {
-            var detail = current.detail
-            detail.reviewers = detail.reviewers.settingRequest(name: name, kind: kind, requested: requested)
-            content = PullRequestDetailContent(detail: detail, files: current.files)
-            cacheContent()
-        }
-        try? await engine.request(.detail(reference))
     }
 
     /// Merges the base branch into the pull request's branch, then reloads to show the new head commit.
@@ -567,12 +536,12 @@ final class PullRequestDetailViewModel: ObservableObject {
         await load()
     }
 
+    /// Updates the cached copy from GitHub, so pending changes stay on top of it rather than saved into it.
     private func setCanUpdateBranch(_ canUpdateBranch: Bool) {
-        guard let current = content else { return }
+        guard let current = cache.entry(for: reference)?.content else { return }
         var detail = current.detail
         detail.canUpdateBranch = canUpdateBranch
-        content = PullRequestDetailContent(detail: detail, files: current.files)
-        cacheContent()
+        cache.store(PullRequestDetailContent(detail: detail, files: current.files))
     }
 
     /// Whether new comments on the diff join the pending review instead of posting right away, like on GitHub once a review is started.
@@ -601,17 +570,12 @@ final class PullRequestDetailViewModel: ObservableObject {
         try await post(.reply(body: body, commentID: first.databaseID))
     }
 
-    /// Resolves or unresolves a review thread, then reloads the comments so it shows GitHub's state.
-    /// Throws when GitHub refuses, so the thread can show the error.
-    func setResolved(_ resolved: Bool, thread: ReviewThread) async throws {
-        guard thread.isResolved != resolved else { return }
-        try await sendResolved(thread.id, resolved)
-        do {
-            try await reloadComments()
-        } catch {
-            // The thread changed; only the refresh failed.
-            errorMessage = error.localizedDescription
-        }
+    /// Resolves or unresolves a review thread, which shows right away. Once GitHub accepts it, the comments reload.
+    func setResolved(_ resolved: Bool, thread: ReviewThread) {
+        let current = comments?.threads.first { $0.id == thread.id } ?? thread
+        guard current.isResolved != resolved else { return }
+        cache.add(.threadResolved(threadID: thread.id, resolved: resolved), to: reference)
+        sendPendingChanges()
     }
 
     func threadIndex(for filename: String) -> ReviewThreadIndex {
@@ -654,24 +618,10 @@ final class PullRequestDetailViewModel: ObservableObject {
         return presentation
     }
 
-    /// Updates the viewed mark right away and syncs it to GitHub, restoring it if GitHub refuses.
-    func setViewed(_ viewed: Bool, filename: String) async {
+    /// Updates the viewed mark right away and syncs it to GitHub. If GitHub refuses, the mark stays shown as failed.
+    func setViewed(_ viewed: Bool, filename: String) {
         guard let pullRequestID = content?.detail.nodeID, viewedFiles.contains(filename) != viewed else { return }
-        update(filename, viewed: viewed)
-        do {
-            try await syncViewed(pullRequestID, filename, viewed)
-        } catch {
-            update(filename, viewed: !viewed)
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func update(_ filename: String, viewed: Bool) {
-        if viewed {
-            viewedFiles.insert(filename)
-        } else {
-            viewedFiles.remove(filename)
-        }
-        cacheContent()
+        cache.add(.fileViewed(pullRequestID: pullRequestID, path: filename, viewed: viewed), to: reference)
+        sendPendingChanges()
     }
 }

@@ -54,25 +54,34 @@ final class PullRequestDetailViewModelTests: XCTestCase {
 
     func testSetViewedUpdatesRightAwayAndSyncs() async {
         var calls: [(String, String, Bool)] = []
+        var viewed: Set<String> = []
         let viewModel = PullRequestDetailViewModel(reference: reference,
-                                                   fetch: { [self] _ in detailContent(title: "Viewed", files: [file("a.swift")]) },
-                                                   setViewed: { id, path, viewed in calls.append((id, path, viewed)) })
+                                                   fetch: { [self] _ in
+                                                       detailContent(title: "Viewed", files: [file("a.swift", isViewed: viewed.contains("a.swift"))])
+                                                   },
+                                                   setViewed: { id, path, isViewed in
+                                                       calls.append((id, path, isViewed))
+                                                       if isViewed { viewed.insert(path) } else { viewed.remove(path) }
+                                                   })
         await viewModel.load()
 
-        await viewModel.setViewed(true, filename: "a.swift")
-        XCTAssertEqual(viewModel.viewedFiles, ["a.swift"])
+        viewModel.setViewed(true, filename: "a.swift")
+        XCTAssertEqual(viewModel.viewedFiles, ["a.swift"], "Shows before GitHub answers")
+        await viewModel.waitForPendingChanges()
 
-        await viewModel.setViewed(true, filename: "a.swift")
-        await viewModel.setViewed(false, filename: "a.swift")
+        viewModel.setViewed(true, filename: "a.swift")
+        viewModel.setViewed(false, filename: "a.swift")
+        await viewModel.waitForPendingChanges()
 
         XCTAssertEqual(viewModel.viewedFiles, [])
         XCTAssertEqual(calls.map(\.0), ["PR_node", "PR_node"])
         XCTAssertEqual(calls.map(\.1), ["a.swift", "a.swift"])
         XCTAssertEqual(calls.map(\.2), [true, false])
         XCTAssertNil(viewModel.errorMessage)
+        XCTAssertTrue(viewModel.pendingChanges.isEmpty)
     }
 
-    func testFailedSetViewedRestoresMarkAndShowsError() async {
+    func testFailedSetViewedStaysShownWithItsErrorUntilDiscarded() async throws {
         let viewModel = PullRequestDetailViewModel(reference: reference,
                                                    fetch: { [self] _ in detailContent(title: "Viewed", files: [file("a.swift")]) },
                                                    setViewed: { _, _, _ in
@@ -80,10 +89,19 @@ final class PullRequestDetailViewModelTests: XCTestCase {
                                                    })
         await viewModel.load()
 
-        await viewModel.setViewed(true, filename: "a.swift")
+        viewModel.setViewed(true, filename: "a.swift")
+        await viewModel.waitForPendingChanges()
+
+        XCTAssertEqual(viewModel.viewedFiles, ["a.swift"])
+        let failed = try XCTUnwrap(viewModel.change(to: .fileViewed(path: "a.swift")))
+        XCTAssertEqual(failed.state, .failed)
+        XCTAssertEqual(failed.error, "Resource not accessible")
+        XCTAssertNil(viewModel.errorMessage, "The error shows by the file, not over the pull request")
+
+        viewModel.discard(failed)
 
         XCTAssertEqual(viewModel.viewedFiles, [])
-        XCTAssertEqual(viewModel.errorMessage, "Resource not accessible")
+        XCTAssertTrue(viewModel.pendingChanges.isEmpty)
     }
 
     func testSetViewedBeforeLoadDoesNothing() async {
@@ -92,7 +110,8 @@ final class PullRequestDetailViewModelTests: XCTestCase {
                                                    fetch: { [self] _ in detailContent(title: "Viewed") },
                                                    setViewed: { _, _, _ in calls += 1 })
 
-        await viewModel.setViewed(true, filename: "a.swift")
+        viewModel.setViewed(true, filename: "a.swift")
+        await viewModel.waitForPendingChanges()
 
         XCTAssertEqual(calls, 0)
         XCTAssertEqual(viewModel.viewedFiles, [])
@@ -149,16 +168,38 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         XCTAssertEqual(api.detailCalls.map(\.reference), [reference])
     }
 
-    func testMonitorSetsFileViewedWithSessionToken() async throws {
+    func testMonitorSendsChangesWithSessionTokenAndRefreshesTheList() async throws {
         let api = FakeGitHubAPI()
+        api.detailHandler = { [self] _ in
+            let content = detailContent(title: "Title", files: [file("a.swift")], canEdit: true)
+            var detail = content.detail
+            detail.canRequestReviewers = true
+            return PullRequestDetailContent(detail: detail, files: content.files)
+        }
+        api.comments = PullRequestComments(comments: [], threads: [thread("RT_1", path: "a.swift", line: 1)])
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+        let viewModel = PullRequestDetailViewModel(reference: reference, monitor: monitor)
+        await viewModel.load()
 
-        try await monitor.setFileViewed(pullRequestID: "PR_node", path: "a.swift", viewed: true)
+        viewModel.edit(title: "New")
+        viewModel.setViewed(true, filename: "a.swift")
+        viewModel.setResolved(true, thread: try XCTUnwrap(viewModel.comments?.threads.first))
+        viewModel.setReviewRequested("hubot", kind: .user, requested: true)
+        await viewModel.waitForPendingChanges()
 
+        XCTAssertEqual(api.editCalls.map(\.token), ["token"])
+        XCTAssertEqual(api.editCalls.map(\.reference), [reference])
+        XCTAssertEqual(api.editCalls.map(\.title), ["New"])
+        XCTAssertEqual(api.editCalls.map(\.body), [nil])
         XCTAssertEqual(api.setFileViewedCalls.map(\.token), ["token"])
         XCTAssertEqual(api.setFileViewedCalls.map(\.pullRequestID), ["PR_node"])
         XCTAssertEqual(api.setFileViewedCalls.map(\.path), ["a.swift"])
-        XCTAssertEqual(api.setFileViewedCalls.map(\.viewed), [true])
+        XCTAssertEqual(api.setResolvedCalls.map(\.token), ["token"])
+        XCTAssertEqual(api.setResolvedCalls.map(\.threadID), ["RT_1"])
+        XCTAssertEqual(api.setResolvedCalls.map(\.resolved), [true])
+        XCTAssertEqual(api.setReviewRequestedCalls.map(\.token), ["token"])
+        XCTAssertEqual(api.setReviewRequestedCalls.map(\.name), ["hubot"])
+        XCTAssertEqual(api.fetchOpenPRTokens, ["token", "token"], "The title and the review request change My PRs rows")
     }
 
     func testLoadFetchesCommentsAndGroupsThreadsByFile() async {
@@ -372,22 +413,40 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         XCTAssertEqual(cache.entry(for: reference)?.content.detail.title, "Cached")
     }
 
-    func testViewedMarksAndEditsUpdateTheCache() async throws {
+    func testViewedMarksAndEditsShowFromTheCacheThenLandInIt() async throws {
         let cache = PullRequestDetailCache()
+        var title = "Old"
+        var body = ""
+        var viewed: Set<String> = []
         let viewModel = PullRequestDetailViewModel(reference: reference,
                                                    fetch: { [self] _ in
-                                                       detailContent(title: "Old", files: [file("a.swift"), file("b.swift")], canEdit: true)
+                                                       detailContent(title: title, body: body,
+                                                                     files: [file("a.swift"), file("b.swift", isViewed: viewed.contains("b.swift"))],
+                                                                     canEdit: true)
+                                                   },
+                                                   setViewed: { _, path, isViewed in if isViewed { viewed.insert(path) } },
+                                                   edit: { _, newTitle, newBody in
+                                                       title = newTitle ?? title
+                                                       body = newBody ?? body
                                                    },
                                                    cache: cache)
         await viewModel.load()
 
-        await viewModel.setViewed(true, filename: "b.swift")
-        try await viewModel.edit(title: "New", body: "Body")
+        viewModel.setViewed(true, filename: "b.swift")
+        viewModel.edit(title: "New", body: "Body")
+
+        let shown = try XCTUnwrap(cache.shownEntry(for: reference)?.content)
+        XCTAssertEqual(shown.detail.title, "New")
+        XCTAssertEqual(shown.files.filter(\.isViewed).map(\.filename), ["b.swift"])
+        XCTAssertEqual(cache.entry(for: reference)?.content.detail.title, "Old", "GitHub's copy waits for GitHub")
+
+        await viewModel.waitForPendingChanges()
 
         let cached = try XCTUnwrap(cache.entry(for: reference)?.content)
         XCTAssertEqual(cached.detail.title, "New")
         XCTAssertEqual(cached.detail.body, "Body")
         XCTAssertEqual(cached.files.filter(\.isViewed).map(\.filename), ["b.swift"])
+        XCTAssertTrue(cache.pendingChanges(for: reference).isEmpty)
     }
 
     func testPostedCommentsUpdateTheCache() async throws {
@@ -472,45 +531,42 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         await viewModel.load()
         let target = try XCTUnwrap(viewModel.comments?.threads.first)
 
-        try await viewModel.setResolved(true, thread: target)
-        try await viewModel.setResolved(true, thread: try XCTUnwrap(viewModel.comments?.threads.first))
+        viewModel.setResolved(true, thread: target)
+        XCTAssertEqual(viewModel.comments?.threads.first?.isResolved, true, "Shows before GitHub answers")
+        viewModel.setResolved(true, thread: target)
+        await viewModel.waitForPendingChanges()
 
         XCTAssertEqual(sent.map(\.0), ["t"])
         XCTAssertEqual(sent.map(\.1), [true])
         XCTAssertEqual(viewModel.comments?.threads.first?.isResolved, true)
+        XCTAssertTrue(viewModel.pendingChanges.isEmpty)
     }
 
-    func testFailedSetResolvedThrowsAndSkipsReload() async {
+    func testFailedSetResolvedStaysShownAndSkipsReload() async throws {
         var commentFetches = 0
         let viewModel = PullRequestDetailViewModel(reference: reference,
                                                    fetch: { [self] _ in detailContent(title: "Fail") },
-                                                   fetchComments: { _, _ in
+                                                   fetchComments: { [self] _, _ in
                                                        commentFetches += 1
-                                                       return .empty
+                                                       return PullRequestComments(comments: [], threads: [thread("t", path: "a.swift", line: 1)])
                                                    },
                                                    setResolved: { _, _ in
                                                        throw GitHubAPIError(message: "Forbidden", documentationURL: nil, statusCode: 403)
                                                    })
         await viewModel.load()
 
-        do {
-            try await viewModel.setResolved(true, thread: thread("t", path: "a.swift", line: 1))
-            XCTFail("Expected an error")
-        } catch {
-            XCTAssertEqual(error.localizedDescription, "GitHub API error (403): Forbidden")
-        }
+        viewModel.setResolved(true, thread: thread("t", path: "a.swift", line: 1))
+        await viewModel.waitForPendingChanges()
+
+        let failed = try XCTUnwrap(viewModel.change(to: .threadResolved(threadID: "t")))
+        XCTAssertEqual(failed.state, .failed)
+        XCTAssertEqual(failed.error, "GitHub API error (403): Forbidden")
+        XCTAssertEqual(viewModel.comments?.threads.first?.isResolved, true)
         XCTAssertEqual(commentFetches, 1)
-    }
 
-    func testMonitorResolvesThreadsWithSessionToken() async throws {
-        let api = FakeGitHubAPI()
-        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+        viewModel.discard(failed)
 
-        try await monitor.setReviewThreadResolved(threadID: "RT_1", resolved: false)
-
-        XCTAssertEqual(api.setResolvedCalls.map(\.token), ["token"])
-        XCTAssertEqual(api.setResolvedCalls.map(\.threadID), ["RT_1"])
-        XCTAssertEqual(api.setResolvedCalls.map(\.resolved), [false])
+        XCTAssertEqual(viewModel.comments?.threads.first?.isResolved, false)
     }
 
     func testFailedPostThrowsAndSkipsReload() async {
@@ -555,15 +611,21 @@ final class PullRequestDetailViewModelTests: XCTestCase {
     func testEditTitleSavesOnlyTheTitle() async throws {
         var edits: [(PullRequestReference, String?, String?)] = []
         var fetches = 0
+        var title = "Old"
         let viewModel = PullRequestDetailViewModel(reference: reference,
                                                    fetch: { [self] _ in
                                                        fetches += 1
-                                                       return detailContent(title: "Old", body: "Old body", files: [file("a.swift")], canEdit: true)
+                                                       return detailContent(title: title, body: "Old body", files: [file("a.swift")], canEdit: true)
                                                    },
-                                                   edit: { reference, title, body in edits.append((reference, title, body)) })
+                                                   edit: { reference, newTitle, body in
+                                                       edits.append((reference, newTitle, body))
+                                                       title = newTitle ?? title
+                                                   })
         await viewModel.load()
 
-        try await viewModel.edit(title: "  New title \n")
+        viewModel.edit(title: "  New title \n")
+        XCTAssertEqual(viewModel.content?.detail.title, "New title", "Shows before GitHub answers")
+        await viewModel.waitForPendingChanges()
 
         XCTAssertEqual(edits.map(\.0), [reference])
         XCTAssertEqual(edits.map(\.1), ["New title"])
@@ -571,23 +633,43 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.content?.detail.title, "New title")
         XCTAssertEqual(viewModel.content?.detail.body, "Old body")
         XCTAssertEqual(viewModel.content?.files.map(\.filename), ["a.swift"])
-        XCTAssertEqual(fetches, 1)
+        XCTAssertEqual(fetches, 2, "Reloads once GitHub accepts the edit")
     }
 
     func testEditBodySavesOnlyTheBodyAndAllowsClearingIt() async throws {
         var edits: [(String?, String?)] = []
+        var body = "Old body"
         let viewModel = PullRequestDetailViewModel(reference: reference,
-                                                   fetch: { [self] _ in detailContent(title: "Title", body: "Old body", canEdit: true) },
-                                                   edit: { _, title, body in edits.append((title, body)) })
+                                                   fetch: { [self] _ in detailContent(title: "Title", body: body, canEdit: true) },
+                                                   edit: { _, title, newBody in
+                                                       edits.append((title, newBody))
+                                                       body = newBody ?? body
+                                                   })
         await viewModel.load()
 
-        try await viewModel.edit(body: "New **body**")
-        try await viewModel.edit(body: "")
+        viewModel.edit(body: "New **body**")
+        await viewModel.waitForPendingChanges()
+        viewModel.edit(body: "")
+        await viewModel.waitForPendingChanges()
 
         XCTAssertEqual(edits.map(\.0), [nil, nil])
         XCTAssertEqual(edits.map(\.1), ["New **body**", ""])
         XCTAssertEqual(viewModel.content?.detail.title, "Title")
         XCTAssertEqual(viewModel.content?.detail.body, "")
+    }
+
+    func testEditsMadeBeforeTheFirstSendsCollapseIntoTheLast() async {
+        var edits: [String?] = []
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+                                                   fetch: { [self] _ in detailContent(title: "Title", body: "Old", canEdit: true) },
+                                                   edit: { _, _, body in edits.append(body) })
+        await viewModel.load()
+
+        viewModel.edit(body: "First")
+        viewModel.edit(body: "Second")
+        await viewModel.waitForPendingChanges()
+
+        XCTAssertEqual(edits, ["Second"])
     }
 
     func testEditSkipsPullRequestsTheViewerCannotEdit() async throws {
@@ -597,8 +679,9 @@ final class PullRequestDetailViewModelTests: XCTestCase {
                                                    edit: { _, _, _ in edits += 1 })
         await viewModel.load()
 
-        try await viewModel.edit(title: "Mine now")
-        try await viewModel.edit(body: "Mine now")
+        viewModel.edit(title: "Mine now")
+        viewModel.edit(body: "Mine now")
+        await viewModel.waitForPendingChanges()
 
         XCTAssertEqual(edits, 0)
         XCTAssertEqual(viewModel.content?.detail.title, "Theirs")
@@ -611,14 +694,15 @@ final class PullRequestDetailViewModelTests: XCTestCase {
                                                    edit: { _, _, _ in edits += 1 })
         await viewModel.load()
 
-        try await viewModel.edit(title: "   ")
-        try await viewModel.edit()
+        viewModel.edit(title: "   ")
+        viewModel.edit()
+        await viewModel.waitForPendingChanges()
 
         XCTAssertEqual(edits, 0)
         XCTAssertEqual(viewModel.content?.detail.title, "Old")
     }
 
-    func testFailedEditThrowsAndKeepsTheOldContent() async {
+    func testFailedEditStaysShownWithItsErrorUntilDiscarded() async throws {
         let viewModel = PullRequestDetailViewModel(reference: reference,
                                                    fetch: { [self] _ in detailContent(title: "Old", canEdit: true) },
                                                    edit: { _, _, _ in
@@ -626,31 +710,120 @@ final class PullRequestDetailViewModelTests: XCTestCase {
                                                    })
         await viewModel.load()
 
-        do {
-            try await viewModel.edit(title: "New")
-            XCTFail("Expected an error")
-        } catch {
-            XCTAssertEqual(error.localizedDescription, "GitHub API error (403): Forbidden")
-        }
-        XCTAssertEqual(viewModel.content?.detail.title, "Old")
+        viewModel.edit(title: "New")
+        await viewModel.waitForPendingChanges()
+
+        XCTAssertEqual(viewModel.content?.detail.title, "New")
+        let failed = try XCTUnwrap(viewModel.change(to: .title))
+        XCTAssertEqual(failed.state, .failed)
+        XCTAssertEqual(failed.error, "GitHub API error (403): Forbidden")
+        XCTAssertNil(viewModel.errorMessage)
+
+        viewModel.discard(failed)
+
+        XCTAssertEqual(viewModel.content?.detail.title, "Old", "Discarding puts back GitHub's title")
+        XCTAssertNil(viewModel.change(to: .title))
+    }
+
+    func testRetryingAFailedEditSendsItAgain() async throws {
+        var shouldFail = true
+        var title = "Old"
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+                                                   fetch: { [self] _ in detailContent(title: title, canEdit: true) },
+                                                   edit: { _, newTitle, _ in
+                                                       if shouldFail { throw GraphQLError(message: "Offline") }
+                                                       title = newTitle ?? title
+                                                   })
+        await viewModel.load()
+        viewModel.edit(title: "New")
+        await viewModel.waitForPendingChanges()
+
+        shouldFail = false
+        viewModel.retry(try XCTUnwrap(viewModel.change(to: .title)))
+        await viewModel.waitForPendingChanges()
+
+        XCTAssertNil(viewModel.change(to: .title))
+        XCTAssertEqual(viewModel.content?.detail.title, "New")
+    }
+
+    func testEditingAFailedFieldAgainReplacesTheFailedChange() async throws {
+        var edits: [String?] = []
+        var shouldFail = true
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+                                                   fetch: { [self] _ in detailContent(title: "Old", canEdit: true) },
+                                                   edit: { _, title, _ in
+                                                       edits.append(title)
+                                                       if shouldFail { throw GraphQLError(message: "Offline") }
+                                                   })
+        await viewModel.load()
+        viewModel.edit(title: "Typo")
+        await viewModel.waitForPendingChanges()
+
+        shouldFail = false
+        viewModel.edit(title: "Fixed")
+        await viewModel.waitForPendingChanges()
+
+        XCTAssertEqual(edits, ["Typo", "Fixed"])
+        XCTAssertTrue(viewModel.pendingChanges.isEmpty, "The failed title was replaced, not left to retry")
     }
 
     func testSetTaskSavesTheDescriptionWithThatBoxChanged() async {
         var edits: [(String?, String?)] = []
+        var body = "- [ ] a\n- [ ] b"
         let cache = PullRequestDetailCache()
         let viewModel = PullRequestDetailViewModel(reference: reference,
-                                                   fetch: { [self] _ in detailContent(title: "Title", body: "- [ ] a\n- [ ] b", canEdit: true) },
-                                                   edit: { _, title, body in edits.append((title, body)) },
+                                                   fetch: { [self] _ in detailContent(title: "Title", body: body, canEdit: true) },
+                                                   edit: { _, title, newBody in
+                                                       edits.append((title, newBody))
+                                                       body = newBody ?? body
+                                                   },
                                                    cache: cache)
         await viewModel.load()
 
-        await viewModel.setTask(1, checked: true)
-        await viewModel.setTask(1, checked: true)
+        viewModel.setTask(1, checked: true)
+        viewModel.setTask(1, checked: true)
+        await viewModel.waitForPendingChanges()
 
         XCTAssertEqual(edits.map(\.0), [nil])
         XCTAssertEqual(edits.map(\.1), ["- [ ] a\n- [x] b"])
         XCTAssertEqual(viewModel.content?.detail.body, "- [ ] a\n- [x] b")
         XCTAssertEqual(cache.entry(for: reference)?.content.detail.body, "- [ ] a\n- [x] b")
+    }
+
+    func testQuickTaskClicksSendInOrderAndTheLastOneWins() async throws {
+        var edits: [String?] = []
+        var body = "- [ ] a\n- [ ] b"
+        let gate = Gate()
+        let firstSent = expectation(description: "First click sent")
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+                                                   fetch: { [self] _ in detailContent(title: "Title", body: body, canEdit: true) },
+                                                   edit: { _, _, newBody in
+                                                       edits.append(newBody)
+                                                       if edits.count == 1 {
+                                                           firstSent.fulfill()
+                                                           await gate.wait()
+                                                       }
+                                                       body = newBody ?? body
+                                                   })
+        await viewModel.load()
+        var shownBodies: [String] = []
+        let subscription = viewModel.$content.sink { shownBodies.append($0?.detail.body ?? "") }
+
+        viewModel.setTask(0, checked: true)
+        await fulfillment(of: [firstSent], timeout: 5)
+        // These two build on what shows, and the second replaces the first before it sends.
+        viewModel.setTask(1, checked: true)
+        viewModel.setTask(0, checked: false)
+        XCTAssertEqual(viewModel.content?.detail.body, "- [ ] a\n- [x] b")
+        shownBodies = []
+        await gate.open()
+        await viewModel.waitForPendingChanges()
+        subscription.cancel()
+
+        XCTAssertEqual(edits, ["- [x] a\n- [ ] b", "- [ ] a\n- [x] b"])
+        XCTAssertEqual(viewModel.content?.detail.body, "- [ ] a\n- [x] b")
+        XCTAssertFalse(shownBodies.contains("- [x] a\n- [ ] b"),
+                       "The reload after the first click doesn't bring its box back while the last click saves")
     }
 
     func testSetTaskSkipsPullRequestsTheViewerCannotEdit() async {
@@ -660,13 +833,14 @@ final class PullRequestDetailViewModelTests: XCTestCase {
                                                    edit: { _, _, _ in edits += 1 })
         await viewModel.load()
 
-        await viewModel.setTask(0, checked: true)
+        viewModel.setTask(0, checked: true)
+        await viewModel.waitForPendingChanges()
 
         XCTAssertEqual(edits, 0)
         XCTAssertEqual(viewModel.content?.detail.body, "- [ ] a")
     }
 
-    func testFailedSetTaskPutsTheBoxBackAndShowsTheError() async {
+    func testFailedSetTaskKeepsTheBoxUntilDiscarded() async throws {
         let viewModel = PullRequestDetailViewModel(reference: reference,
                                                    fetch: { [self] _ in detailContent(title: "Title", body: "- [x] a", canEdit: true) },
                                                    edit: { _, _, _ in
@@ -674,36 +848,16 @@ final class PullRequestDetailViewModelTests: XCTestCase {
                                                    })
         await viewModel.load()
 
-        await viewModel.setTask(0, checked: false)
+        viewModel.setTask(0, checked: false)
+        await viewModel.waitForPendingChanges()
+
+        XCTAssertEqual(viewModel.content?.detail.body, "- [ ] a")
+        let failed = try XCTUnwrap(viewModel.change(to: .body))
+        XCTAssertEqual(failed.error, "GitHub API error (403): Forbidden")
+
+        viewModel.discard(failed)
 
         XCTAssertEqual(viewModel.content?.detail.body, "- [x] a")
-        XCTAssertEqual(viewModel.errorMessage, "GitHub API error (403): Forbidden")
-    }
-
-    func testMonitorEditsWithSessionTokenAndRefreshesTheList() async throws {
-        let api = FakeGitHubAPI()
-        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
-
-        try await monitor.editPullRequest(reference, title: "New", body: nil)
-
-        XCTAssertEqual(api.editCalls.map(\.token), ["token"])
-        XCTAssertEqual(api.editCalls.map(\.reference), [reference])
-        XCTAssertEqual(api.editCalls.map(\.title), ["New"])
-        XCTAssertEqual(api.editCalls.map(\.body), [nil])
-        XCTAssertEqual(api.fetchOpenPRTokens, ["token"])
-    }
-
-    func testMonitorEditWithoutTokenFails() async {
-        let api = FakeGitHubAPI()
-        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: nil))
-
-        do {
-            try await monitor.editPullRequest(reference, title: "New", body: nil)
-            XCTFail("Expected an error")
-        } catch {
-            XCTAssertTrue(error is MissingTokenError)
-        }
-        XCTAssertTrue(api.editCalls.isEmpty)
     }
 
     func testTitleEditorNeedsATitle() {
@@ -743,7 +897,9 @@ final class PullRequestDetailViewModelTests: XCTestCase {
             setReviewRequested: { _, name, kind, requested in requests.append((name, kind, requested)) })
         await viewModel.load()
 
-        await viewModel.setReviewRequested("acme/web", kind: .team, requested: true)
+        viewModel.setReviewRequested("acme/web", kind: .team, requested: true)
+        XCTAssertEqual(viewModel.reviewRequestsInFlight, ["team:acme/web"])
+        await viewModel.waitForPendingChanges()
 
         XCTAssertEqual(requests.map(\.name), ["acme/web"])
         XCTAssertEqual(requests.map(\.requested), [true])
@@ -752,7 +908,7 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         XCTAssertNil(viewModel.errorMessage)
     }
 
-    func testRequestingAReviewerOptimisticallyUpdatesAndShowsFailures() async {
+    func testRequestingAReviewerOptimisticallyUpdatesAndShowsFailures() async throws {
         var shouldFail = false
         var reviewers = PullRequestReviewers.none
         let viewModel = PullRequestDetailViewModel(reference: reference,
@@ -769,12 +925,20 @@ final class PullRequestDetailViewModelTests: XCTestCase {
             })
         await viewModel.load()
 
-        await viewModel.setReviewRequested("hubot", kind: .user, requested: true)
+        viewModel.setReviewRequested("hubot", kind: .user, requested: true)
+        XCTAssertTrue(viewModel.content?.detail.reviewers.isRequested("user:hubot") == true, "Shows before GitHub answers")
+        await viewModel.waitForPendingChanges()
         XCTAssertTrue(viewModel.content?.detail.reviewers.isRequested("user:hubot") == true)
 
         shouldFail = true
-        await viewModel.setReviewRequested("monalisa", kind: .user, requested: true)
-        XCTAssertEqual(viewModel.errorMessage, "GitHub API error: Reviews may only be requested from collaborators")
+        viewModel.setReviewRequested("monalisa", kind: .user, requested: true)
+        await viewModel.waitForPendingChanges()
+        XCTAssertEqual(viewModel.failedReviewRequests.map(\.error),
+                       ["GitHub API error: Reviews may only be requested from collaborators"])
+        XCTAssertEqual(viewModel.content?.detail.reviewers.reviewers.map(\.name), ["hubot", "monalisa"])
+        XCTAssertTrue(viewModel.reviewRequestsInFlight.isEmpty)
+
+        viewModel.discard(try XCTUnwrap(viewModel.failedReviewRequests.first))
         XCTAssertEqual(viewModel.content?.detail.reviewers.reviewers.map(\.name), ["hubot"])
     }
 
@@ -801,7 +965,8 @@ final class PullRequestDetailViewModelTests: XCTestCase {
             setReviewRequested: { _, _, _, _ in requestCount += 1 })
         await viewModel.load()
 
-        await viewModel.setReviewRequested("hubot", kind: .user, requested: true)
+        viewModel.setReviewRequested("hubot", kind: .user, requested: true)
+        await viewModel.waitForPendingChanges()
 
         XCTAssertEqual(requestCount, 0)
     }
