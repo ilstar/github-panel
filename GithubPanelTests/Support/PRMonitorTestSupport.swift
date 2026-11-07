@@ -446,7 +446,7 @@ final class FakeTimerScheduler: TimerScheduling {
                         repeats: Bool,
                         block: @escaping @MainActor () -> Void) -> RefreshTimer {
         intervals.append(interval)
-        let timer = FakeTimer()
+        let timer = FakeTimer(block: block)
         timers.append(timer)
         return timer
     }
@@ -454,9 +454,19 @@ final class FakeTimerScheduler: TimerScheduling {
 
 final class FakeTimer: RefreshTimer {
     private(set) var isInvalidated = false
+    private let block: @MainActor () -> Void
+
+    init(block: @escaping @MainActor () -> Void) {
+        self.block = block
+    }
 
     func invalidate() {
         isInvalidated = true
+    }
+
+    @MainActor
+    func fire() {
+        block()
     }
 }
 

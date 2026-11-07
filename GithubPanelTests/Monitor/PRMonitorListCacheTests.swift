@@ -137,6 +137,44 @@ final class PRMonitorListCacheTests: XCTestCase {
         XCTAssertTrue(makeMonitor(store: store).prRows.isEmpty)
     }
 
+    func testWhenAListLastLoadedComesFromSyncState() async {
+        let store = LocalStore.inMemory()
+        store.savePullRequestList(CachedPullRequestList(savedAt: Date(timeIntervalSince1970: 100),
+                                                        rows: [row(number: 1, status: .success)]), as: .open)
+        await store.recordSync(for: PullRequestListKind.open.key, attemptedAt: Date(timeIntervalSince1970: 300),
+                               fetchedAt: Date(timeIntervalSince1970: 200))
+
+        XCTAssertEqual(makeMonitor(store: store).lastRefreshAt, Date(timeIntervalSince1970: 200))
+    }
+
+    func testHistoryPagesShowFromTheLastRunWhileTheyReload() async {
+        let api = FakeGitHubAPI()
+        api.historyPages[1] = PullRequestHistoryPage(rows: [historyRow(number: 1)], page: 1, perPage: 10, totalCount: 11)
+        api.historyPages[2] = PullRequestHistoryPage(rows: [historyRow(number: 11)], page: 2, perPage: 10, totalCount: 11)
+        let store = LocalStore.inMemory()
+        let first = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"),
+                                dateProvider: FakeDateProvider(now: Date(timeIntervalSince1970: 100)), store: store)
+        await first.refreshCurrentHistoryPage()
+        await first.loadNextHistoryPage()
+
+        let gate = SuspendedHistoryRequests()
+        let restartedAPI = FakeGitHubAPI()
+        restartedAPI.historyHandler = { _, _, page, perPage in try await gate.next(page: page, perPage: perPage) }
+        let restarted = makeMonitor(api: restartedAPI, tokenStore: FakeTokenStore(token: "token"), store: store)
+        XCTAssertEqual(restarted.historyRows.map(\.number), [1])
+        XCTAssertEqual(restarted.lastHistoryRefreshAt, Date(timeIntervalSince1970: 100))
+
+        let next = Task { await restarted.loadNextHistoryPage() }
+        await gate.waitForRequestCount(1)
+        XCTAssertEqual(restarted.historyRows.map(\.number), [11], "The saved page shows while it reloads")
+        XCTAssertEqual(restarted.historyRangeText, "11-11 of 11")
+        XCTAssertTrue(restarted.isHistoryLoading)
+        await gate.resumeNext(returning: PullRequestHistoryPage(rows: [historyRow(number: 12)], page: 2, perPage: 10,
+                                                                totalCount: 12))
+        await next.value
+        XCTAssertEqual(restarted.historyRows.map(\.number), [12])
+    }
+
     func testRemovesTheListsSavedToDefaultsWithoutImportingThem() async {
         let api = FakeGitHubAPI()
         api.rows = [row(number: 1, status: .success)]

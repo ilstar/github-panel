@@ -40,7 +40,7 @@ final class PRMonitorHistoryTests: XCTestCase {
         let api = FakeGitHubAPI()
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
 
-        await monitor.handleTimerTick()
+        await monitor.refreshScheduler.handleTimerTick()
         await monitor.refreshNow()
 
         XCTAssertTrue(api.fetchClosedPRCalls.isEmpty)
@@ -143,9 +143,11 @@ final class PRMonitorHistoryTests: XCTestCase {
 
     func testRefreshHistoryErrorStoresSeparateError() async {
         let api = FakeGitHubAPI()
-        api.error = TestError(message: "history boom")
+        api.historyPages[1] = PullRequestHistoryPage(rows: [historyRow(number: 1)], page: 1, perPage: 10, totalCount: 1)
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
-        monitor.historyRows = [historyRow(number: 1)]
+        await monitor.refreshCurrentHistoryPage()
+        XCTAssertEqual(monitor.historyRows.map(\.number), [1])
+        api.error = TestError(message: "history boom")
 
         await monitor.refreshCurrentHistoryPage()
 

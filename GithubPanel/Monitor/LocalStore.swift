@@ -93,9 +93,19 @@ final class LocalStore: Sendable {
 
 // MARK: - Pull request lists
 
-enum PullRequestListKind: String {
+enum PullRequestListKind: Hashable {
     case open
+    case history(page: Int)
     case reviewRequests
+
+    /// The `pull_request_list` key, also used as the list's `sync_state` key.
+    var key: String {
+        switch self {
+        case .open: return "open"
+        case .history(let page): return "history:\(page)"
+        case .reviewRequests: return "reviewRequests"
+        }
+    }
 }
 
 extension LocalStore {
@@ -104,7 +114,7 @@ extension LocalStore {
         -> CachedPullRequestList<Rows>? {
         let row = try? database.read { db in
             try Row.fetchOne(db, sql: "SELECT rows, savedAt FROM pull_request_list WHERE kind = ?",
-                             arguments: [kind.rawValue])
+                             arguments: [kind.key])
         }
         guard let row, let data: Data = row["rows"],
               let decoded = try? JSONDecoder().decode(Rows.self, from: data) else { return nil }
@@ -117,7 +127,7 @@ extension LocalStore {
         let savedAt = list.savedAt.timeIntervalSince1970
         database.asyncWrite({ db in
             try db.execute(sql: "INSERT OR REPLACE INTO pull_request_list (kind, rows, savedAt) VALUES (?, ?, ?)",
-                           arguments: [kind.rawValue, data, savedAt])
+                           arguments: [kind.key, data, savedAt])
         }, completion: { _, _ in })
     }
 
@@ -223,13 +233,20 @@ extension LocalStore {
     }
 
     func syncState(for resource: String) async -> SyncState? {
-        try? await database.read { db in
-            guard let row = try Row.fetchOne(db, sql: "SELECT * FROM sync_state WHERE resource = ?",
-                                             arguments: [resource]) else { return nil }
-            return SyncState(fetchedAt: (row["fetchedAt"] as Double?).map(Date.init(timeIntervalSince1970:)),
-                             lastAttemptAt: (row["lastAttemptAt"] as Double?).map(Date.init(timeIntervalSince1970:)),
-                             lastError: row["lastError"])
-        }
+        try? await database.read { db in try Self.syncState(for: resource, in: db) }
+    }
+
+    /// Reads on the calling thread, for showing saved lists as soon as the app starts.
+    func syncStateNow(for resource: String) -> SyncState? {
+        try? database.read { db in try Self.syncState(for: resource, in: db) }
+    }
+
+    private static func syncState(for resource: String, in db: Database) throws -> SyncState? {
+        guard let row = try Row.fetchOne(db, sql: "SELECT * FROM sync_state WHERE resource = ?",
+                                         arguments: [resource]) else { return nil }
+        return SyncState(fetchedAt: (row["fetchedAt"] as Double?).map(Date.init(timeIntervalSince1970:)),
+                         lastAttemptAt: (row["lastAttemptAt"] as Double?).map(Date.init(timeIntervalSince1970:)),
+                         lastError: row["lastError"])
     }
 
     /// Records an attempt to load `resource`. A failed attempt keeps the last `fetchedAt`.

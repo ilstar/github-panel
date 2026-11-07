@@ -101,11 +101,19 @@ final class PRMonitorRefreshTests: XCTestCase {
         let item = row(number: 1, status: .success, mergeQueue: true)
         let mutationGate = MutationCalls()
         api.enqueueHandler = { id in await mutationGate.record(id) }
+        var loadsStarted = 0
+        let subscription = monitor.listCache.updates.sink { change in
+            if change == .changed(.open), monitor.listCache.state(of: .open).isLoading { loadsStarted += 1 }
+        }
 
         let refresh = Task { await monitor.refreshNow() }
         await gate.waitForRequestCount(1)
+        let started = loadsStarted
         let mutation = Task { await monitor.requestMerge(for: item) }
         await mutationGate.waitForCount(1)
+        // The refresh after the write has reached the engine once it starts loading.
+        for _ in 0..<200 where loadsStarted == started { await Task.yield() }
+        _ = subscription
 
         XCTAssertEqual(api.enqueueCalls, ["node-1"])
         await gate.resumeNext(returning: OpenPullRequests(login: "fred", rows: [item]))
@@ -246,7 +254,8 @@ final class PRMonitorRefreshTests: XCTestCase {
         let api = FakeGitHubAPI()
         api.error = TestError(message: "boom")
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
-        monitor.prRows = [row(number: 1, status: .success)]
+        monitor.listCache.store(OpenPullRequests(login: "fred", rows: [row(number: 1, status: .success)]),
+                                fetchedAt: Date(timeIntervalSince1970: 0))
 
         await monitor.refreshNow()
 

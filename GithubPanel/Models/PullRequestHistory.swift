@@ -1,6 +1,6 @@
 import Foundation
 
-struct PullRequestHistoryPage {
+struct PullRequestHistoryPage: Equatable, Codable {
     let rows: [PullRequestHistoryRow]
     let page: Int
     let perPage: Int
@@ -15,7 +15,7 @@ struct PullRequestHistoryPage {
     }
 }
 
-struct PullRequestHistoryRow: Identifiable, Equatable {
+struct PullRequestHistoryRow: Identifiable, Equatable, Codable {
     let id: String
     let title: String
     let number: Int
