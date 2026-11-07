@@ -1,7 +1,7 @@
 import Foundation
 
 /// One comment, either on the pull request itself or in a review thread on the diff.
-struct PullRequestComment: Identifiable, Equatable {
+struct PullRequestComment: Identifiable, Equatable, Codable {
     /// The GraphQL node ID.
     let id: String
     /// The REST ID. Replies to a review thread are posted against its first comment's REST ID.
@@ -15,7 +15,7 @@ struct PullRequestComment: Identifiable, Equatable {
 }
 
 /// Which side of the diff a review comment sits on: `left` is the old file, `right` is the new file.
-enum DiffSide: String, Equatable, Hashable {
+enum DiffSide: String, Equatable, Hashable, Codable {
     case left = "LEFT"
     case right = "RIGHT"
 }
@@ -59,7 +59,7 @@ struct DiffCommentAnchor: Hashable {
 }
 
 /// A conversation on one line (or range of lines) of the diff.
-struct ReviewThread: Identifiable, Equatable {
+struct ReviewThread: Identifiable, Equatable, Codable {
     /// The GraphQL node ID.
     let id: String
     let path: String
@@ -84,7 +84,7 @@ struct ReviewThread: Identifiable, Equatable {
 
 /// How much of a pull request's discussion to load. A busy pull request loads part of it, and the "more"
 /// buttons raise these by a step each.
-struct PullRequestCommentLimits: Equatable {
+struct PullRequestCommentLimits: Equatable, Codable {
     static let commentStep = 30
     static let threadStep = 50
 
@@ -107,7 +107,7 @@ struct PullRequestCommentLimits: Equatable {
 }
 
 /// The comments on one pull request: general comments on the Conversation tab and review threads on the diff.
-struct PullRequestComments: Equatable {
+struct PullRequestComments: Equatable, Codable {
     /// The newest general comments, oldest first. Earlier ones may not be loaded yet.
     let comments: [PullRequestComment]
     /// The first review threads. Later ones may not be loaded yet.

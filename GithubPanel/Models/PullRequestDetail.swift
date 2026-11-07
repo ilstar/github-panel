@@ -20,8 +20,8 @@ extension PullRequestHistoryRow {
     }
 }
 
-struct PullRequestDetail: Equatable {
-    enum State: Equatable {
+struct PullRequestDetail: Equatable, Codable {
+    enum State: Equatable, Codable {
         case open
         case draft
         case merged
@@ -69,8 +69,8 @@ struct PullRequestDetail: Equatable {
     var offersUpdateBranch: Bool { isViewerAuthor && canUpdateBranch }
 }
 
-struct PullRequestFile: Identifiable, Equatable {
-    enum Status: String, Equatable {
+struct PullRequestFile: Identifiable, Equatable, Codable {
+    enum Status: String, Equatable, Codable {
         case added
         case removed
         case modified
@@ -97,7 +97,7 @@ struct PullRequestFile: Identifiable, Equatable {
 }
 
 /// A pull request's detail and changed files, loaded together for the detail window.
-struct PullRequestDetailContent: Equatable {
+struct PullRequestDetailContent: Equatable, Codable {
     let detail: PullRequestDetail
     let files: [PullRequestFile]
 }

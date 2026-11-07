@@ -31,7 +31,7 @@ final class PRMonitor: ObservableObject {
     /// A pull request a clicked notification asked to show. The main window selects it, then clears this.
     @Published var pullRequestToShow: PullRequestToShow?
     /// Details and comments of pull requests loaded so far, shared by every detail view.
-    let detailCache = PullRequestDetailCache()
+    let detailCache: PullRequestDetailCache
     @Published var refreshInterval: TimeInterval {
         didSet {
             defaults.set(refreshInterval, forKey: DefaultsKeys.refreshInterval)
@@ -113,8 +113,11 @@ final class PRMonitor: ObservableObject {
          timerScheduler: TimerScheduling = SystemTimerScheduler(),
          dateProvider: DateProviding = SystemDateProvider(),
          hookRunner: PullRequestHookRunning = SystemPullRequestHookRunner(),
-         isUsingMockData: Bool = false) {
+         isUsingMockData: Bool = false,
+         detailCacheURL: URL? = nil) {
         self.api = api
+        // Mock data never reads or writes the saved cache, so it can't mix with real pull requests.
+        detailCache = PullRequestDetailCache(fileURL: isUsingMockData ? nil : detailCacheURL)
         self.tokenStore = tokenStore
         self.notificationPoster = notificationPoster
         self.defaults = defaults

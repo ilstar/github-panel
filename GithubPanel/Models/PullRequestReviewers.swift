@@ -1,13 +1,13 @@
 import Foundation
 
 /// One entry in a pull request's Reviewers list: a user or team asked to review, or a user who reviewed.
-struct PullRequestReviewer: Identifiable, Equatable {
-    enum Kind: Equatable {
+struct PullRequestReviewer: Identifiable, Equatable, Codable {
+    enum Kind: Equatable, Codable {
         case user
         case team
     }
 
-    enum State: Equatable {
+    enum State: Equatable, Codable {
         /// Asked to review and has not reviewed since.
         case pending
         case approved
@@ -66,9 +66,9 @@ extension PullRequestReviewer.State {
 }
 
 /// A pull request's reviewers, built the way GitHub's Reviewers sidebar is.
-struct PullRequestReviewers: Equatable {
+struct PullRequestReviewers: Equatable, Codable {
     /// A submitted review: the latest one by its author.
-    struct Review: Equatable {
+    struct Review: Equatable, Codable {
         let author: String
         /// GitHub's review state: APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED or PENDING.
         let state: String
@@ -76,7 +76,7 @@ struct PullRequestReviewers: Equatable {
     }
 
     /// An open request for a review.
-    struct Request: Equatable {
+    struct Request: Equatable, Codable {
         let name: String
         let kind: PullRequestReviewer.Kind
         var asCodeOwner = false

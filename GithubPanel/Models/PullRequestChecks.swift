@@ -1,7 +1,7 @@
 import Foundation
 
 /// How GitHub starts one check again.
-enum CheckRerun: Hashable {
+enum CheckRerun: Hashable, Codable {
     /// A GitHub Actions workflow run, whose failed jobs run again. The run's database ID.
     case workflowRun(Int)
     /// Another app's check suite, which GitHub asks the app to run again. Node IDs of the repository and the suite.
@@ -9,8 +9,8 @@ enum CheckRerun: Hashable {
 }
 
 /// One check run or commit status on the pull request's head commit.
-struct PullRequestCheck: Identifiable, Equatable {
-    enum Outcome: Equatable {
+struct PullRequestCheck: Identifiable, Equatable, Codable {
+    enum Outcome: Equatable, Codable {
         case failure
         case pending
         case success
@@ -74,7 +74,7 @@ struct PullRequestCheck: Identifiable, Equatable {
 }
 
 /// The checks on a pull request's head commit, failing first, like GitHub's merge box.
-struct PullRequestChecks: Equatable {
+struct PullRequestChecks: Equatable, Codable {
     let checks: [PullRequestCheck]
 
     static let empty = PullRequestChecks(checks: [])
