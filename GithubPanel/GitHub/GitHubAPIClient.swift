@@ -22,11 +22,17 @@ protocol GitHubAPIClient {
     func postPullRequestComment(token: String, reference: PullRequestReference, comment: NewPullRequestComment) async throws -> Int
     func setReviewThreadResolved(token: String, threadID: String, resolved: Bool) async throws
     func editPullRequest(token: String, reference: PullRequestReference, title: String?, body: String?) async throws
-    func submitReview(token: String, reference: PullRequestReference, review: NewPullRequestReview) async throws
+    /// Submits a review and returns its REST ID.
+    @discardableResult
+    func submitReview(token: String, reference: PullRequestReference, review: NewPullRequestReview) async throws -> Int
     /// Starts a pending review on the given commit and returns its node ID.
     func startPendingReview(token: String, pullRequestID: String, commitID: String) async throws -> String
-    func addPendingReviewComment(token: String, reviewID: String, comment: PendingReviewComment) async throws
-    func submitPendingReview(token: String, reviewID: String, event: PullRequestReviewEvent, body: String) async throws
+    /// Adds a draft comment to a pending review and returns its REST ID, when GitHub sends it.
+    @discardableResult
+    func addPendingReviewComment(token: String, reviewID: String, comment: PendingReviewComment) async throws -> Int?
+    /// Submits a pending review and returns its REST ID, when GitHub sends it.
+    @discardableResult
+    func submitPendingReview(token: String, reviewID: String, event: PullRequestReviewEvent, body: String) async throws -> Int?
     func deletePendingReview(token: String, reviewID: String) async throws
     func updatePullRequestBranch(token: String, pullRequestID: String, expectedHeadSHA: String) async throws
     /// The check runs and commit statuses on the pull request's head commit.

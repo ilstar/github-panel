@@ -22,6 +22,36 @@ final class PullRequestCommentsTests: XCTestCase {
         XCTAssertEqual(PullRequestComments(comments: [comment], threads: [], totalCommentCount: 0).totalCommentCount, 1)
     }
 
+    func testTheTimelineMergesReviewsIntoTheCommentsByDate() {
+        func item(_ id: String, at seconds: TimeInterval, review: Bool = false) -> PullRequestComment {
+            PullRequestComment(id: id, databaseID: 1, authorLogin: "a", body: id,
+                               createdAt: Date(timeIntervalSince1970: seconds), htmlURL: nil,
+                               reviewState: review ? .approved : nil)
+        }
+        let all = PullRequestComments(comments: [item("c1", at: 10), item("c2", at: 30)], threads: [],
+                                      reviews: [item("r0", at: 5, review: true), item("r1", at: 20, review: true)])
+        XCTAssertEqual(all.timeline.map(\.id), ["r0", "c1", "r1", "c2"])
+
+        // While earlier comments aren't loaded, older reviews would show out of order, so they wait too.
+        let partial = PullRequestComments(comments: [item("c1", at: 10), item("c2", at: 30)], threads: [],
+                                          totalCommentCount: 5,
+                                          reviews: [item("r0", at: 5, review: true), item("r1", at: 20, review: true)])
+        XCTAssertEqual(partial.timeline.map(\.id), ["c1", "r1", "c2"])
+    }
+
+    func testCommentsSavedBeforeReviewsLoadedStillDecode() throws {
+        let json = #"{"comments":[],"threads":[],"totalCommentCount":0,"totalThreadCount":0}"#
+        let decoded = try JSONDecoder().decode(PullRequestComments.self, from: Data(json.utf8))
+        XCTAssertEqual(decoded.reviews, [])
+
+        let review = PullRequestComment(id: "r", databaseID: 3, authorLogin: "a", body: "", createdAt: Date(timeIntervalSince1970: 100),
+                                        htmlURL: nil, reviewState: .changesRequested)
+        let withReview = PullRequestComments(comments: [], threads: [], reviews: [review])
+        let roundTripped = try JSONDecoder().decode(PullRequestComments.self,
+                                                    from: JSONEncoder().encode(withReview))
+        XCTAssertEqual(roundTripped, withReview)
+    }
+
     func testUnifiedAnchorPutsDeletionsOnTheOldSide() {
         XCTAssertEqual(DiffCommentAnchor.unified(path: path, line: line(.deletion, old: 4, new: nil)),
                        DiffCommentAnchor(path: path, line: 4, side: .left))

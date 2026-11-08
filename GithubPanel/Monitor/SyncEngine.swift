@@ -126,6 +126,15 @@ actor SyncEngine {
         var task: Task<Void, Never>?
     }
 
+    /// What GitHub returned for a change it took.
+    private enum SendResult {
+        case sent
+        /// The REST ID of the comment or review it posted.
+        case posted(commentID: Int)
+        /// The node ID of the pending review it started.
+        case startedReview(id: String)
+    }
+
     /// After throttled or rejected requests, every request fails with the same error until `until`.
     private struct Backoff {
         let session: UUID
@@ -452,33 +461,45 @@ actor SyncEngine {
             }
             // The change stays pending, and the request that ends the backoff starts sending again.
             if let backoff, backoff.session == credential.session, now() < backoff.until { return }
-            guard await updateCache(session: credential.session, { $0.markSending(change.id) }) else { return }
-            let postedCommentID: Int?
+            guard let isSending = await readCache(session: credential.session, { $0.markSending(change.id) }) else {
+                return
+            }
+            // Discarded since it was picked.
+            guard isSending else { continue }
+            let result: SendResult
             do {
-                postedCommentID = try await send(change.kind, on: reference, token: credential.token)
+                result = try await send(change.kind, on: reference, token: credential.token)
             } catch {
                 guard !Task.isCancelled else { return }
                 // GitHub answers a write it doesn't allow with 403 too, so a failed write doesn't start the backoff.
-                // Nothing is sent again on its own, so a comment that may have posted waits for the user.
+                // Nothing is sent again on its own, so a comment or review that may have posted waits for the user.
+                // Changes to a pending review that didn't start fail in turn when they come up.
                 await updateCache(session: credential.session) {
                     $0.markFailed(change.id, error: Self.failureMessage(for: change, error: error, cache: $0))
                 }
-                if case .comment = change.kind, Self.mayHaveReachedGitHub(error) {
-                    // Shows the comment if GitHub did post it, so the user can tell before retrying.
-                    let resource = await MainActor.run { [cache] in Self.resource(changedBy: change, cache: cache) }
-                    if let resource { _ = try? await request(resource) }
+                if !change.kind.isSafeToResend, Self.mayHaveReachedGitHub(error) {
+                    // Shows what GitHub did, if it did, so the user can tell before retrying.
+                    let resources = await MainActor.run { [cache] in Self.resources(changedBy: change, cache: cache) }
+                    for resource in resources { _ = try? await request(resource) }
                 }
                 continue
             }
-            if let postedCommentID {
-                await updateCache(session: credential.session) { $0.markPosted(change.id, commentID: postedCommentID) }
+            switch result {
+            case .sent:
+                break
+            case .posted(let commentID):
+                await updateCache(session: credential.session) { $0.markPosted(change.id, commentID: commentID) }
+            case .startedReview(let reviewID):
+                // The changes waiting for this review go to it from now on.
+                await updateCache(session: credential.session) { $0.markStarted(change.id, reviewID: reviewID) }
             }
             await confirm(change, session: credential.session)
         }
     }
 
-    /// Sends a change. Returns the REST ID of the comment GitHub posted, for a comment.
-    private func send(_ kind: PendingChange.Kind, on reference: PullRequestReference, token: String) async throws -> Int? {
+    /// Sends a change, and returns what GitHub posted or started for it.
+    private func send(_ kind: PendingChange.Kind, on reference: PullRequestReference,
+                      token: String) async throws -> SendResult {
         switch kind {
         case .title(let title):
             try await api.editPullRequest(token: token, reference: reference, title: title, body: nil)
@@ -492,9 +513,36 @@ actor SyncEngine {
             try await api.setReviewRequested(token: token, reference: reference, name: name, kind: kind,
                                              requested: requested)
         case .comment(let comment, _):
-            return try await api.postPullRequestComment(token: token, reference: reference, comment: comment)
+            return .posted(commentID: try await api.postPullRequestComment(token: token, reference: reference,
+                                                                           comment: comment))
+        case .review(let review, _):
+            return .posted(commentID: try await api.submitReview(token: token, reference: reference, review: review))
+        case .startReview(let pullRequestID, let commitID, _):
+            return .startedReview(id: try await api.startPendingReview(token: token, pullRequestID: pullRequestID,
+                                                                       commitID: commitID))
+        case .reviewComment(let comment, let review, _):
+            let commentID = try await api.addPendingReviewComment(token: token, reviewID: try Self.reviewID(review),
+                                                                  comment: comment)
+            return commentID.map { .posted(commentID: $0) } ?? .sent
+        case .submitPendingReview(let review, let event, let body, _):
+            let reviewID = try await api.submitPendingReview(token: token, reviewID: try Self.reviewID(review),
+                                                             event: event, body: body)
+            return reviewID.map { .posted(commentID: $0) } ?? .sent
+        case .discardPendingReview(let review):
+            do {
+                try await api.deletePendingReview(token: token, reviewID: try Self.reviewID(review))
+            } catch let error as GraphQLError where error.isNotFound {
+                // Already gone, such as when the app quit before GitHub's answer to the first try arrived.
+            }
         }
-        return nil
+        return .sent
+    }
+
+    /// The pending review's node ID. A change still waiting for the change that starts its review is only sent after
+    /// that one, so the review didn't start.
+    private static func reviewID(_ target: PendingChange.ReviewTarget) throws -> String {
+        guard case .review(let id) = target else { throw PendingChange.ReviewNotStartedError() }
+        return id
     }
 
     /// Whether a failed request may still have reached GitHub, such as when the connection dropped or timed out
@@ -507,14 +555,19 @@ actor SyncEngine {
         return [.timedOut, .networkConnectionLost, .cannotParseResponse, .badServerResponse].contains(error.code)
     }
 
-    /// GitHub's error, or for a comment, what it means for the comment.
+    /// GitHub's error, or for a comment or review, what it means for it.
     @MainActor
     private static func failureMessage(for change: PendingChange, error: Error, cache: PullRequestDetailCache) -> String {
         let message = error.localizedDescription
-        guard case .comment(let comment, _) = change.kind else { return message }
-        if mayHaveReachedGitHub(error) {
-            return "\(message) GitHub may have posted it anyway, so check before you retry."
+        if error is PendingChange.ReviewNotStartedError, case .startedBy(let startID)? = change.kind.reviewTarget,
+           let startError = cache.pendingChanges(for: change.reference).first(where: { $0.id == startID })?.error {
+            return "\(message) \(startError)"
         }
+        guard !change.kind.isSafeToResend else { return message }
+        if mayHaveReachedGitHub(error) {
+            return "\(message) GitHub may have \(change.kind.outcomeIfSent) anyway, so check before you retry."
+        }
+        guard case .comment(let comment, _) = change.kind else { return message }
         // GitHub refuses a comment on a commit that's no longer part of the pull request, such as after a force push.
         if case .inline(_, let commitID, _) = comment, (error as? GitHubAPIError)?.statusCode == 422,
            let headSHA = cache.entry(for: change.reference)?.content.detail.headSHA, headSHA != commitID {
@@ -529,45 +582,60 @@ actor SyncEngine {
     private func confirm(_ change: PendingChange, session: UUID) async {
         // A new token dropped the change, so nothing is loaded for it with that token.
         let current = await MainActor.run { [cache, credential] in
-            (session: credential()?.session, resource: Self.resource(changedBy: change, cache: cache))
+            (session: credential()?.session, resources: Self.resources(changedBy: change, cache: cache))
         }
         guard current.session == session else { return }
-        var isRefreshed = false
-        if let resource = current.resource {
+        var isRefreshed = !current.resources.isEmpty
+        for resource in current.resources {
             do {
                 try await request(resource)
-                isRefreshed = true
-            } catch {}
+            } catch {
+                isRefreshed = false
+            }
         }
         await updateCache(session: session) { $0.confirm(change.id, applyingToEntry: !isRefreshed) }
         switch change.kind {
         case .title, .reviewRequested:
             // My PRs shows the title and who was asked to review.
             _ = try? await request(.openList)
-        case .body, .fileViewed, .threadResolved, .comment:
+        case .review, .submitPendingReview:
+            // To Review drops a pull request once I've reviewed it.
+            _ = try? await request(.reviewRequests)
+        case .body, .fileViewed, .threadResolved, .comment, .startReview, .reviewComment, .discardPendingReview:
             break
         }
     }
 
+    /// What GitHub changed: the detail, the comments (once they loaded), or both, for a review, whose verdict shows
+    /// in the Reviewers list and its message in the Activity list.
     @MainActor
-    private static func resource(changedBy change: PendingChange, cache: PullRequestDetailCache) -> Resource? {
+    private static func resources(changedBy change: PendingChange, cache: PullRequestDetailCache) -> [Resource] {
         let reference = change.reference
+        var comments: [Resource] = []
+        if let entry = cache.entry(for: reference), entry.comments != nil {
+            comments = [.comments(reference, entry.commentLimits)]
+        }
         switch change.kind {
         case .title, .body, .fileViewed, .reviewRequested:
-            return .detail(reference)
-        case .threadResolved, .comment:
-            guard let entry = cache.entry(for: reference), entry.comments != nil else { return nil }
-            return .comments(reference, entry.commentLimits)
+            return [.detail(reference)]
+        case .threadResolved, .comment, .startReview, .reviewComment, .discardPendingReview:
+            return comments
+        case .review, .submitPendingReview:
+            return [.detail(reference)] + comments
         }
     }
 
     /// Runs `update` if the token hasn't changed since `session`, since the cache dropped that token's changes.
     @discardableResult
     private func updateCache(session: UUID, _ update: @escaping @MainActor (PullRequestDetailCache) -> Void) async -> Bool {
-        await MainActor.run { [cache, credential] in
-            guard credential()?.session == session else { return false }
-            update(cache)
-            return true
+        await readCache(session: session, update) != nil
+    }
+
+    /// Like `updateCache`, returning what `read` returns, or nil when the token changed.
+    private func readCache<T>(session: UUID, _ read: @escaping @MainActor (PullRequestDetailCache) -> T) async -> T? {
+        await MainActor.run { [cache, credential] () -> T? in
+            guard credential()?.session == session else { return nil }
+            return read(cache)
         }
     }
 

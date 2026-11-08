@@ -181,7 +181,7 @@ final class MockGitHubAPICommentTests: XCTestCase {
         try await api.addPendingReviewComment(token: "token", reviewID: reviewID, comment: .thread(body: "Draft", anchor: anchor))
         try await api.addPendingReviewComment(token: "token", reviewID: reviewID, comment: .reply(body: "Draft reply", threadID: replyTarget.id))
         let pending = try await api.fetchPullRequestComments(token: "token", reference: reference)
-        try await api.submitPendingReview(token: "token", reviewID: reviewID, event: .comment, body: "")
+        let submittedID = try await api.submitPendingReview(token: "token", reviewID: reviewID, event: .comment, body: "")
         let submitted = try await api.fetchPullRequestComments(token: "token", reference: reference)
 
         XCTAssertEqual(pending.pendingReviewID, reviewID)
@@ -192,6 +192,8 @@ final class MockGitHubAPICommentTests: XCTestCase {
         XCTAssertEqual(submitted.pendingCommentCount, 0)
         XCTAssertEqual(submitted.threads.last?.comments.map(\.body), ["Draft"])
         XCTAssertEqual(submitted.threads.first?.comments.last?.body, "Draft reply")
+        XCTAssertEqual(submitted.reviews.map(\.databaseID), [submittedID], "The review shows in the Activity list")
+        XCTAssertEqual(submitted.reviews.map(\.reviewState), [.commented])
     }
 
     func testMockDiscardedReviewDropsItsDrafts() async throws {
@@ -205,6 +207,12 @@ final class MockGitHubAPICommentTests: XCTestCase {
         let after = try await api.fetchPullRequestComments(token: "token", reference: reference)
 
         XCTAssertEqual(after, before)
+        do {
+            try await api.deletePendingReview(token: "token", reviewID: reviewID)
+            XCTFail("Expected an error")
+        } catch {
+            XCTAssertEqual((error as? GraphQLError)?.isNotFound, true, "Like GitHub, a deleted review isn't found")
+        }
     }
 
     func testMockHandlesConcurrentPreloading() async throws {

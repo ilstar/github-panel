@@ -590,12 +590,12 @@ struct PullRequestFilesView: View {
                             submitTitle: "Start a review",
                             onCancel: { composingAnchor = nil },
                             onSubmit: { body in
-                                try await viewModel.addToReview(.thread(body: body, anchor: anchor))
+                                viewModel.addToReview(.thread(body: body, anchor: anchor))
                                 composingAnchor = nil
                             },
                             secondaryTitle: "Add single comment",
                             onSecondarySubmit: { body in
-                                try await viewModel.postInlineComment(body, at: anchor)
+                                viewModel.postInlineComment(body, at: anchor)
                                 composingAnchor = nil
                             })
         case .addToReview, .single:
@@ -603,7 +603,7 @@ struct PullRequestFilesView: View {
                             submitTitle: mode == .addToReview ? "Add review comment" : "Comment",
                             onCancel: { composingAnchor = nil },
                             onSubmit: { body in
-                                try await viewModel.postInlineComment(body, at: anchor)
+                                viewModel.postInlineComment(body, at: anchor)
                                 composingAnchor = nil
                             })
         }
@@ -645,7 +645,7 @@ struct PullRequestFilesView: View {
                          isReviewPending: viewModel.isReviewPending,
                          resolveStatus: viewModel.status(of: .threadResolved(threadID: thread.id)),
                          commentStatus: { viewModel.status(of: $0) },
-                         onReply: { body in try await viewModel.reply(body, to: thread) },
+                         onReply: { body in viewModel.reply(body, to: thread) },
                          onSetResolved: { resolved in viewModel.setResolved(resolved, thread: thread) })
     }
 

@@ -39,11 +39,11 @@ struct PullRequestDetailView: View {
                                          } : nil,
                                          isReviewing: $isReviewing,
                                          onSubmitReview: viewModel.canReview ? { event, body in
-                                             try await viewModel.submitReview(event, body: body)
+                                             viewModel.submitReview(event, body: body)
                                          } : nil,
                                          pendingCommentCount: viewModel.pendingCommentCount,
                                          onDiscardReview: viewModel.isReviewPending ? {
-                                             try await viewModel.discardPendingReview()
+                                             viewModel.discardPendingReview()
                                          } : nil,
                                          mergeAction: mergeAction)
                     .padding(.leading, 24)
@@ -76,6 +76,14 @@ struct PullRequestDetailView: View {
                             .padding(.horizontal, Self.headerInset(for: selectedTab))
                             .padding(.bottom, 10)
                     }
+
+                    ForEach(viewModel.failedReviewDiscards) { change in
+                        if let failure = FailedChangeNotice(viewModel.status(of: change)) {
+                            failure
+                                .padding(.horizontal, Self.headerInset(for: selectedTab))
+                                .padding(.bottom, 8)
+                        }
+                    }
                 }
                 .frame(maxWidth: Self.headerMaxWidth(for: selectedTab), alignment: .leading)
                 .frame(maxWidth: .infinity)
@@ -91,7 +99,7 @@ struct PullRequestDetailView: View {
                 switch selectedTab {
                 case .conversation:
                     PullRequestConversationView(detail: content.detail,
-                                                comments: viewModel.comments?.comments,
+                                                comments: viewModel.comments?.timeline,
                                                 earlierCommentCount: viewModel.comments?.earlierCommentCount ?? 0,
                                                 isLoadingEarlierComments: viewModel.isLoadingMoreComments,
                                                 onLoadEarlierComments: { Task { await viewModel.loadEarlierComments() } },
@@ -231,11 +239,11 @@ struct PullRequestDetailToolbar: View {
     /// Whether the review form is open over the Review button.
     @Binding var isReviewing: Bool
     /// Submits a review. Nil when you cannot review this pull request, such as your own.
-    var onSubmitReview: ((PullRequestReviewEvent, String) async throws -> Void)?
+    var onSubmitReview: ((PullRequestReviewEvent, String) -> Void)?
     /// Draft comments in the pending review, shown on the Review button.
     var pendingCommentCount = 0
     /// Discards the pending review. Nil when no review is pending.
-    var onDiscardReview: (() async throws -> Void)?
+    var onDiscardReview: (() -> Void)?
     /// Merge, Add to queue, Mark ready or auto-merge. Nil outside My PRs.
     var mergeAction: PullRequestMergeAction?
 
@@ -294,12 +302,12 @@ struct PullRequestDetailToolbar: View {
                     ReviewComposer(pendingCommentCount: pendingCommentCount,
                                    onCancel: { isReviewing = false },
                                    onSubmit: { event, body in
-                                       try await onSubmitReview(event, body)
+                                       onSubmitReview(event, body)
                                        isReviewing = false
                                    },
                                    onDiscard: onDiscardReview.map { discard in
                                        {
-                                           try await discard()
+                                           discard()
                                            isReviewing = false
                                        }
                                    })
@@ -834,7 +842,7 @@ struct PullRequestStateBadge: View {
 
 struct PullRequestConversationView: View {
     let detail: PullRequestDetail
-    /// General comments, oldest first. Nil while they load.
+    /// General comments and submitted reviews, oldest first. Nil while they load.
     let comments: [PullRequestComment]?
     /// Comments older than `comments` that have not loaded.
     var earlierCommentCount = 0

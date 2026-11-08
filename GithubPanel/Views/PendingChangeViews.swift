@@ -7,7 +7,7 @@ struct ChangeStatus {
     var failure: String?
     var retry: () -> Void = {}
     var discard: () -> Void = {}
-    /// A comment's text, which a failed comment offers to copy.
+    /// A comment's or review's text, which a failed one offers to copy.
     var text: String?
 
     var isSaving: Bool { failure == nil }
@@ -20,15 +20,13 @@ extension PullRequestDetailViewModel {
     }
 
     func status(of change: PendingChange) -> ChangeStatus {
-        var text: String?
-        if case .comment(let comment, _) = change.kind { text = comment.body }
-        return ChangeStatus(failure: change.state == .failed ? change.error ?? "Couldn't save this change." : nil,
-                            retry: { [weak self] in self?.retry(change) },
-                            discard: { [weak self] in self?.discard(change) },
-                            text: text)
+        ChangeStatus(failure: change.state == .failed ? change.error ?? "Couldn't save this change." : nil,
+                     retry: { [weak self] in self?.retry(change) },
+                     discard: { [weak self] in self?.discard(change) },
+                     text: change.kind.text)
     }
 
-    /// How a comment the viewer posted is doing, nil once GitHub confirmed it or for anyone else's comment.
+    /// How a comment or review the viewer posted is doing, nil once GitHub confirmed it or for anyone else's.
     func status(of comment: PullRequestComment) -> ChangeStatus? {
         guard let id = comment.pendingChangeID, let change = pendingChanges.first(where: { $0.id == id }) else {
             return nil

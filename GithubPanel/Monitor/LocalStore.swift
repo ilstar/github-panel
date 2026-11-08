@@ -250,15 +250,15 @@ extension LocalStore {
 
 extension LocalStore {
     /// The saved changes, oldest first. Ones that were sending when the app quit are pending again when sending them
-    /// twice is safe. Comments that were waiting or sending fail instead, since one may have posted, and ones GitHub
-    /// posted are dropped, since the next load shows them. Rows that no longer decode are left out.
+    /// twice is safe. Comments and reviews that were waiting or sending fail instead, since one may have posted, and
+    /// ones GitHub posted or started are dropped, since the next load shows them. Rows that no longer decode are left out.
     func pendingChanges() async -> [PendingChange] {
         (try? await database.write { db -> [PendingChange] in
             var changes: [PendingChange] = []
             for row in try Row.fetchAll(db, sql: "SELECT * FROM pending_change ORDER BY createdAt") {
                 guard let saved = Self.pendingChange(from: row) else { continue }
                 var change = saved
-                if change.postedCommentID != nil {
+                if change.wasPosted {
                     try db.execute(sql: "DELETE FROM pending_change WHERE id = ?", arguments: [change.id.uuidString])
                     continue
                 }

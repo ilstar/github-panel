@@ -3,21 +3,12 @@ import Combine
 
 /// Shows one pull request's detail and changed files for the detail window.
 /// Starts from the shared cache when it has the pull request, asks the sync engine to reload it,
-/// and shows what the engine saves to the cache. Edits, viewed marks, resolved threads, review requests and comments
-/// are pending changes: they show right away, and the engine sends them.
+/// and shows what the engine saves to the cache. Edits, viewed marks, resolved threads, review requests, comments and
+/// reviews are pending changes: they show right away, and the engine sends them.
 @MainActor
 final class PullRequestDetailViewModel: ObservableObject {
-    typealias SubmitReview = (NewPullRequestReview, PullRequestReference) async throws -> Void
     /// Merges the base branch into the head branch: the pull request's node ID and the head commit it expects.
     typealias UpdateBranch = (String, String) async throws -> Void
-    /// Starts a pending review: the pull request's node ID and the head commit. Returns the review's node ID.
-    typealias StartPendingReview = (String, String) async throws -> String
-    /// Adds a draft comment to the pending review with the given node ID.
-    typealias AddPendingComment = (PendingReviewComment, String) async throws -> Void
-    /// Submits the pending review with the given node ID, its verdict, and its message.
-    typealias SubmitPendingReview = (String, PullRequestReviewEvent, String) async throws -> Void
-    /// Discards the pending review with the given node ID.
-    typealias DeletePendingReview = (String) async throws -> Void
     /// Runs failed checks again in the given repository.
     typealias RerunChecks = (CheckRerun, String) async throws -> Void
     /// Users and teams the reviewer picker offers for a search.
@@ -48,7 +39,7 @@ final class PullRequestDetailViewModel: ObservableObject {
     @Published private(set) var threadIndexes: [String: ReviewThreadIndex] = [:]
     /// Whether earlier comments or more review threads are loading.
     @Published private(set) var isLoadingMoreComments = false
-    /// The verdict of the review submitted from this view, once GitHub accepts it.
+    /// The verdict of the review submitted from this view. Shows right away, and goes if GitHub refuses the review.
     @Published private(set) var submittedReview: PullRequestReviewEvent?
     /// Whether an Update branch request is in flight.
     @Published private(set) var isUpdatingBranch = false
@@ -64,17 +55,14 @@ final class PullRequestDetailViewModel: ObservableObject {
     @Published private(set) var isLoadingChangesSinceLastReview = false
 
     private let engine: SyncEngine
-    private let sendReview: SubmitReview
     private let sendUpdateBranch: UpdateBranch
-    private let sendStartPendingReview: StartPendingReview
-    private let sendPendingComment: AddPendingComment
-    private let sendSubmitPendingReview: SubmitPendingReview
-    private let sendDeletePendingReview: DeletePendingReview
     private let sendRerun: RerunChecks
     private let fetchCandidates: FetchReviewerCandidates
     private let searchMentions: SearchMentionCandidates
     /// The pending review started here, until the comments reload with it. Keeps a failed reload from starting a second one.
     private var startedReviewID: String?
+    /// The change submitting the review from this view, and its verdict.
+    private var submittedReviewChange: (id: UUID, event: PullRequestReviewEvent)?
     /// How much of the discussion loads. Reloads keep what the "more" buttons added.
     private var commentLimits = PullRequestCommentLimits()
     private let cache: PullRequestDetailCache
@@ -103,23 +91,13 @@ final class PullRequestDetailViewModel: ObservableObject {
     /// Loads through `engine`, and shows what it saves to the engine's cache.
     init(reference: PullRequestReference,
          engine: SyncEngine,
-         submitReview: @escaping SubmitReview = { _, _ in },
          updateBranch: @escaping UpdateBranch = { _, _ in },
-         startPendingReview: @escaping StartPendingReview = { _, _ in "" },
-         addPendingComment: @escaping AddPendingComment = { _, _ in },
-         submitPendingReview: @escaping SubmitPendingReview = { _, _, _ in },
-         deletePendingReview: @escaping DeletePendingReview = { _ in },
          rerunChecks: @escaping RerunChecks = { _, _ in },
          fetchReviewerCandidates: @escaping FetchReviewerCandidates = { _, _ in [] },
          searchMentionCandidates: @escaping SearchMentionCandidates = { _, _ in [] }) {
         self.reference = reference
         self.engine = engine
-        self.sendReview = submitReview
         self.sendUpdateBranch = updateBranch
-        self.sendStartPendingReview = startPendingReview
-        self.sendPendingComment = addPendingComment
-        self.sendSubmitPendingReview = submitPendingReview
-        self.sendDeletePendingReview = deletePendingReview
         self.sendRerun = rerunChecks
         self.fetchCandidates = fetchReviewerCandidates
         self.searchMentions = searchMentionCandidates
@@ -145,6 +123,8 @@ final class PullRequestDetailViewModel: ObservableObject {
             self.apply(entry.content)
             self.commentLimits = entry.commentLimits
             if let comments = entry.comments, comments != self.comments { self.apply(comments) }
+            self.noteStartedReview()
+            self.updateSubmittedReview()
             self.checks = entry.checks
             if let files = entry.filesSinceLastReview, let range = self.reviewRange,
                files != self.filesSinceLastReview {
@@ -161,23 +141,8 @@ final class PullRequestDetailViewModel: ObservableObject {
     convenience init(reference: PullRequestReference, monitor: PRMonitor) {
         self.init(reference: reference,
                   engine: monitor.syncEngine,
-                  submitReview: { [monitor] review, reference in
-                      try await monitor.submitReview(review, on: reference)
-                  },
                   updateBranch: { [monitor] pullRequestID, headSHA in
                       try await monitor.updatePullRequestBranch(pullRequestID: pullRequestID, expectedHeadSHA: headSHA)
-                  },
-                  startPendingReview: { [monitor] pullRequestID, commitID in
-                      try await monitor.startPendingReview(pullRequestID: pullRequestID, commitID: commitID)
-                  },
-                  addPendingComment: { [monitor] comment, reviewID in
-                      try await monitor.addPendingReviewComment(comment, reviewID: reviewID)
-                  },
-                  submitPendingReview: { [monitor] reviewID, event, body in
-                      try await monitor.submitPendingReview(reviewID: reviewID, event: event, body: body)
-                  },
-                  deletePendingReview: { [monitor] reviewID in
-                      try await monitor.deletePendingReview(reviewID: reviewID)
                   },
                   rerunChecks: { [monitor] rerun, repoFullName in
                       try await monitor.rerunChecks(rerun, in: repoFullName)
@@ -387,14 +352,24 @@ final class PullRequestDetailViewModel: ObservableObject {
         pendingChanges.last { $0.kind.field == field }
     }
 
-    /// Sends a failed change again.
+    /// Sends a failed change again. A change to a pending review that didn't start tries starting it again first,
+    /// unless GitHub now has one, which the change joins instead, since GitHub allows one pending review at a time.
     func retry(_ change: PendingChange) {
+        if case .startedBy(let startID)? = change.kind.reviewTarget,
+           let start = pendingChanges.first(where: { $0.id == startID }), start.state == .failed {
+            if let reviewID = cache.entry(for: reference)?.comments?.pendingReviewID {
+                cache.useReview(reviewID, forChangesStartedBy: startID)
+            } else {
+                cache.markPending(startID)
+            }
+        }
         cache.markPending(change.id)
         sendPendingChanges()
     }
 
     /// Drops a change, putting back what GitHub last returned.
     func discard(_ change: PendingChange) {
+        if change.id == submittedReviewChange?.id { submittedReviewChange = nil }
         cache.discard(change.id)
     }
 
@@ -424,61 +399,109 @@ final class PullRequestDetailViewModel: ObservableObject {
         startedReviewID ?? comments?.pendingReviewID
     }
 
+    /// Where a new draft goes: the viewer's pending review, or the one a change is starting. Nil when there's none,
+    /// or when starting one failed, so the next draft starts a new one.
+    var pendingReviewTarget: PendingChange.ReviewTarget? {
+        pendingReviewID.map { .review(id: $0) } ?? startingReview
+    }
+
+    /// The pending review the newest `startReview` change is starting or started, unless that failed, or a later
+    /// change submits or discards the review.
+    private var startingReview: PendingChange.ReviewTarget? {
+        guard let start = pendingChanges.last(where: { change in
+            guard case .startReview = change.kind else { return false }
+            return change.state != .failed
+        }), case .startReview(_, _, let reviewID) = start.kind else { return nil }
+        let targets: [PendingChange.ReviewTarget] = [.startedBy(start.id)] + (reviewID.map { [.review(id: $0)] } ?? [])
+        let isEnded = pendingChanges.contains { change in
+            switch change.kind {
+            case .submitPendingReview(let target, _, _, _), .discardPendingReview(let target):
+                return targets.contains(target)
+            default:
+                return false
+            }
+        }
+        guard !isEnded else { return nil }
+        return reviewID.map { .review(id: $0) } ?? .startedBy(start.id)
+    }
+
     /// Draft comments waiting in the pending review.
     var pendingCommentCount: Int {
         comments?.pendingCommentCount ?? 0
     }
 
-    /// Submits a review of the head commit that was loaded, publishing any draft comments with it.
-    /// Throws when GitHub refuses it, so the form can keep the draft.
-    func submitReview(_ event: PullRequestReviewEvent, body: String) async throws {
+    /// Submits a review of the head commit that was loaded, publishing any draft comments with it. It shows right
+    /// away in the Activity list, and as the verdict above it, so the form can close. If GitHub refuses it, it stays
+    /// in the list as failed, with its text, Retry and Discard.
+    func submitReview(_ event: PullRequestReviewEvent, body: String) {
         guard canReview, let commitID = content?.detail.headSHA else { return }
         let body = body.trimmingCharacters(in: .whitespacesAndNewlines)
         guard ReviewComposer.canSubmit(event, text: body, pendingCommentCount: pendingCommentCount) else { return }
-        if let reviewID = pendingReviewID {
-            try await sendSubmitPendingReview(reviewID, event, body)
-            submittedReview = event
-            await reloadCommentsAfterReviewChange()
+        let change: PendingChange
+        if let target = pendingReviewTarget {
+            change = cache.add(.submitPendingReview(review: target, event: event, body: body, authorLogin: viewerLogin),
+                               to: reference)
         } else {
-            try await sendReview(NewPullRequestReview(event: event, body: body, commitID: commitID), reference)
-            submittedReview = event
+            change = cache.add(.review(NewPullRequestReview(event: event, body: body, commitID: commitID),
+                                       authorLogin: viewerLogin), to: reference)
         }
+        startedReviewID = nil
+        submittedReviewChange = (change.id, event)
+        updateSubmittedReview()
+        sendPendingChanges()
     }
 
-    /// Discards the pending review and its draft comments. Throws when GitHub refuses, so the form can show the error.
-    func discardPendingReview() async throws {
-        guard let reviewID = pendingReviewID else { return }
-        try await sendDeletePendingReview(reviewID)
-        await reloadCommentsAfterReviewChange()
+    /// Discards the pending review and its draft comments, which disappear right away. If GitHub refuses, the error
+    /// shows above the conversation, with Retry and Discard.
+    func discardPendingReview() {
+        guard let target = pendingReviewTarget else { return }
+        startedReviewID = nil
+        if case .startedBy(let startID) = target,
+           let start = pendingChanges.first(where: { $0.id == startID }), start.state == .pending {
+            // GitHub wasn't asked to start it yet, so dropping it and its drafts here is enough.
+            cache.discardReview(startedBy: startID)
+            return
+        }
+        cache.add(.discardPendingReview(review: target), to: reference)
+        sendPendingChanges()
     }
 
-    /// Adds a draft comment to the pending review, starting one on the loaded head commit if there is none yet.
-    /// Throws when GitHub refuses, so the composer can keep the draft.
-    func addToReview(_ comment: PendingReviewComment) async throws {
+    /// Adds a draft comment to the pending review, starting one on the loaded head commit if there is none yet. The
+    /// draft shows right away in its place, marked as pending, so the composer can clear. The engine sends the start
+    /// first and passes the review it started to the draft.
+    func addToReview(_ comment: PendingReviewComment) {
         guard canReview, let detail = content?.detail else { return }
-        let reviewID: String
-        if let pendingReviewID {
-            reviewID = pendingReviewID
-        } else {
-            reviewID = try await sendStartPendingReview(detail.nodeID, detail.headSHA)
+        let target = pendingReviewTarget ?? .startedBy(
+            cache.add(.startReview(pullRequestID: detail.nodeID, commitID: detail.headSHA, reviewID: nil),
+                      to: reference).id)
+        cache.add(.reviewComment(comment, review: target, authorLogin: viewerLogin), to: reference)
+        sendPendingChanges()
+    }
+
+    /// Keeps the review this view started until the comments reload with it, so a failed reload doesn't start a
+    /// second one.
+    private func noteStartedReview() {
+        if comments?.pendingReviewID == nil, case .review(let reviewID)? = startingReview {
             startedReviewID = reviewID
         }
-        try await sendPendingComment(comment, reviewID)
-        do {
-            try await reloadComments()
-        } catch {
-            // The draft was saved; only the refresh failed.
-            errorMessage = error.localizedDescription
-        }
     }
 
-    /// Reloads the comments once the pending review is gone, so its drafts show as published or disappear.
-    private func reloadCommentsAfterReviewChange() async {
-        startedReviewID = nil
-        do {
-            try await reloadComments()
-        } catch {
-            errorMessage = error.localizedDescription
+    /// Shows the verdict of the review submitted here, unless GitHub refused it.
+    private func updateSubmittedReview() {
+        guard let submitted = submittedReviewChange else {
+            submittedReview = nil
+            return
+        }
+        let change = pendingChanges.first { $0.id == submitted.id }
+        let event = change?.state == .failed ? nil : submitted.event
+        if event != submittedReview { submittedReview = event }
+    }
+
+    /// Discards of the pending review GitHub refused, to show with Retry and Discard.
+    var failedReviewDiscards: [PendingChange] {
+        pendingChanges.filter { change in
+            guard change.state == .failed, case .discardPendingReview = change.kind else { return false }
+            return true
         }
     }
 
@@ -541,14 +564,14 @@ final class PullRequestDetailViewModel: ObservableObject {
 
     /// Whether new comments on the diff join the pending review instead of posting right away, like on GitHub once a review is started.
     var isReviewPending: Bool {
-        canReview && pendingReviewID != nil
+        canReview && pendingReviewTarget != nil
     }
 
     /// Posts a new review thread on a diff line, against the head commit that was loaded, which shows right away.
-    /// Joins the pending review instead when one is started, which throws when GitHub refuses.
-    func postInlineComment(_ body: String, at anchor: DiffCommentAnchor) async throws {
+    /// Joins the pending review instead when one is started.
+    func postInlineComment(_ body: String, at anchor: DiffCommentAnchor) {
         if isReviewPending {
-            try await addToReview(.thread(body: body, anchor: anchor))
+            addToReview(.thread(body: body, anchor: anchor))
             return
         }
         guard let commitID = content?.detail.headSHA else { return }
@@ -556,9 +579,9 @@ final class PullRequestDetailViewModel: ObservableObject {
     }
 
     /// Replies to a thread, which shows right away, or as a draft in the pending review when one is started.
-    func reply(_ body: String, to thread: ReviewThread) async throws {
+    func reply(_ body: String, to thread: ReviewThread) {
         if isReviewPending {
-            try await addToReview(.reply(body: body, threadID: thread.id))
+            addToReview(.reply(body: body, threadID: thread.id))
             return
         }
         guard let first = thread.comments.first else { return }
@@ -575,10 +598,6 @@ final class PullRequestDetailViewModel: ObservableObject {
 
     func threadIndex(for filename: String) -> ReviewThreadIndex {
         threadIndexes[filename] ?? ReviewThreadIndex(threads: [])
-    }
-
-    private func reloadComments() async throws {
-        try await engine.request(.comments(reference, commentLimits))
     }
 
     /// Loads the next older general comments, which show above the ones loaded.

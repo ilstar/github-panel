@@ -11,9 +11,9 @@ saves what comes back into the database, and the UI updates from there.
    └──── request(refresh / change, priority) ─────────┘
 ```
 
-## Where we start
+## Starting point
 
-The app is already partway there:
+Before this plan, the app was partway there:
 
 - `PullRequestDetailCache` keeps up to 100 PRs (detail, files, comments,
   checks), saves them to one JSON file in Caches, and publishes `updates`.
@@ -25,42 +25,42 @@ The app is already partway there:
 - `PullRequestDetailViewModel.setTask` is optimistic: it updates the body right
   away, chains saves so the last click wins, and rolls back on failure.
 
-What's missing: the fetch, cache, and render logic is mixed together in
+The gap was that fetch, cache, and render logic was mixed together in
 `PRMonitor` (~950 lines) and `PullRequestDetailViewModel` (~700 lines). Requests
-aren't deduped or ordered by priority across callers, and each write handles
-its own optimistic state, or doesn't.
+weren't deduped or ordered by priority across callers, and each write handled
+its own optimistic state, or didn't.
 
 ## Design
 
 ### LocalStore
 
 - SQLite through [GRDB](https://github.com/groue/GRDB.swift), added as a Swift
-  package next to KeyboardShortcuts and Sparkle. GRDB's `ValueObservation`
-  is how views observe "the UI reads from the DB", and GRDB writes run off the
-  main thread.
+  package next to KeyboardShortcuts and Sparkle. The detail and list caches
+  restore from SQLite and publish updates on the main actor; views observe
+  those caches. GRDB writes run off the main thread.
 - One database file in Application Support (`<bundle id>/Store.sqlite`), since
   later steps keep pending changes in it that must survive a restart. Mock mode
   and tests use an in-memory database.
 - Schema changes go through GRDB's `DatabaseMigrator`. If a migration fails,
   delete the file and start over, because everything except pending changes can
   be fetched again.
-- Tables start as JSON blobs keyed by the PR, so models stay `Codable` and step
-  1 can't change behavior. Split a blob into columns only when a query needs it.
+- Tables use JSON blobs keyed by the PR, keeping models `Codable`. Split a blob
+  into columns only when a query needs it.
 
 | Table | Key | Holds |
 |---|---|---|
 | `pull_request_list` | list kind (`open`, `history:<page>`, `reviewRequests`) | rows blob, `savedAt` |
 | `pull_request_detail` | `repoFullName`, `number` | content, comments, comment limits, checks, files since last review (blobs), `lastUsedAt` |
 | `sync_state` | resource key | `fetchedAt`, `lastError`, `lastAttemptAt` |
-| `pending_change` | id | PR key, kind, payload blob, `createdAt`, state (`pending` / `sending` / `failed`), error, `postedCommentID` |
+| `pending_change` | id | PR key, kind, payload blob, `createdAt`, state (`pending` / `sending` / `failed`), error, `postedCommentID` (also used for review IDs) |
 
 The detail table keeps the current limit: the 100 most recently used PRs.
 
 ### SyncEngine
 
-- An actor that owns the `GitHubAPIClient` and the token. It's the only code that
-  calls GitHub, except for live searches (reviewer and @mention autocomplete),
-  which stay direct calls.
+- An actor that owns the `GitHubAPIClient` and reads the current credentials. It
+  loads cached resources and sends pending changes. Live searches (reviewer and
+  @mention autocomplete) and the actions listed below stay direct calls.
 - Callers ask for a resource: `request(.detail(ref), priority: .userVisible)`,
   `.comments(ref, limits)`, `.checks(ref)`, `.changedFiles(...)`, `.openList`,
   `.history(page)`, `.reviewRequests`.
@@ -88,8 +88,8 @@ The detail table keeps the current limit: the 100 most recently used PRs.
 - **Freshness counts only what the cache holds**: `fetchedAt` within `maxAge`
   skips a request only while the cache still has that resource, since it can be
   evicted or emptied after the row was written.
-- Results go into `LocalStore` in one transaction per response. The engine never
-  touches views or view models.
+- Results update the detail or list cache, which publishes to views and saves
+  to `LocalStore`. The engine never touches views or view models.
 
 ### Pending changes (optimistic writes)
 
@@ -101,7 +101,9 @@ refresh landing mid-write can't make the UI flicker back.
 - The engine sends a PR's changes one at a time, in order. Different PRs send
   at the same time.
 - On success, it refetches the affected resource, then writes the new snapshot
-  and deletes the change **in the same transaction**. If the refetch fails, the
+  and deletes the change **in the same transaction**. The refreshed cache publishes
+  first with the overlay still applied; returned IDs suppress duplicate posts.
+  If the refetch fails, the
   change is applied to the cached snapshot instead, so it keeps showing.
 - On failure, the change becomes `failed` with its error. The view shows it
   inline with Retry / Discard, and it stays applied until the user picks one.
@@ -119,6 +121,26 @@ refresh landing mid-write can't make the UI flicker back.
   written on, as GitHub does: once the head moves it shows as outdated rather
   than on a line of the new diff, and if GitHub refuses that commit the error
   says new commits were pushed.
+- **Reviews** use `review`, `startReview`, `reviewComment`,
+  `submitPendingReview` and `discardPendingReview` changes. A submitted review
+  appears immediately in Activity with its verdict and viewer author, and the
+  viewer's reviewer status and `submittedReview` update immediately. Drafts
+  appear on their diff line or thread as part of the pending review. Submit
+  publishes them locally; discard hides them immediately. Failed changes remain
+  applied with Retry / Discard, and review text offers Copy. Composers clear on
+  submit, keeping the text in the change.
+- A pending review's changes share the per-PR send loop. Drafts, submit and
+  discard refer to the start change until GitHub returns its node ID; that ID
+  and the dependent payloads are saved together. A failed start fails its
+  dependents without sending them. Retry starts it again or joins the review a
+  reload found. `startedReviewID` still guards against starting a second review
+  when a reload fails. Discard before an unsent start removes the local group.
+- Review and draft responses supply REST IDs for the same duplicate suppression
+  as comments. Confirm reloads comments and, for submitted reviews, detail and
+  To Review. Activity loads the newest 50 submitted reviews alongside comments;
+  older reviews have no separate pagination. As with comments, a server copy
+  arriving before the mutation response can briefly duplicate an overlay.
+  Ambiguous review writes fail with a "may have" message and reload for inspection.
 - A new change to the same field (title, body, one file's viewed mark, one
   thread, one reviewer) replaces an earlier one that hasn't started sending or
   that failed. One that's sending stays, and the new one sends after it.
@@ -130,20 +152,23 @@ refresh landing mid-write can't make the UI flicker back.
 - After a restart:
   - **Safe to replay** (idempotent: setting a value, not adding one): task
     checkbox, title/body edit, file viewed, resolve thread, reviewer
-    add/remove. These are sent again.
+    add/remove, and pending review discard. These are sent again; GitHub's
+    `NOT_FOUND` for an already-deleted review counts as success.
   - **Not replayed** (posting twice would be wrong): comments, replies, inline
-    comments, reviews. Pending or sending ones become `failed` ("Not sent — the
+    comments, direct review submission, pending review start/add/submit. Pending
+    or sending ones become `failed` ("Not sent — the
     app quit before GitHub answered.") so the user decides. One with a
-    `postedCommentID` was posted, so it's dropped; the next load shows it.
-- **Merge, enqueue, auto-merge, update branch and rerun checks stay direct calls
-  that the user waits on.** Their failures (conflicts, required checks, a stale
+    `postedCommentID` was posted, so it's dropped; a confirmed start is also
+    dropped, with its node ID retained in dependent changes. The next load shows it.
+- **Merge, enqueue, auto-merge, ready for review, update branch and rerun checks
+  stay direct calls that the user waits on.** Their failures (conflicts, required checks, a stale
   head SHA) need an answer right away, and replaying one later is dangerous.
   Only their follow-up refresh goes through the engine.
 
 ### What stays the same
 
-- `GitHubAPIClient`, `GitHubAPI`, and `MockGitHubAPI` keep their shape. The engine
-  wraps them.
+- `GitHubAPIClient`, `GitHubAPI`, and `MockGitHubAPI` remain the API boundary.
+  Comment and review writes return IDs so overlays can identify confirmed posts.
 - Notifications and check hooks stay in `PRMonitor`. It reacts to list changes
   in the store instead of to refresh results.
 - Mock mode (`mise run mock`) keeps working throughout, with an in-memory store.
@@ -177,9 +202,9 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
        checkboxes (replacing `setTask`'s own chaining), title/body edits, file
        viewed, resolve thread, and reviewer add/remove.
 5. [x] **Pending changes, comments.** General comments, replies, and inline
-       comments: they show right away as "sending", composers keep drafts until
-       confirmed, and they aren't replayed after a restart.
-6. [ ] **Pending changes, reviews.** Pending review start/add/submit/discard
+       comments: they show right away as "sending", composers clear on submit and
+       keep text in the pending change, and they aren't replayed after a restart.
+6. [x] **Pending changes, reviews.** Pending review start/add/submit/discard
        and submitted reviews. Merge-related actions stay direct calls (see
        above).
 
@@ -188,8 +213,8 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 - ~~Whether to normalize comments and review threads into their own tables (step 5
   may want per-thread updates), or keep blobs.~~ Resolved in step 5: keep the
   blobs. Comments add to the blob through the overlay, and the posted comment's
-  REST ID is enough to avoid duplicates, so no query needs comment rows. Revisit
-  if step 6 needs per-thread updates the overlay can't express.
+  REST ID is enough to avoid duplicates, so no query needs comment rows. Step 6
+  also keeps blobs: review overlays and returned IDs fit the same model.
 - Whether REST reads should send ETags (`If-None-Match`), which turns unchanged
   responses into 304s that don't count against the rate limit. This would be a
   follow-up to step 2.
@@ -242,3 +267,10 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   commit that's no longer the head shows outdated. Known gap: a comments load sent after GitHub posted the comment
   but landing before its answer shows it twice until that answer arrives. Comment drafts for a pending review stay
   direct calls until step 6.
+- 2026-11-07: Step 6 done; the plan is complete. Direct reviews and pending review start/add/submit/discard now
+  use pending changes, with immediate timeline/verdict/draft overlays and ordered node-ID handoff. Non-idempotent
+  review writes fail after restart instead of replaying, ambiguous failures reload with a warning, and returned
+  review/comment IDs suppress duplicates after confirmation. Discard replays safely and accepts NOT_FOUND.
+  Review composers clear immediately, retaining text for Retry and Copy. Submitted reviews now load into Activity
+  (newest 50); older review pagination remains outside this plan. Merge-related actions stay direct. ETags remain
+  a possible follow-up.

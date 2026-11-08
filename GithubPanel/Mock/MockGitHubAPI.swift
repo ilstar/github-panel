@@ -59,11 +59,25 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
     }
 
     /// Like GitHub, a review answers the request, so the pull request leaves To Review.
-    func submitReview(token: String, reference: PullRequestReference, review: NewPullRequestReview) async throws {
+    @discardableResult
+    func submitReview(token: String, reference: PullRequestReference, review: NewPullRequestReview) async throws -> Int {
         locked {
             reviewRequests = ReviewRequests(fromMe: reviewRequests.fromMe.filter { $0.id != reference.id },
                                             fromMyTeams: reviewRequests.fromMyTeams.filter { $0.id != reference.id })
+            _ = storedComments(for: reference)
+            return appendReview(review.event, body: review.body, to: reference.id)
         }
+    }
+
+    /// Adds a submitted review to the pull request's Activity list. Returns its REST ID.
+    private func appendReview(_ event: PullRequestReviewEvent, body: String, to referenceID: String) -> Int {
+        nextCommentID += 1
+        guard let current = comments[referenceID] else { return nextCommentID }
+        let review = PullRequestComment(id: "mock-review-\(nextCommentID)", databaseID: nextCommentID,
+                                        authorLogin: user.login, body: body, createdAt: Date(), htmlURL: nil,
+                                        reviewState: event.reviewerState)
+        comments[referenceID] = current.adding(review: review)
+        return nextCommentID
     }
 
     func enqueuePullRequest(token: String, pullRequestID: String) async throws {
@@ -217,7 +231,8 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
                                    threads: Array(stored.threads.prefix(limits.threads)),
                                    pendingReviewID: stored.pendingReviewID,
                                    totalCommentCount: stored.comments.count,
-                                   totalThreadCount: stored.threads.count)
+                                   totalThreadCount: stored.threads.count,
+                                   reviews: stored.reviews)
     }
 
     private func storedComments(for reference: PullRequestReference) -> PullRequestComments {
@@ -243,13 +258,14 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
         switch comment {
         case let .general(body):
             comments[reference.id] = PullRequestComments(comments: current.comments + [makeComment(body)],
-                                                         threads: current.threads, pendingReviewID: current.pendingReviewID)
+                                                         threads: current.threads, pendingReviewID: current.pendingReviewID,
+                                                         reviews: current.reviews)
         case let .inline(body, _, anchor):
             let thread = ReviewThread(id: "mock-thread-\(nextCommentID)", path: anchor.path, line: anchor.line,
                                       startLine: nil, side: anchor.side, isResolved: false, isOutdated: false,
                                       comments: [makeComment(body)])
             comments[reference.id] = PullRequestComments(comments: current.comments, threads: current.threads + [thread],
-                                                         pendingReviewID: current.pendingReviewID)
+                                                         pendingReviewID: current.pendingReviewID, reviews: current.reviews)
         case let .reply(body, commentID):
             let threads = current.threads.map { thread in
                 guard thread.comments.first?.databaseID == commentID else { return thread }
@@ -258,7 +274,7 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
                                     comments: thread.comments + [makeComment(body)])
             }
             comments[reference.id] = PullRequestComments(comments: current.comments, threads: threads,
-                                                         pendingReviewID: current.pendingReviewID)
+                                                         pendingReviewID: current.pendingReviewID, reviews: current.reviews)
         }
         return nextCommentID
     }
@@ -271,12 +287,12 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
             let reviewID = "mock-review-\(nextCommentID)"
             pendingReviews[reviewID] = referenceID
             let current = comments[referenceID] ?? Self.makeComments(now: Date())
-            comments[referenceID] = PullRequestComments(comments: current.comments, threads: current.threads, pendingReviewID: reviewID)
+            comments[referenceID] = current.settingPendingReviewID(reviewID)
             return reviewID
         }
     }
 
-    func addPendingReviewComment(token: String, reviewID: String, comment: PendingReviewComment) async throws {
+    func addPendingReviewComment(token: String, reviewID: String, comment: PendingReviewComment) async throws -> Int? {
         try locked {
             guard let referenceID = pendingReviews[reviewID], let current = comments[referenceID] else {
                 throw GraphQLError(message: "Could not resolve to a PullRequestReview.")
@@ -296,12 +312,14 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
                     return thread.replacingComments(thread.comments + [draft])
                 }
             }
-            comments[referenceID] = PullRequestComments(comments: current.comments, threads: threads, pendingReviewID: reviewID)
+            comments[referenceID] = PullRequestComments(comments: current.comments, threads: threads, pendingReviewID: reviewID,
+                                                        reviews: current.reviews)
+            return nextCommentID
         }
     }
 
     /// Publishes the drafts and, like `submitReview`, answers the review request.
-    func submitPendingReview(token: String, reviewID: String, event: PullRequestReviewEvent, body: String) async throws {
+    func submitPendingReview(token: String, reviewID: String, event: PullRequestReviewEvent, body: String) async throws -> Int? {
         try locked {
             guard let referenceID = pendingReviews.removeValue(forKey: reviewID), let current = comments[referenceID] else {
                 throw GraphQLError(message: "Could not resolve to a PullRequestReview.")
@@ -313,22 +331,25 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
                     return comment
                 })
             }
-            comments[referenceID] = PullRequestComments(comments: current.comments, threads: threads)
+            comments[referenceID] = PullRequestComments(comments: current.comments, threads: threads,
+                                                        reviews: current.reviews)
             reviewRequests = ReviewRequests(fromMe: reviewRequests.fromMe.filter { $0.id != referenceID },
                                             fromMyTeams: reviewRequests.fromMyTeams.filter { $0.id != referenceID })
+            return appendReview(event, body: body, to: referenceID)
         }
     }
 
     func deletePendingReview(token: String, reviewID: String) async throws {
         try locked {
             guard let referenceID = pendingReviews.removeValue(forKey: reviewID), let current = comments[referenceID] else {
-                throw GraphQLError(message: "Could not resolve to a PullRequestReview.")
+                throw GraphQLError(message: "Could not resolve to a PullRequestReview.", type: "NOT_FOUND")
             }
             let threads = current.threads.compactMap { thread -> ReviewThread? in
                 let published = thread.comments.filter { !$0.isPending }
                 return published.isEmpty ? nil : thread.replacingComments(published)
             }
-            comments[referenceID] = PullRequestComments(comments: current.comments, threads: threads)
+            comments[referenceID] = PullRequestComments(comments: current.comments, threads: threads,
+                                                        reviews: current.reviews)
         }
     }
 
@@ -342,7 +363,7 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
                                         comments: thread.comments)
                 }
                 comments[id] = PullRequestComments(comments: current.comments, threads: threads,
-                                                   pendingReviewID: current.pendingReviewID)
+                                                   pendingReviewID: current.pendingReviewID, reviews: current.reviews)
             }
         }
     }
@@ -785,10 +806,4 @@ private extension PullRequestRow {
     }
 }
 
-private extension ReviewThread {
-    func replacingComments(_ comments: [PullRequestComment]) -> ReviewThread {
-        ReviewThread(id: id, path: path, line: line, startLine: startLine, side: side,
-                     isResolved: isResolved, isOutdated: isOutdated, comments: comments)
-    }
-}
 #endif

@@ -17,6 +17,11 @@ struct PullRequestCommentView: View {
                     ThreadBadge(text: "Pending")
                         .help("A draft in your pending review. Only you can see it until you submit the review.")
                 }
+                if let state = comment.reviewState {
+                    Text(Self.verdict(state))
+                        .prFont(.callout, weight: .medium)
+                        .foregroundStyle(Self.verdictColor(state))
+                }
                 if let sendStatus {
                     Text(sendStatus.isSaving ? "sending…" : "not sent")
                         .prFont(.callout)
@@ -25,7 +30,7 @@ struct PullRequestCommentView: View {
                         SavingIndicator()
                     }
                 } else {
-                    Text("commented \(comment.createdAt.formatted(.relative(presentation: .named)))")
+                    Text("\(comment.reviewState == nil ? "commented " : "")\(comment.createdAt.formatted(.relative(presentation: .named)))")
                         .prFont(.callout)
                         .foregroundStyle(.secondary)
                         .help(comment.createdAt.formatted(date: .abbreviated, time: .shortened))
@@ -42,11 +47,14 @@ struct PullRequestCommentView: View {
                     .help("Open comment on GitHub")
                 }
             }
-            CollapsibleCommentBody {
-                MarkdownView(markdown: comment.body)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            // A review can be just a verdict.
+            if !comment.body.isEmpty || comment.reviewState == nil {
+                CollapsibleCommentBody {
+                    MarkdownView(markdown: comment.body)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .opacity(sendStatus?.isSaving == true ? 0.6 : 1)
             }
-            .opacity(sendStatus?.isSaving == true ? 0.6 : 1)
             if let failure = FailedChangeNotice(sendStatus) {
                 failure
             }
@@ -56,6 +64,24 @@ struct PullRequestCommentView: View {
     /// The viewer's unsent comment has no login until My PRs first loads.
     static func authorName(_ comment: PullRequestComment) -> String {
         comment.authorLogin.isEmpty ? "You" : comment.authorLogin
+    }
+
+    /// A review's verdict, worded like GitHub's timeline.
+    static func verdict(_ state: PullRequestReviewer.State) -> String {
+        switch state {
+        case .approved: return "approved these changes"
+        case .changesRequested: return "requested changes"
+        case .commented, .pending: return "reviewed"
+        case .dismissed: return "reviewed (dismissed)"
+        }
+    }
+
+    private static func verdictColor(_ state: PullRequestReviewer.State) -> Color {
+        switch state {
+        case .approved: return Theme.green
+        case .changesRequested: return .red
+        case .commented, .pending, .dismissed: return .secondary
+        }
     }
 }
 
@@ -115,9 +141,8 @@ struct CollapsibleCommentBody<Content: View>: View {
     }
 }
 
-/// A text box for writing a comment. Clears once `onSubmit` returns: a posted comment shows in its place right away and
-/// keeps its text until GitHub confirms it. Keeps the draft and shows the error when `onSubmit` throws, such as when
-/// GitHub refuses a draft for the pending review.
+/// A text box for writing a comment. Clears once `onSubmit` returns: a posted comment or review draft shows in its place
+/// right away and keeps its text until GitHub confirms it. Keeps the draft and shows the error when `onSubmit` throws.
 struct CommentComposer: View {
     enum Style {
         /// A bordered box with its buttons underneath, for replies and comments on diff lines.

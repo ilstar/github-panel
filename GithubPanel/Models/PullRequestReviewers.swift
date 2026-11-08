@@ -156,6 +156,21 @@ struct PullRequestReviewers: Equatable, Codable {
                                     reviewers: reviewers.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending })
     }
 
+    /// The list once the viewer's review lands, before it reloads: it answers their request and shows their verdict.
+    /// A plain comment doesn't replace an earlier approval or change request, as on GitHub.
+    func settingReview(by login: String, state: PullRequestReviewer.State) -> PullRequestReviewers {
+        let id = PullRequestReviewer.id(name: login, kind: .user)
+        let existing = reviewers.first { $0.id == id }
+        if state == .commented, let existing, existing.state == .approved || existing.state == .changesRequested {
+            return self
+        }
+        var reviewers = reviewers.filter { $0.id != id }
+        reviewers.append(PullRequestReviewer(name: existing?.name ?? login, kind: .user, state: state,
+                                             isCodeOwner: existing?.isCodeOwner ?? false))
+        return PullRequestReviewers(decision: decision,
+                                    reviewers: reviewers.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending })
+    }
+
     var approvals: Int { reviewers.filter { $0.state == .approved }.count }
     var changeRequests: Int { reviewers.filter { $0.state == .changesRequested }.count }
     var pendingCount: Int { reviewers.filter { $0.state == .pending }.count }

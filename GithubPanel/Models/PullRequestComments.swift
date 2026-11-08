@@ -14,6 +14,8 @@ struct PullRequestComment: Identifiable, Equatable, Codable {
     var isPending = false
     /// The viewer's comment GitHub hasn't confirmed yet: the pending change that shows it. Nil for GitHub's comments.
     var pendingChangeID: UUID?
+    /// A submitted review's verdict, for a review in the Activity list. Nil for a comment.
+    var reviewState: PullRequestReviewer.State?
 }
 
 /// Which side of the diff a review comment sits on: `left` is the old file, `right` is the new file.
@@ -87,6 +89,11 @@ struct ReviewThread: Identifiable, Equatable, Codable {
         ReviewThread(id: id, path: path, line: line, startLine: startLine, side: side, isResolved: isResolved,
                      isOutdated: isOutdated, comments: comments)
     }
+
+    func replacingComments(_ comments: [PullRequestComment]) -> ReviewThread {
+        ReviewThread(id: id, path: path, line: line, startLine: startLine, side: side,
+                     isResolved: isResolved, isOutdated: isOutdated, comments: comments)
+    }
 }
 
 /// How much of a pull request's discussion to load. A busy pull request loads part of it, and the "more"
@@ -125,14 +132,28 @@ struct PullRequestComments: Equatable, Codable {
     let totalCommentCount: Int
     /// How many review threads the pull request has, loaded or not.
     let totalThreadCount: Int
+    /// The newest submitted reviews, oldest first, each with its verdict. They show in the Activity list.
+    let reviews: [PullRequestComment]
 
     init(comments: [PullRequestComment], threads: [ReviewThread], pendingReviewID: String? = nil,
-         totalCommentCount: Int? = nil, totalThreadCount: Int? = nil) {
+         totalCommentCount: Int? = nil, totalThreadCount: Int? = nil, reviews: [PullRequestComment] = []) {
         self.comments = comments
         self.threads = threads
         self.pendingReviewID = pendingReviewID
         self.totalCommentCount = max(totalCommentCount ?? 0, comments.count)
         self.totalThreadCount = max(totalThreadCount ?? 0, threads.count)
+        self.reviews = reviews
+    }
+
+    /// Comments saved before reviews were loaded with them have none.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        comments = try container.decode([PullRequestComment].self, forKey: .comments)
+        threads = try container.decode([ReviewThread].self, forKey: .threads)
+        pendingReviewID = try container.decodeIfPresent(String.self, forKey: .pendingReviewID)
+        totalCommentCount = try container.decode(Int.self, forKey: .totalCommentCount)
+        totalThreadCount = try container.decode(Int.self, forKey: .totalThreadCount)
+        reviews = try container.decodeIfPresent([PullRequestComment].self, forKey: .reviews) ?? []
     }
 
     static let empty = PullRequestComments(comments: [], threads: [])
@@ -152,44 +173,91 @@ struct PullRequestComments: Equatable, Codable {
         threads.reduce(0) { $0 + $1.comments.filter(\.isPending).count }
     }
 
-    func settingThread(_ threadID: String, resolved: Bool) -> PullRequestComments {
-        PullRequestComments(comments: comments,
-                            threads: threads.map { $0.id == threadID ? $0.settingResolved(resolved) : $0 },
-                            pendingReviewID: pendingReviewID, totalCommentCount: totalCommentCount,
-                            totalThreadCount: totalThreadCount)
+    /// General comments and submitted reviews, oldest first, as the Activity list shows them. While earlier comments
+    /// aren't loaded, reviews from before the loaded ones are left out, so nothing shows out of order.
+    var timeline: [PullRequestComment] {
+        let start = earlierCommentCount > 0 ? comments.first?.createdAt : nil
+        let shownReviews = reviews.filter { review in start.map { review.createdAt >= $0 } ?? true }
+        guard !shownReviews.isEmpty else { return comments }
+        // A stable merge, so a comment and a review made in the same instant keep their order.
+        return (comments + shownReviews).enumerated()
+            .sorted { ($0.element.createdAt, $0.offset) < ($1.element.createdAt, $1.offset) }
+            .map(\.element)
     }
 
-    /// Whether a loaded general comment or thread comment has this REST ID.
+    func settingThread(_ threadID: String, resolved: Bool) -> PullRequestComments {
+        replacing(threads: threads.map { $0.id == threadID ? $0.settingResolved(resolved) : $0 })
+    }
+
+    /// Whether a loaded general comment, thread comment, or review has this REST ID.
     func contains(databaseID: Int) -> Bool {
         comments.contains { $0.databaseID == databaseID }
             || threads.contains { $0.comments.contains { $0.databaseID == databaseID } }
+            || reviews.contains { $0.databaseID == databaseID }
     }
 
     /// A new general comment, after the loaded ones.
     func adding(_ comment: PullRequestComment) -> PullRequestComments {
-        PullRequestComments(comments: comments + [comment], threads: threads, pendingReviewID: pendingReviewID,
-                            totalCommentCount: totalCommentCount + 1, totalThreadCount: totalThreadCount)
+        replacing(comments: comments + [comment], totalCommentCount: totalCommentCount + 1)
     }
 
     /// A new review thread, after the loaded ones.
     func adding(_ thread: ReviewThread) -> PullRequestComments {
-        PullRequestComments(comments: comments, threads: threads + [thread], pendingReviewID: pendingReviewID,
-                            totalCommentCount: totalCommentCount, totalThreadCount: totalThreadCount + 1)
+        replacing(threads: threads + [thread], totalThreadCount: totalThreadCount + 1)
     }
 
     /// A reply at the end of the thread whose first comment has the REST ID `commentID`. Unchanged when that thread
     /// isn't loaded.
     func adding(_ reply: PullRequestComment, toThreadStartedBy commentID: Int) -> PullRequestComments {
-        PullRequestComments(comments: comments,
-                            threads: threads.map { thread in
-                                guard thread.comments.first?.databaseID == commentID else { return thread }
-                                return ReviewThread(id: thread.id, path: thread.path, line: thread.line,
-                                                    startLine: thread.startLine, side: thread.side,
-                                                    isResolved: thread.isResolved, isOutdated: thread.isOutdated,
-                                                    comments: thread.comments + [reply])
-                            },
-                            pendingReviewID: pendingReviewID, totalCommentCount: totalCommentCount,
-                            totalThreadCount: totalThreadCount)
+        replacing(threads: threads.map { thread in
+            thread.comments.first?.databaseID == commentID ? thread.replacingComments(thread.comments + [reply]) : thread
+        })
+    }
+
+    /// A reply at the end of the thread with the node ID `threadID`. Unchanged when that thread isn't loaded.
+    func adding(_ reply: PullRequestComment, toThread threadID: String) -> PullRequestComments {
+        replacing(threads: threads.map { $0.id == threadID ? $0.replacingComments($0.comments + [reply]) : $0 })
+    }
+
+    /// A newly submitted review, after the loaded ones.
+    func adding(review: PullRequestComment) -> PullRequestComments {
+        replacing(reviews: reviews + [review])
+    }
+
+    func settingPendingReviewID(_ pendingReviewID: String?) -> PullRequestComments {
+        PullRequestComments(comments: comments, threads: threads, pendingReviewID: pendingReviewID,
+                            totalCommentCount: totalCommentCount, totalThreadCount: totalThreadCount, reviews: reviews)
+    }
+
+    /// The comments once the pending review is submitted: its drafts are published, and no review is pending.
+    func publishingPendingReview() -> PullRequestComments {
+        replacing(threads: threads.map { thread in
+            thread.replacingComments(thread.comments.map { comment in
+                var comment = comment
+                comment.isPending = false
+                return comment
+            })
+        }).settingPendingReviewID(nil)
+    }
+
+    /// The comments once the pending review is discarded: its drafts are gone, with the threads they started.
+    func discardingPendingReview() -> PullRequestComments {
+        let kept = threads.compactMap { thread -> ReviewThread? in
+            let published = thread.comments.filter { !$0.isPending }
+            return published.isEmpty ? nil : thread.replacingComments(published)
+        }
+        return replacing(threads: kept, totalThreadCount: totalThreadCount - (threads.count - kept.count))
+            .settingPendingReviewID(nil)
+    }
+
+    private func replacing(comments: [PullRequestComment]? = nil, threads: [ReviewThread]? = nil,
+                           reviews: [PullRequestComment]? = nil, totalCommentCount: Int? = nil,
+                           totalThreadCount: Int? = nil) -> PullRequestComments {
+        PullRequestComments(comments: comments ?? self.comments, threads: threads ?? self.threads,
+                            pendingReviewID: pendingReviewID,
+                            totalCommentCount: totalCommentCount ?? self.totalCommentCount,
+                            totalThreadCount: totalThreadCount ?? self.totalThreadCount,
+                            reviews: reviews ?? self.reviews)
     }
 }
 
@@ -210,7 +278,7 @@ enum NewPullRequestComment: Equatable, Codable {
 }
 
 /// A draft comment for the viewer's pending review. GitHub publishes it only when the review is submitted.
-enum PendingReviewComment: Equatable {
+enum PendingReviewComment: Equatable, Codable {
     /// A new review thread on one diff line.
     case thread(body: String, anchor: DiffCommentAnchor)
     /// A reply to a review thread, addressed by the thread's node ID.

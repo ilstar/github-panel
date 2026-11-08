@@ -508,8 +508,8 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         let anchor = DiffCommentAnchor(path: "a.swift", line: 4, side: .right)
 
         viewModel.post(.general(body: "Looks good"))
-        try await viewModel.reply("Fixed", to: target)
-        try await viewModel.postInlineComment("Why?", at: anchor)
+        viewModel.reply("Fixed", to: target)
+        viewModel.postInlineComment("Why?", at: anchor)
 
         let general = try XCTUnwrap(viewModel.comments?.comments.last)
         XCTAssertEqual(general.body, "Looks good")
@@ -540,9 +540,9 @@ final class PullRequestDetailViewModelTests: XCTestCase {
                                                    })
         let anchor = DiffCommentAnchor(path: "a.swift", line: 4, side: .left)
 
-        try await viewModel.postInlineComment("Before load", at: anchor)
+        viewModel.postInlineComment("Before load", at: anchor)
         await viewModel.load()
-        try await viewModel.postInlineComment("Why?", at: anchor)
+        viewModel.postInlineComment("Why?", at: anchor)
         await viewModel.waitForPendingChanges()
 
         XCTAssertEqual(posted, [.inline(body: "Why?", commitID: "abc123", anchor: anchor)])
@@ -559,8 +559,8 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         let target = ReviewThread(id: "t", path: "a.swift", line: 1, startLine: nil, side: .right,
                                   isResolved: false, isOutdated: false, comments: [comment(41), comment(42)])
 
-        try await viewModel.reply("Fixed", to: target)
-        try await viewModel.reply("Nothing to reply to", to: thread("empty", path: "a.swift", line: 1, comments: []))
+        viewModel.reply("Fixed", to: target)
+        viewModel.reply("Nothing to reply to", to: thread("empty", path: "a.swift", line: 1, comments: []))
         await viewModel.waitForPendingChanges()
 
         XCTAssertEqual(posted, [.reply(body: "Fixed", commentID: 41)])
