@@ -53,6 +53,7 @@ struct ContentView: View {
     @AppStorage(BotReviewer.defaultsKey, store: AppDefaults.store) private var botReviewerLogin = ""
     @AppStorage(Self.forLaterExpandedDefaultsKey, store: AppDefaults.store) private var isForLaterExpanded = true
     @AppStorage(CollapsedGroupsStorage.defaultsKey, store: AppDefaults.store) private var collapsedGroupsValue = ""
+    @AppStorage(MyPullRequestSections.groupsByStatusDefaultsKey, store: AppDefaults.store) private var groupsByStatus = true
     /// Made on first use of the GitHub pane, then kept so switching pull requests reuses one web view.
     @StateObject private var webSession = LazyWebSession()
     private let minuteTicker = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
@@ -353,7 +354,9 @@ struct ContentView: View {
 
     /// The ids of the My PRs rows on screen, in order. Rows under a collapsed group or For Later are left out.
     private var visibleOpenRowIDs: [String] {
-        myPullRequests.visibleIDs(collapsed: collapsedGroups, isForLaterExpanded: isForLaterExpanded)
+        myPullRequests.visibleIDs(groupsByStatus: groupsByStatus,
+                                  collapsed: collapsedGroups,
+                                  isForLaterExpanded: isForLaterExpanded)
     }
 
     private var openPullRequestsList: some View {
@@ -364,33 +367,21 @@ struct ContentView: View {
                     if monitor.prRows.isEmpty {
                         emptyStateSpacer
                     } else {
-                        ForEach(Array(sections.groups.enumerated()), id: \.element.id) { index, group in
-                            let isExpanded = !collapsedGroups.contains(group.group)
-                            sectionHeading(title: group.group.title,
-                                           count: group.rows.count,
-                                           color: group.group.color,
-                                           hint: group.group.hint,
-                                           isExpanded: isExpanded) {
-                                var groups = collapsedGroups
-                                if isExpanded { groups.insert(group.group) } else { groups.remove(group.group) }
-                                collapsedGroups = groups
-                            }
-                            .padding(.top, index == 0 ? 4 : 12)
-                            if isExpanded {
-                                ForEach(group.entries) { entry in
-                                    openPullRequestEntry(entry, isForLater: false, sections: sections)
-                                }
+                        if groupsByStatus {
+                            groupedPullRequests(sections)
+                        } else {
+                            ForEach(sections.listEntries) { entry in
+                                openPullRequestEntry(entry, isForLater: false, sections: sections)
                             }
                         }
                         if !sections.forLater.isEmpty {
                             sectionHeading(title: MyPullRequestSections.forLaterTitle,
                                            count: sections.forLater.count,
                                            color: .accentColor,
-                                           hint: nil,
                                            isExpanded: isForLaterExpanded) {
                                 isForLaterExpanded.toggle()
                             }
-                            .padding(.top, sections.groups.isEmpty ? 4 : 12)
+                            .padding(.top, sections.active.isEmpty ? 4 : 12)
                             if isForLaterExpanded {
                                 ForEach(sections.forLaterEntries) { entry in
                                     openPullRequestEntry(entry, isForLater: true, sections: sections)
@@ -415,6 +406,28 @@ struct ContentView: View {
             }
             .onChange(of: selectedPRID) { id in
                 scrollToSelection(id, with: proxy)
+            }
+        }
+    }
+
+    /// My PRs under a folding heading per status group, most urgent first.
+    @ViewBuilder
+    private func groupedPullRequests(_ sections: MyPullRequestSections) -> some View {
+        ForEach(Array(sections.groups.enumerated()), id: \.element.id) { index, group in
+            let isExpanded = !collapsedGroups.contains(group.group)
+            sectionHeading(title: group.group.title,
+                           count: group.rows.count,
+                           color: group.group.color,
+                           isExpanded: isExpanded) {
+                var groups = collapsedGroups
+                if isExpanded { groups.insert(group.group) } else { groups.remove(group.group) }
+                collapsedGroups = groups
+            }
+            .padding(.top, index == 0 ? 4 : 12)
+            if isExpanded {
+                ForEach(group.entries) { entry in
+                    openPullRequestEntry(entry, isForLater: false, sections: sections)
+                }
             }
         }
     }
@@ -449,7 +462,7 @@ struct ContentView: View {
         PRRow(
             pr: pr,
             stackPosition: sections.stackPositions[pr.id],
-            status: sections.statuses[pr.id],
+            status: groupsByStatus ? sections.statuses[pr.id] : nil,
             botReviewer: BotReviewer.normalized(botReviewerLogin),
             isSelected: selectedPRID == pr.id,
             relativeFormatter: relativeFormatter,
@@ -480,7 +493,6 @@ struct ContentView: View {
     private func sectionHeading(title: String,
                                 count: Int,
                                 color: Color,
-                                hint: String?,
                                 isExpanded: Bool,
                                 toggle: @escaping () -> Void) -> some View {
         Button {
@@ -501,12 +513,6 @@ struct ContentView: View {
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 0)
-                if let hint {
-                    Text(hint)
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 2)

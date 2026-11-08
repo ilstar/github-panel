@@ -6,6 +6,8 @@ import Foundation
 /// urgent group of any of its pull requests, so one failing pull request pulls its whole stack up to Needs You.
 struct MyPullRequestSections: Equatable {
     static let forLaterTitle = "For Later"
+    /// Whether My PRs is drawn in status groups or as one list in GitHub's order. On unless turned off in Settings.
+    static let groupsByStatusDefaultsKey = "GithubPanel.groupMyPullRequestsByStatus"
 
     struct Group: Identifiable, Equatable {
         let group: MyPullRequestGroup
@@ -17,6 +19,8 @@ struct MyPullRequestSections: Equatable {
 
     /// The groups with at least one pull request, most urgent first.
     let groups: [Group]
+    /// The same entries as ``groups`` in one list, in GitHub's order, for when grouping is off.
+    let listEntries: [MyPullRequestEntry]
     let forLaterEntries: [MyPullRequestEntry]
     /// Stack positions keyed by row id, worked out across all sections so the numbers match the whole stack.
     let stackPositions: [String: PullRequestStackPosition]
@@ -31,6 +35,7 @@ struct MyPullRequestSections: Equatable {
         self.statuses = statuses
 
         let activeEntries = PullRequestStacks.entries(rows.filter { !forLaterIDs.contains($0.id) }, positions: positions)
+        listEntries = activeEntries
         var byGroup: [MyPullRequestGroup: [MyPullRequestEntry]] = [:]
         for entry in activeEntries {
             let group = entry.rows.compactMap { statuses[$0.id]?.group }.min { $0.rank < $1.rank } ?? .inReview
@@ -58,8 +63,11 @@ struct MyPullRequestSections: Equatable {
     }
 
     /// The row ids in the order they are drawn. Collapsed groups and a collapsed For Later draw no rows.
-    func visibleIDs(collapsed: Set<MyPullRequestGroup> = [], isForLaterExpanded: Bool) -> [String] {
-        let shown = groups.filter { !collapsed.contains($0.group) }.flatMap(\.rows)
+    /// Without grouping, the rows follow GitHub's order and no group is collapsed.
+    func visibleIDs(groupsByStatus: Bool = true, collapsed: Set<MyPullRequestGroup> = [], isForLaterExpanded: Bool) -> [String] {
+        let shown = groupsByStatus
+            ? groups.filter { !collapsed.contains($0.group) }.flatMap(\.rows)
+            : listEntries.flatMap(\.rows)
         return (shown + (isForLaterExpanded ? forLater : [])).map(\.id)
     }
 }

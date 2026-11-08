@@ -74,6 +74,17 @@ final class ForLaterTests: XCTestCase {
         XCTAssertEqual(sections.visibleIDs(collapsed: [.needsYou], isForLaterExpanded: false), ["acme/widgets#2"])
     }
 
+    func testWithoutGroupingRowsKeepGitHubOrderAndIgnoreCollapsedGroups() {
+        let rows = [row(number: 1, status: .pending), row(number: 2, status: .failure), row(number: 3, status: .success)]
+
+        let sections = MyPullRequestSections(rows: rows, forLaterIDs: ["acme/widgets#3"])
+
+        XCTAssertEqual(sections.listEntries.flatMap(\.rows).map(\.number), [1, 2])
+        XCTAssertEqual(sections.visibleIDs(groupsByStatus: false, collapsed: [.needsYou, .building], isForLaterExpanded: true),
+                       ["acme/widgets#1", "acme/widgets#2", "acme/widgets#3"])
+        XCTAssertEqual(sections.needsYouCount, 1)
+    }
+
     func testStorageRoundTrips() {
         let ids: Set<String> = ["acme/widgets#2", "acme/widgets#1"]
 

@@ -28,18 +28,6 @@ enum MyPullRequestGroup: String, CaseIterable, Identifiable, Codable {
         }
     }
 
-    /// The short note at the end of the group's heading.
-    var hint: String {
-        switch self {
-        case .needsYou: return "Your move"
-        case .readyToMerge: return "One click away"
-        case .building: return "Checks running"
-        case .inReview: return "Reviewers' turn"
-        case .merging: return "Lands on its own"
-        case .drafts: return "Not ready yet"
-        }
-    }
-
     /// Where the group comes in the list: lower is more urgent.
     var rank: Int { Self.allCases.firstIndex(of: self) ?? 0 }
 }
