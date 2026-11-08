@@ -241,7 +241,8 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         shouldFail = true
         await viewModel.loadEarlierComments()
         shouldFail = false
-        try await viewModel.post(.general(body: "Thanks"))
+        viewModel.post(.general(body: "Thanks"))
+        await viewModel.waitForPendingChanges()
 
         XCTAssertEqual(requested, [
             PullRequestCommentLimits(comments: 30, threads: 50),
@@ -457,11 +458,13 @@ final class PullRequestDetailViewModelTests: XCTestCase {
                                                    fetchComments: { _, _ in stored },
                                                    postComment: { [self] _, _ in
                                                        stored = PullRequestComments(comments: [comment(5)], threads: [])
+                                                       return 5
                                                    },
                                                    cache: cache)
         await viewModel.load()
 
-        try await viewModel.post(.general(body: "Hi"))
+        viewModel.post(.general(body: "Hi"))
+        await viewModel.waitForPendingChanges()
 
         XCTAssertEqual(cache.entry(for: reference)?.comments?.comments.map(\.databaseID), [5])
     }
@@ -475,26 +478,72 @@ final class PullRequestDetailViewModelTests: XCTestCase {
                                                    postComment: { [self] comment, reference in
                                                        posted.append((comment, reference))
                                                        stored = PullRequestComments(comments: [self.comment(9)], threads: [])
+                                                       return 9
                                                    })
         await viewModel.load()
 
-        try await viewModel.post(.general(body: "Looks good"))
+        viewModel.post(.general(body: "Looks good"))
+        await viewModel.waitForPendingChanges()
 
         XCTAssertEqual(posted.map(\.0), [.general(body: "Looks good")])
         XCTAssertEqual(posted.map(\.1), [reference])
         XCTAssertEqual(viewModel.comments?.comments.map(\.databaseID), [9])
     }
 
+    func testCommentsShowRightAwayInTheirPlaceAsTheViewersWhileSending() async throws {
+        let gate = Gate()
+        let target = ReviewThread(id: "t", path: "a.swift", line: 1, startLine: nil, side: .right,
+                                  isResolved: false, isOutdated: false, comments: [comment(41)])
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+                                                   fetch: { [self] _ in detailContent(title: "Show") },
+                                                   fetchComments: { [self] _, _ in
+                                                       PullRequestComments(comments: [comment(1)], threads: [target])
+                                                   },
+                                                   postComment: { _, _ in
+                                                       await gate.wait()
+                                                       return 100
+                                                   },
+                                                   viewerLogin: "monalisa")
+        await viewModel.load()
+        let anchor = DiffCommentAnchor(path: "a.swift", line: 4, side: .right)
+
+        viewModel.post(.general(body: "Looks good"))
+        try await viewModel.reply("Fixed", to: target)
+        try await viewModel.postInlineComment("Why?", at: anchor)
+
+        let general = try XCTUnwrap(viewModel.comments?.comments.last)
+        XCTAssertEqual(general.body, "Looks good")
+        XCTAssertEqual(general.authorLogin, "monalisa")
+        XCTAssertEqual(viewModel.comments?.totalCommentCount, 2)
+        let reply = try XCTUnwrap(viewModel.comments?.threads.first?.comments.last)
+        XCTAssertEqual(reply.body, "Fixed")
+        let inline = try XCTUnwrap(viewModel.threadIndex(for: "a.swift").threads(at: anchor).first)
+        XCTAssertEqual(inline.comments.map(\.body), ["Why?"])
+        for shown in [general, reply, inline.comments[0]] {
+            XCTAssertEqual(viewModel.status(of: shown)?.isSaving, true, "\(shown.body) shows as sending")
+        }
+        XCTAssertNil(viewModel.status(of: comment(1)))
+
+        await gate.open()
+        await viewModel.waitForPendingChanges()
+
+        XCTAssertTrue(viewModel.pendingChanges.isEmpty)
+    }
+
     func testInlineCommentUsesLoadedHeadCommit() async throws {
         var posted: [NewPullRequestComment] = []
         let viewModel = PullRequestDetailViewModel(reference: reference,
                                                    fetch: { [self] _ in detailContent(title: "Inline") },
-                                                   postComment: { comment, _ in posted.append(comment) })
+                                                   postComment: { comment, _ in
+                                                       posted.append(comment)
+                                                       return posted.count
+                                                   })
         let anchor = DiffCommentAnchor(path: "a.swift", line: 4, side: .left)
 
         try await viewModel.postInlineComment("Before load", at: anchor)
         await viewModel.load()
         try await viewModel.postInlineComment("Why?", at: anchor)
+        await viewModel.waitForPendingChanges()
 
         XCTAssertEqual(posted, [.inline(body: "Why?", commitID: "abc123", anchor: anchor)])
     }
@@ -503,12 +552,16 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         var posted: [NewPullRequestComment] = []
         let viewModel = PullRequestDetailViewModel(reference: reference,
                                                    fetch: { [self] _ in detailContent(title: "Reply") },
-                                                   postComment: { comment, _ in posted.append(comment) })
+                                                   postComment: { comment, _ in
+                                                       posted.append(comment)
+                                                       return posted.count
+                                                   })
         let target = ReviewThread(id: "t", path: "a.swift", line: 1, startLine: nil, side: .right,
                                   isResolved: false, isOutdated: false, comments: [comment(41), comment(42)])
 
         try await viewModel.reply("Fixed", to: target)
         try await viewModel.reply("Nothing to reply to", to: thread("empty", path: "a.swift", line: 1, comments: []))
+        await viewModel.waitForPendingChanges()
 
         XCTAssertEqual(posted, [.reply(body: "Fixed", commentID: 41)])
     }
@@ -569,26 +622,40 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.comments?.threads.first?.isResolved, false)
     }
 
-    func testFailedPostThrowsAndSkipsReload() async {
+    func testARefusedCommentStaysShownAsFailedWithItsTextAndSkipsReload() async throws {
         var commentFetches = 0
+        var shouldFail = true
         let viewModel = PullRequestDetailViewModel(reference: reference,
                                                    fetch: { [self] _ in detailContent(title: "Fail") },
-                                                   fetchComments: { _, _ in
+                                                   fetchComments: { [self] _, _ in
                                                        commentFetches += 1
-                                                       return .empty
+                                                       return PullRequestComments(comments: shouldFail ? [] : [comment(8)],
+                                                                                  threads: [])
                                                    },
                                                    postComment: { _, _ in
-                                                       throw GitHubAPIError(message: "Validation Failed", documentationURL: nil, statusCode: 422)
+                                                       if shouldFail {
+                                                           throw GitHubAPIError(message: "Validation Failed", documentationURL: nil, statusCode: 422)
+                                                       }
+                                                       return 8
                                                    })
         await viewModel.load()
 
-        do {
-            try await viewModel.post(.general(body: "Hi"))
-            XCTFail("Expected an error")
-        } catch {
-            XCTAssertEqual(error.localizedDescription, "GitHub API error (422): Validation Failed")
-        }
-        XCTAssertEqual(commentFetches, 1)
+        viewModel.post(.general(body: "Hi"))
+        await viewModel.waitForPendingChanges()
+
+        let failed = try XCTUnwrap(viewModel.comments?.comments.last)
+        XCTAssertEqual(failed.body, "Hi")
+        let status = try XCTUnwrap(viewModel.status(of: failed))
+        XCTAssertEqual(status.failure, "GitHub API error (422): Validation Failed")
+        XCTAssertEqual(status.text, "Hi", "The text stays for Retry and Copy")
+        XCTAssertEqual(commentFetches, 1, "A refused comment never reached GitHub, so nothing reloads")
+
+        shouldFail = false
+        status.retry()
+        await viewModel.waitForPendingChanges()
+
+        XCTAssertEqual(viewModel.comments?.comments.map(\.databaseID), [8])
+        XCTAssertTrue(viewModel.pendingChanges.isEmpty)
     }
 
     func testMonitorLoadsAndPostsCommentsWithSessionToken() async throws {
@@ -599,11 +666,12 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         let viewModel = PullRequestDetailViewModel(reference: reference, monitor: monitor)
 
         await viewModel.load()
-        try await monitor.postPullRequestComment(.general(body: "Hi"), on: reference)
+        viewModel.post(.general(body: "Hi"))
+        await viewModel.waitForPendingChanges()
 
         XCTAssertEqual(viewModel.comments, api.comments)
-        XCTAssertEqual(api.commentsCalls.map(\.token), ["token"])
-        XCTAssertEqual(api.commentsCalls.map(\.reference), [reference])
+        XCTAssertEqual(api.commentsCalls.map(\.token), ["token", "token"])
+        XCTAssertEqual(api.commentsCalls.map(\.reference), [reference, reference])
         XCTAssertEqual(api.postCommentCalls.map(\.token), ["token"])
         XCTAssertEqual(api.postCommentCalls.map(\.comment), [.general(body: "Hi")])
     }
@@ -870,17 +938,16 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         XCTAssertFalse(PullRequestBodyEditor.isBlank("## Summary"))
     }
 
-    func testMonitorPostWithoutTokenFails() async {
+    func testMonitorPostWithoutTokenWaits() async {
         let api = FakeGitHubAPI()
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: nil))
+        let viewModel = PullRequestDetailViewModel(reference: reference, monitor: monitor)
 
-        do {
-            try await monitor.postPullRequestComment(.general(body: "Hi"), on: reference)
-            XCTFail("Expected an error")
-        } catch {
-            XCTAssertTrue(error is MissingTokenError)
-        }
+        viewModel.post(.general(body: "Hi"))
+        await viewModel.waitForPendingChanges()
+
         XCTAssertTrue(api.postCommentCalls.isEmpty)
+        XCTAssertEqual(monitor.detailCache.pendingChanges(for: reference).map(\.state), [.pending])
     }
 
     func testRequestingAReviewerShowsThemWaitingThenReloads() async {

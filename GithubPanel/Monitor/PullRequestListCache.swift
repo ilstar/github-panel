@@ -31,6 +31,8 @@ final class PullRequestListCache {
     let updates = PassthroughSubject<Change, Never>()
 
     private(set) var open: [PullRequestRow]?
+    /// The token's login, from My PRs or the engine's lookup, so the viewer's unsent comments show as theirs. Not saved.
+    var viewerLogin: String?
     /// Set when the last My PRs load left some out because the token isn't SSO-authorized. Not saved.
     private(set) var openSSOAuthorizationURL: URL?
     private(set) var reviewRequests: ReviewRequests?
@@ -72,6 +74,7 @@ final class PullRequestListCache {
     }
 
     func store(_ result: OpenPullRequests, fetchedAt: Date) {
+        viewerLogin = result.login
         open = result.rows
         openSSOAuthorizationURL = result.ssoAuthorizationURL
         save(result.rows, as: .open, fetchedAt: fetchedAt)
@@ -123,6 +126,7 @@ final class PullRequestListCache {
 
     /// Empties the lists and deletes the saved ones, such as when the token is removed.
     func removeAll() {
+        viewerLogin = nil
         open = nil
         openSSOAuthorizationURL = nil
         reviewRequests = nil

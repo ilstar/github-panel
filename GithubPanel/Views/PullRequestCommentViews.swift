@@ -4,21 +4,32 @@ import AppKit
 /// One comment: who wrote it, when, and its Markdown body.
 struct PullRequestCommentView: View {
     let comment: PullRequestComment
+    /// A comment the viewer posted that GitHub hasn't confirmed: sending, or failed with Retry and Discard.
+    var sendStatus: ChangeStatus?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 AvatarView(login: comment.authorLogin)
-                Text(comment.authorLogin)
+                Text(Self.authorName(comment))
                     .prFont(.callout, weight: .semibold)
                 if comment.isPending {
                     ThreadBadge(text: "Pending")
                         .help("A draft in your pending review. Only you can see it until you submit the review.")
                 }
-                Text("commented \(comment.createdAt.formatted(.relative(presentation: .named)))")
-                    .prFont(.callout)
-                    .foregroundStyle(.secondary)
-                    .help(comment.createdAt.formatted(date: .abbreviated, time: .shortened))
+                if let sendStatus {
+                    Text(sendStatus.isSaving ? "sending…" : "not sent")
+                        .prFont(.callout)
+                        .foregroundStyle(.secondary)
+                    if sendStatus.isSaving {
+                        SavingIndicator()
+                    }
+                } else {
+                    Text("commented \(comment.createdAt.formatted(.relative(presentation: .named)))")
+                        .prFont(.callout)
+                        .foregroundStyle(.secondary)
+                        .help(comment.createdAt.formatted(date: .abbreviated, time: .shortened))
+                }
                 Spacer(minLength: 8)
                 if let url = comment.htmlURL {
                     Button {
@@ -35,7 +46,16 @@ struct PullRequestCommentView: View {
                 MarkdownView(markdown: comment.body)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .opacity(sendStatus?.isSaving == true ? 0.6 : 1)
+            if let failure = FailedChangeNotice(sendStatus) {
+                failure
+            }
         }
+    }
+
+    /// The viewer's unsent comment has no login until My PRs first loads.
+    static func authorName(_ comment: PullRequestComment) -> String {
+        comment.authorLogin.isEmpty ? "You" : comment.authorLogin
     }
 }
 
@@ -95,7 +115,9 @@ struct CollapsibleCommentBody<Content: View>: View {
     }
 }
 
-/// A text box for writing a comment. Keeps the draft and shows GitHub's error when posting fails.
+/// A text box for writing a comment. Clears once `onSubmit` returns: a posted comment shows in its place right away and
+/// keeps its text until GitHub confirms it. Keeps the draft and shows the error when `onSubmit` throws, such as when
+/// GitHub refuses a draft for the pending review.
 struct CommentComposer: View {
     enum Style {
         /// A bordered box with its buttons underneath, for replies and comments on diff lines.
@@ -280,6 +302,8 @@ struct ReviewThreadView: View {
     var isReviewPending = false
     /// A resolve or unresolve GitHub hasn't confirmed: saving, or failed with Retry and Discard.
     var resolveStatus: ChangeStatus?
+    /// How each of the viewer's comments GitHub hasn't confirmed is doing. Nil for the rest.
+    var commentStatus: (PullRequestComment) -> ChangeStatus? = { _ in nil }
     let onReply: (String) async throws -> Void
     /// Resolves (true) or unresolves (false) the thread, which shows right away.
     let onSetResolved: (Bool) -> Void
@@ -290,11 +314,13 @@ struct ReviewThreadView: View {
     init(thread: ReviewThread,
          isReviewPending: Bool = false,
          resolveStatus: ChangeStatus? = nil,
+         commentStatus: @escaping (PullRequestComment) -> ChangeStatus? = { _ in nil },
          onReply: @escaping (String) async throws -> Void,
          onSetResolved: @escaping (Bool) -> Void = { _ in }) {
         self.thread = thread
         self.isReviewPending = isReviewPending
         self.resolveStatus = resolveStatus
+        self.commentStatus = commentStatus
         self.onReply = onReply
         self.onSetResolved = onSetResolved
         _isExpanded = State(initialValue: !thread.isResolved)
@@ -313,44 +339,14 @@ struct ReviewThreadView: View {
             if isExpanded {
                 ForEach(thread.comments) { comment in
                     Divider()
-                    PullRequestCommentView(comment: comment)
+                    PullRequestCommentView(comment: comment, sendStatus: commentStatus(comment))
                         .padding(12)
                 }
-                Divider()
-                Group {
-                    if isReplying {
-                        CommentComposer(placeholder: "Reply…",
-                                        submitTitle: isReviewPending ? "Add review comment" : "Reply",
-                                        onCancel: { isReplying = false },
-                                        onSubmit: { body in
-                                            try await onReply(body)
-                                            isReplying = false
-                                        })
-                    } else {
-                        HStack(spacing: 8) {
-                            Button {
-                                isReplying = true
-                            } label: {
-                                Text("Reply…")
-                                    .foregroundStyle(.secondary)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 6)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                            .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
-                                    )
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            // GitHub cannot resolve a thread that is still a draft.
-                            if !thread.isPending {
-                                resolveButton
-                            }
-                        }
-                    }
+                // GitHub hasn't posted the thread yet, so there's nothing to reply to or resolve.
+                if !isUnsent {
+                    Divider()
+                    replyBar
                 }
-                .padding(12)
             }
         }
         .prFont(.body)
@@ -360,6 +356,48 @@ struct ReviewThreadView: View {
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
         )
+    }
+
+    /// A new thread the viewer started that GitHub hasn't confirmed.
+    private var isUnsent: Bool {
+        thread.comments.first.flatMap(commentStatus) != nil
+    }
+
+    private var replyBar: some View {
+        Group {
+            if isReplying {
+                CommentComposer(placeholder: "Reply…",
+                                submitTitle: isReviewPending ? "Add review comment" : "Reply",
+                                onCancel: { isReplying = false },
+                                onSubmit: { body in
+                                    try await onReply(body)
+                                    isReplying = false
+                                })
+            } else {
+                HStack(spacing: 8) {
+                    Button {
+                        isReplying = true
+                    } label: {
+                        Text("Reply…")
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 6)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                            )
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    // GitHub cannot resolve a thread that is still a draft.
+                    if !thread.isPending {
+                        resolveButton
+                    }
+                }
+            }
+        }
+        .padding(12)
     }
 
     private var resolveButton: some View {
@@ -431,7 +469,7 @@ struct ReviewThreadView: View {
     static func summary(_ thread: ReviewThread) -> String {
         let count = thread.comments.count == 1 ? "1 comment" : "\(thread.comments.count) comments"
         guard let first = thread.comments.first else { return count }
-        return "\(first.authorLogin) · \(count)"
+        return "\(PullRequestCommentView.authorName(first)) · \(count)"
     }
 }
 

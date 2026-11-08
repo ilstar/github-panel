@@ -17,7 +17,9 @@ protocol GitHubAPIClient {
     /// The pull request's newest general comments and first review threads, up to `limits`.
     func fetchPullRequestComments(token: String, reference: PullRequestReference,
                                   limits: PullRequestCommentLimits) async throws -> PullRequestComments
-    func postPullRequestComment(token: String, reference: PullRequestReference, comment: NewPullRequestComment) async throws
+    /// Posts a comment and returns its REST ID.
+    @discardableResult
+    func postPullRequestComment(token: String, reference: PullRequestReference, comment: NewPullRequestComment) async throws -> Int
     func setReviewThreadResolved(token: String, threadID: String, resolved: Bool) async throws
     func editPullRequest(token: String, reference: PullRequestReference, title: String?, body: String?) async throws
     func submitReview(token: String, reference: PullRequestReference, review: NewPullRequestReview) async throws

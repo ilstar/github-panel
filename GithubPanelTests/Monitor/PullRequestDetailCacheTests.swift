@@ -271,6 +271,16 @@ final class PullRequestDetailCacheTests: XCTestCase {
         XCTAssertEqual(cache.nextChangeToSend(for: reference(1))?.kind, .title("Title"))
     }
 
+    func testCommentsNeverReplaceEachOther() {
+        let cache = PullRequestDetailCache()
+        cache.store(content(number: 1))
+
+        cache.add(.comment(.general(body: "Same"), authorLogin: nil), to: reference(1))
+        cache.add(.comment(.general(body: "Same"), authorLogin: nil), to: reference(1))
+
+        XCTAssertEqual(cache.pendingChanges(for: reference(1)).count, 2)
+    }
+
     func testPendingChangesAreSavedAndRestoredAndOnesThatWereSendingSendAgain() async {
         let store = LocalStore.inMemory()
         let saving = PullRequestDetailCache(store: store)

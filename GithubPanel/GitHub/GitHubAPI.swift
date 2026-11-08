@@ -681,7 +681,8 @@ final class GitHubAPI: GitHubAPIClient {
     }
 
     /// Posts through REST so each comment is published right away instead of joining a pending review.
-    func postPullRequestComment(token: String, reference: PullRequestReference, comment: NewPullRequestComment) async throws {
+    @discardableResult
+    func postPullRequestComment(token: String, reference: PullRequestReference, comment: NewPullRequestComment) async throws -> Int {
         let (owner, name) = try repoParts(reference.repoFullName)
         let repoPath = "/repos/\(owner)/\(name)"
         let path: String
@@ -706,7 +707,7 @@ final class GitHubAPI: GitHubAPIClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         struct Created: Decodable { let id: Int }
-        _ = try await decode(Created.self, request: request)
+        return try await decode(Created.self, request: request).id
     }
 
     /// Replaces the pull request's title, description, or both. Fields left nil are not sent, so GitHub keeps them.

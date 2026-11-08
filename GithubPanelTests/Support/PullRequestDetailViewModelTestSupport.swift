@@ -10,7 +10,7 @@ extension PullRequestDetailViewModel {
                      setViewed: @escaping (String, String, Bool) async throws -> Void = { _, _, _ in },
                      fetchComments: @escaping (PullRequestReference, PullRequestCommentLimits) async throws
                          -> PullRequestComments = { _, _ in .empty },
-                     postComment: @escaping PostComment = { _, _ in },
+                     postComment: ((NewPullRequestComment, PullRequestReference) async throws -> Int)? = nil,
                      setResolved: @escaping (String, Bool) async throws -> Void = { _, _ in },
                      edit: @escaping (PullRequestReference, String?, String?) async throws -> Void = { _, _, _ in },
                      submitReview: @escaping SubmitReview = { _, _ in },
@@ -25,6 +25,7 @@ extension PullRequestDetailViewModel {
                      setReviewRequested: @escaping (PullRequestReference, String, PullRequestReviewer.Kind, Bool)
                          async throws -> Void = { _, _, _, _ in },
                      searchMentionCandidates: @escaping SearchMentionCandidates = { _, _ in [] },
+                     viewerLogin: String? = nil,
                      cache: PullRequestDetailCache? = nil) {
         let api = FakeGitHubAPI()
         api.detailHandler = fetch
@@ -35,12 +36,15 @@ extension PullRequestDetailViewModel {
         api.setResolvedHandler = setResolved
         api.editHandler = edit
         api.setReviewRequestedHandler = setReviewRequested
+        api.postCommentHandler = postComment
         let session = UUID()
+        let lists = PullRequestListCache()
+        lists.viewerLogin = viewerLogin
         let engine = SyncEngine(api: api, store: .inMemory(), cache: cache ?? PullRequestDetailCache(),
-                                lists: PullRequestListCache()) {
+                                lists: lists) {
             SyncEngine.Credential(token: "token", session: session)
         }
-        self.init(reference: reference, engine: engine, postComment: postComment,
+        self.init(reference: reference, engine: engine,
                   submitReview: submitReview, updateBranch: updateBranch,
                   startPendingReview: startPendingReview, addPendingComment: addPendingComment,
                   submitPendingReview: submitPendingReview, deletePendingReview: deletePendingReview,

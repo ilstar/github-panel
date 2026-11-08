@@ -100,6 +100,11 @@ final class LocalStore: Sendable {
                 t.column("error", .text)
             }
         }
+        migrator.registerMigration("addPostedCommentID") { db in
+            try db.alter(table: "pending_change") { t in
+                t.add(column: "postedCommentID", .integer)
+            }
+        }
         return migrator
     }
 }
@@ -244,23 +249,43 @@ extension LocalStore {
 // MARK: - Pending changes
 
 extension LocalStore {
-    /// The saved changes, oldest first. Ones that were sending when the app quit are pending again, since every
-    /// kind is safe to send twice. Rows that no longer decode are left out.
+    /// The saved changes, oldest first. Ones that were sending when the app quit are pending again when sending them
+    /// twice is safe. Comments that were waiting or sending fail instead, since one may have posted, and ones GitHub
+    /// posted are dropped, since the next load shows them. Rows that no longer decode are left out.
     func pendingChanges() async -> [PendingChange] {
-        let rows = (try? await database.write { db -> [Row] in
-            try db.execute(sql: "UPDATE pending_change SET state = ? WHERE state = ?",
-                           arguments: [PendingChange.State.pending.rawValue, PendingChange.State.sending.rawValue])
-            return try Row.fetchAll(db, sql: "SELECT * FROM pending_change ORDER BY createdAt")
+        (try? await database.write { db -> [PendingChange] in
+            var changes: [PendingChange] = []
+            for row in try Row.fetchAll(db, sql: "SELECT * FROM pending_change ORDER BY createdAt") {
+                guard let saved = Self.pendingChange(from: row) else { continue }
+                var change = saved
+                if change.postedCommentID != nil {
+                    try db.execute(sql: "DELETE FROM pending_change WHERE id = ?", arguments: [change.id.uuidString])
+                    continue
+                }
+                if change.state != .failed, !change.kind.isSafeToResend {
+                    change.state = .failed
+                    change.error = PendingChange.notSentAfterQuitError
+                } else if change.state == .sending {
+                    change.state = .pending
+                }
+                if change != saved {
+                    try db.execute(sql: "UPDATE pending_change SET state = ?, error = ? WHERE id = ?",
+                                   arguments: [change.state.rawValue, change.error, change.id.uuidString])
+                }
+                changes.append(change)
+            }
+            return changes
         }) ?? []
-        return rows.compactMap { row in
-            guard let id = UUID(uuidString: row["id"]), let payload: Data = row["payload"],
-                  let kind = try? JSONDecoder().decode(PendingChange.Kind.self, from: payload),
-                  let state = PendingChange.State(rawValue: row["state"] as String) else { return nil }
-            return PendingChange(id: id, reference: PullRequestReference(repoFullName: row["repoFullName"],
-                                                                         number: row["number"]),
-                                 kind: kind, createdAt: Date(timeIntervalSince1970: row["createdAt"]),
-                                 state: state, error: row["error"])
-        }
+    }
+
+    private static func pendingChange(from row: Row) -> PendingChange? {
+        guard let id = UUID(uuidString: row["id"]), let payload: Data = row["payload"],
+              let kind = try? JSONDecoder().decode(PendingChange.Kind.self, from: payload),
+              let state = PendingChange.State(rawValue: row["state"] as String) else { return nil }
+        return PendingChange(id: id, reference: PullRequestReference(repoFullName: row["repoFullName"],
+                                                                     number: row["number"]),
+                             kind: kind, createdAt: Date(timeIntervalSince1970: row["createdAt"]),
+                             state: state, error: row["error"], postedCommentID: row["postedCommentID"])
     }
 
     /// Inserts or replaces each change, and deletes the ones in `removed`, in one transaction.
@@ -274,12 +299,12 @@ extension LocalStore {
                 guard let payload = try? encoder.encode(change.kind) else { continue }
                 try db.execute(sql: """
                     INSERT OR REPLACE INTO pending_change
-                        (id, repoFullName, number, kind, payload, createdAt, state, error)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        (id, repoFullName, number, kind, payload, createdAt, state, error, postedCommentID)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, arguments: [
                         change.id.uuidString, change.reference.repoFullName, change.reference.number,
                         change.kind.name, payload, change.createdAt.timeIntervalSince1970,
-                        change.state.rawValue, change.error,
+                        change.state.rawValue, change.error, change.postedCommentID,
                     ])
             }
         }

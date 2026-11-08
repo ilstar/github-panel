@@ -169,15 +169,15 @@ final class PullRequestDetailCache {
     }
 
     /// Adds a change, which shows right away. It replaces an earlier change to the same field that hasn't started
-    /// sending, or that failed, since this one sets the field again.
+    /// sending, or that failed, since this one sets the field again. A comment replaces nothing.
     @discardableResult
     func add(_ kind: PendingChange.Kind, to reference: PullRequestReference) -> PendingChange {
         // Always later than the last change, so changes made in the same instant still send in order.
         lastChangeTime = max(Date(), lastChangeTime.addingTimeInterval(0.000_001))
         let change = PendingChange(reference: reference, kind: kind, createdAt: lastChangeTime)
-        let replaced = pending.filter {
-            $0.reference == reference && $0.kind.field == kind.field && $0.state != .sending
-        }.map(\.id)
+        let replaced = kind.field.map { field in
+            pending.filter { $0.reference == reference && $0.kind.field == field && $0.state != .sending }.map(\.id)
+        } ?? []
         pending.removeAll { replaced.contains($0.id) }
         pending.append(change)
         publishShown(reference)
@@ -195,6 +195,12 @@ final class PullRequestDetailCache {
             $0.state = .pending
             $0.error = nil
         }
+    }
+
+    /// Notes the comment GitHub posted for a change, so GitHub's copy of it shows instead once it loads. Saved, so a
+    /// restart before the confirm doesn't offer to post it again.
+    func markPosted(_ id: UUID, commentID: Int) {
+        update(id) { $0.postedCommentID = commentID }
     }
 
     func markFailed(_ id: UUID, error: String) {

@@ -227,11 +227,13 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
         return fixtures
     }
 
-    func postPullRequestComment(token: String, reference: PullRequestReference, comment: NewPullRequestComment) async throws {
+    @discardableResult
+    func postPullRequestComment(token: String, reference: PullRequestReference, comment: NewPullRequestComment) async throws -> Int {
         locked { appendComment(comment, to: reference) }
     }
 
-    private func appendComment(_ comment: NewPullRequestComment, to reference: PullRequestReference) {
+    /// Returns the new comment's REST ID.
+    private func appendComment(_ comment: NewPullRequestComment, to reference: PullRequestReference) -> Int {
         let current = storedComments(for: reference)
         nextCommentID += 1
         func makeComment(_ body: String) -> PullRequestComment {
@@ -258,6 +260,7 @@ final class MockGitHubAPI: GitHubAPIClient, @unchecked Sendable {
             comments[reference.id] = PullRequestComments(comments: current.comments, threads: threads,
                                                          pendingReviewID: current.pendingReviewID)
         }
+        return nextCommentID
     }
 
     func startPendingReview(token: String, pullRequestID: String, commitID: String) async throws -> String {
