@@ -341,7 +341,8 @@ actor SyncEngine {
                 guard case .history(let number) = resource else { break }
                 lists.store(page, asPage: number, fetchedAt: fetchedAt)
             case .reviewRequests(let requests): lists.store(requests, fetchedAt: fetchedAt)
-            case .currentUser, .detail, .comments, .checks, .changedFiles: break
+            case .currentUser(let login): lists.viewerLogin = login
+            case .detail, .comments, .checks, .changedFiles: break
             }
             return true
         }
@@ -452,21 +453,32 @@ actor SyncEngine {
             // The change stays pending, and the request that ends the backoff starts sending again.
             if let backoff, backoff.session == credential.session, now() < backoff.until { return }
             guard await updateCache(session: credential.session, { $0.markSending(change.id) }) else { return }
+            let postedCommentID: Int?
             do {
-                try await send(change.kind, on: reference, token: credential.token)
+                postedCommentID = try await send(change.kind, on: reference, token: credential.token)
             } catch {
                 guard !Task.isCancelled else { return }
                 // GitHub answers a write it doesn't allow with 403 too, so a failed write doesn't start the backoff.
+                // Nothing is sent again on its own, so a comment that may have posted waits for the user.
                 await updateCache(session: credential.session) {
-                    $0.markFailed(change.id, error: error.localizedDescription)
+                    $0.markFailed(change.id, error: Self.failureMessage(for: change, error: error, cache: $0))
+                }
+                if case .comment = change.kind, Self.mayHaveReachedGitHub(error) {
+                    // Shows the comment if GitHub did post it, so the user can tell before retrying.
+                    let resource = await MainActor.run { [cache] in Self.resource(changedBy: change, cache: cache) }
+                    if let resource { _ = try? await request(resource) }
                 }
                 continue
+            }
+            if let postedCommentID {
+                await updateCache(session: credential.session) { $0.markPosted(change.id, commentID: postedCommentID) }
             }
             await confirm(change, session: credential.session)
         }
     }
 
-    private func send(_ kind: PendingChange.Kind, on reference: PullRequestReference, token: String) async throws {
+    /// Sends a change. Returns the REST ID of the comment GitHub posted, for a comment.
+    private func send(_ kind: PendingChange.Kind, on reference: PullRequestReference, token: String) async throws -> Int? {
         switch kind {
         case .title(let title):
             try await api.editPullRequest(token: token, reference: reference, title: title, body: nil)
@@ -479,7 +491,37 @@ actor SyncEngine {
         case .reviewRequested(let name, let kind, let requested):
             try await api.setReviewRequested(token: token, reference: reference, name: name, kind: kind,
                                              requested: requested)
+        case .comment(let comment, _):
+            return try await api.postPullRequestComment(token: token, reference: reference, comment: comment)
         }
+        return nil
+    }
+
+    /// Whether a failed request may still have reached GitHub, such as when the connection dropped or timed out
+    /// before the answer, or GitHub failed after taking it. GitHub never acts on a request it answered with a 4xx.
+    static func mayHaveReachedGitHub(_ error: Error) -> Bool {
+        if let statusCode = (error as? GitHubAPIError)?.statusCode ?? (error as? GraphQLError)?.statusCode {
+            return statusCode >= 500
+        }
+        guard let error = error as? URLError else { return false }
+        return [.timedOut, .networkConnectionLost, .cannotParseResponse, .badServerResponse].contains(error.code)
+    }
+
+    /// GitHub's error, or for a comment, what it means for the comment.
+    @MainActor
+    private static func failureMessage(for change: PendingChange, error: Error, cache: PullRequestDetailCache) -> String {
+        let message = error.localizedDescription
+        guard case .comment(let comment, _) = change.kind else { return message }
+        if mayHaveReachedGitHub(error) {
+            return "\(message) GitHub may have posted it anyway, so check before you retry."
+        }
+        // GitHub refuses a comment on a commit that's no longer part of the pull request, such as after a force push.
+        if case .inline(_, let commitID, _) = comment, (error as? GitHubAPIError)?.statusCode == 422,
+           let headSHA = cache.entry(for: change.reference)?.content.detail.headSHA, headSHA != commitID {
+            return "New commits were pushed after you wrote this comment, and GitHub no longer takes it on the "
+                + "commit you wrote it on. Copy it and comment on the current diff."
+        }
+        return message
     }
 
     /// Loads again what GitHub changed, then drops the change in the same step as saving the new copy, so the view
@@ -502,7 +544,7 @@ actor SyncEngine {
         case .title, .reviewRequested:
             // My PRs shows the title and who was asked to review.
             _ = try? await request(.openList)
-        case .body, .fileViewed, .threadResolved:
+        case .body, .fileViewed, .threadResolved, .comment:
             break
         }
     }
@@ -513,7 +555,7 @@ actor SyncEngine {
         switch change.kind {
         case .title, .body, .fileViewed, .reviewRequested:
             return .detail(reference)
-        case .threadResolved:
+        case .threadResolved, .comment:
             guard let entry = cache.entry(for: reference), entry.comments != nil else { return nil }
             return .comments(reference, entry.commentLimits)
         }

@@ -12,6 +12,8 @@ struct PullRequestComment: Identifiable, Equatable, Codable {
     let htmlURL: URL?
     /// Whether the comment is a draft in the viewer's pending review, which only the viewer can see until it is submitted.
     var isPending = false
+    /// The viewer's comment GitHub hasn't confirmed yet: the pending change that shows it. Nil for GitHub's comments.
+    var pendingChangeID: UUID?
 }
 
 /// Which side of the diff a review comment sits on: `left` is the old file, `right` is the new file.
@@ -21,7 +23,7 @@ enum DiffSide: String, Equatable, Hashable, Codable {
 }
 
 /// The diff line a review comment is attached to.
-struct DiffCommentAnchor: Hashable {
+struct DiffCommentAnchor: Hashable, Codable {
     let path: String
     let line: Int
     let side: DiffSide
@@ -156,16 +158,55 @@ struct PullRequestComments: Equatable, Codable {
                             pendingReviewID: pendingReviewID, totalCommentCount: totalCommentCount,
                             totalThreadCount: totalThreadCount)
     }
+
+    /// Whether a loaded general comment or thread comment has this REST ID.
+    func contains(databaseID: Int) -> Bool {
+        comments.contains { $0.databaseID == databaseID }
+            || threads.contains { $0.comments.contains { $0.databaseID == databaseID } }
+    }
+
+    /// A new general comment, after the loaded ones.
+    func adding(_ comment: PullRequestComment) -> PullRequestComments {
+        PullRequestComments(comments: comments + [comment], threads: threads, pendingReviewID: pendingReviewID,
+                            totalCommentCount: totalCommentCount + 1, totalThreadCount: totalThreadCount)
+    }
+
+    /// A new review thread, after the loaded ones.
+    func adding(_ thread: ReviewThread) -> PullRequestComments {
+        PullRequestComments(comments: comments, threads: threads + [thread], pendingReviewID: pendingReviewID,
+                            totalCommentCount: totalCommentCount, totalThreadCount: totalThreadCount + 1)
+    }
+
+    /// A reply at the end of the thread whose first comment has the REST ID `commentID`. Unchanged when that thread
+    /// isn't loaded.
+    func adding(_ reply: PullRequestComment, toThreadStartedBy commentID: Int) -> PullRequestComments {
+        PullRequestComments(comments: comments,
+                            threads: threads.map { thread in
+                                guard thread.comments.first?.databaseID == commentID else { return thread }
+                                return ReviewThread(id: thread.id, path: thread.path, line: thread.line,
+                                                    startLine: thread.startLine, side: thread.side,
+                                                    isResolved: thread.isResolved, isOutdated: thread.isOutdated,
+                                                    comments: thread.comments + [reply])
+                            },
+                            pendingReviewID: pendingReviewID, totalCommentCount: totalCommentCount,
+                            totalThreadCount: totalThreadCount)
+    }
 }
 
 /// A comment to post.
-enum NewPullRequestComment: Equatable {
+enum NewPullRequestComment: Equatable, Codable {
     /// A comment on the pull request's Conversation tab.
     case general(body: String)
     /// A new review thread on one diff line, against the given head commit.
     case inline(body: String, commitID: String, anchor: DiffCommentAnchor)
     /// A reply to a review thread, addressed by the REST ID of the thread's first comment.
     case reply(body: String, commentID: Int)
+
+    var body: String {
+        switch self {
+        case let .general(body), let .inline(body, _, _), let .reply(body, _): return body
+        }
+    }
 }
 
 /// A draft comment for the viewer's pending review. GitHub publishes it only when the review is submitted.

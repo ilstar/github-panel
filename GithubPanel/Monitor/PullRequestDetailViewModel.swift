@@ -3,11 +3,10 @@ import Combine
 
 /// Shows one pull request's detail and changed files for the detail window.
 /// Starts from the shared cache when it has the pull request, asks the sync engine to reload it,
-/// and shows what the engine saves to the cache. Edits, viewed marks, resolved threads and review requests
+/// and shows what the engine saves to the cache. Edits, viewed marks, resolved threads, review requests and comments
 /// are pending changes: they show right away, and the engine sends them.
 @MainActor
 final class PullRequestDetailViewModel: ObservableObject {
-    typealias PostComment = (NewPullRequestComment, PullRequestReference) async throws -> Void
     typealias SubmitReview = (NewPullRequestReview, PullRequestReference) async throws -> Void
     /// Merges the base branch into the head branch: the pull request's node ID and the head commit it expects.
     typealias UpdateBranch = (String, String) async throws -> Void
@@ -65,7 +64,6 @@ final class PullRequestDetailViewModel: ObservableObject {
     @Published private(set) var isLoadingChangesSinceLastReview = false
 
     private let engine: SyncEngine
-    private let sendComment: PostComment
     private let sendReview: SubmitReview
     private let sendUpdateBranch: UpdateBranch
     private let sendStartPendingReview: StartPendingReview
@@ -105,7 +103,6 @@ final class PullRequestDetailViewModel: ObservableObject {
     /// Loads through `engine`, and shows what it saves to the engine's cache.
     init(reference: PullRequestReference,
          engine: SyncEngine,
-         postComment: @escaping PostComment = { _, _ in },
          submitReview: @escaping SubmitReview = { _, _ in },
          updateBranch: @escaping UpdateBranch = { _, _ in },
          startPendingReview: @escaping StartPendingReview = { _, _ in "" },
@@ -117,7 +114,6 @@ final class PullRequestDetailViewModel: ObservableObject {
          searchMentionCandidates: @escaping SearchMentionCandidates = { _, _ in [] }) {
         self.reference = reference
         self.engine = engine
-        self.sendComment = postComment
         self.sendReview = submitReview
         self.sendUpdateBranch = updateBranch
         self.sendStartPendingReview = startPendingReview
@@ -165,9 +161,6 @@ final class PullRequestDetailViewModel: ObservableObject {
     convenience init(reference: PullRequestReference, monitor: PRMonitor) {
         self.init(reference: reference,
                   engine: monitor.syncEngine,
-                  postComment: { [monitor] comment, reference in
-                      try await monitor.postPullRequestComment(comment, on: reference)
-                  },
                   submitReview: { [monitor] review, reference in
                       try await monitor.submitReview(review, on: reference)
                   },
@@ -356,16 +349,18 @@ final class PullRequestDetailViewModel: ObservableObject {
         startedReviewID = nil
     }
 
-    /// Posts a comment, then reloads the comments so it shows with GitHub's IDs.
-    /// Throws when GitHub refuses the comment, so the composer can keep the draft.
-    func post(_ comment: NewPullRequestComment) async throws {
-        try await sendComment(comment, reference)
-        do {
-            try await reloadComments()
-        } catch {
-            // The comment was posted; only the refresh failed.
-            errorMessage = error.localizedDescription
-        }
+    /// Posts a comment, which shows right away as the viewer's, marked as sending, so the composer can clear.
+    /// Once GitHub posts it, the comments reload and GitHub's copy takes its place. If GitHub refuses it, or may not
+    /// have got it, it stays shown as failed with its text, with Retry and Discard.
+    func post(_ comment: NewPullRequestComment) {
+        cache.add(.comment(comment, authorLogin: viewerLogin), to: reference)
+        sendPendingChanges()
+    }
+
+    /// Who the viewer is, to show their unsent comments as theirs. Nil until My PRs first loads, unless they opened
+    /// this pull request.
+    private var viewerLogin: String? {
+        engine.lists.viewerLogin ?? content.flatMap { $0.detail.isViewerAuthor ? $0.detail.authorLogin : nil }
     }
 
     /// Saves a new title, description, or both, which show right away. A blank title is ignored, since GitHub
@@ -506,7 +501,7 @@ final class PullRequestDetailViewModel: ObservableObject {
     /// Reviewers whose request is being added or removed, by `PullRequestReviewer.id`.
     var reviewRequestsInFlight: Set<String> {
         Set(pendingChanges.compactMap { change in
-            guard change.state != .failed, case .reviewRequested(let id) = change.kind.field else { return nil }
+            guard change.state != .failed, case .reviewRequested(let id)? = change.kind.field else { return nil }
             return id
         })
     }
@@ -549,25 +544,25 @@ final class PullRequestDetailViewModel: ObservableObject {
         canReview && pendingReviewID != nil
     }
 
-    /// Posts a new review thread on a diff line, against the head commit that was loaded.
-    /// Joins the pending review instead when one is started.
+    /// Posts a new review thread on a diff line, against the head commit that was loaded, which shows right away.
+    /// Joins the pending review instead when one is started, which throws when GitHub refuses.
     func postInlineComment(_ body: String, at anchor: DiffCommentAnchor) async throws {
         if isReviewPending {
             try await addToReview(.thread(body: body, anchor: anchor))
             return
         }
         guard let commitID = content?.detail.headSHA else { return }
-        try await post(.inline(body: body, commitID: commitID, anchor: anchor))
+        post(.inline(body: body, commitID: commitID, anchor: anchor))
     }
 
-    /// Replies to a thread, as a draft in the pending review when one is started.
+    /// Replies to a thread, which shows right away, or as a draft in the pending review when one is started.
     func reply(_ body: String, to thread: ReviewThread) async throws {
         if isReviewPending {
             try await addToReview(.reply(body: body, threadID: thread.id))
             return
         }
         guard let first = thread.comments.first else { return }
-        try await post(.reply(body: body, commentID: first.databaseID))
+        post(.reply(body: body, commentID: first.databaseID))
     }
 
     /// Resolves or unresolves a review thread, which shows right away. Once GitHub accepts it, the comments reload.

@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// How a change GitHub hasn't confirmed is doing, for the cue next to what it changed.
 struct ChangeStatus {
@@ -6,6 +7,8 @@ struct ChangeStatus {
     var failure: String?
     var retry: () -> Void = {}
     var discard: () -> Void = {}
+    /// A comment's text, which a failed comment offers to copy.
+    var text: String?
 
     var isSaving: Bool { failure == nil }
 }
@@ -17,9 +20,20 @@ extension PullRequestDetailViewModel {
     }
 
     func status(of change: PendingChange) -> ChangeStatus {
-        ChangeStatus(failure: change.state == .failed ? change.error ?? "Couldn't save this change." : nil,
-                     retry: { [weak self] in self?.retry(change) },
-                     discard: { [weak self] in self?.discard(change) })
+        var text: String?
+        if case .comment(let comment, _) = change.kind { text = comment.body }
+        return ChangeStatus(failure: change.state == .failed ? change.error ?? "Couldn't save this change." : nil,
+                            retry: { [weak self] in self?.retry(change) },
+                            discard: { [weak self] in self?.discard(change) },
+                            text: text)
+    }
+
+    /// How a comment the viewer posted is doing, nil once GitHub confirmed it or for anyone else's comment.
+    func status(of comment: PullRequestComment) -> ChangeStatus? {
+        guard let id = comment.pendingChangeID, let change = pendingChanges.first(where: { $0.id == id }) else {
+            return nil
+        }
+        return status(of: change)
     }
 }
 
@@ -29,6 +43,8 @@ struct FailedChangeNotice: View {
     let message: String
     let onRetry: () -> Void
     let onDiscard: () -> Void
+    /// Text the Copy button puts on the clipboard, such as a comment that wasn't posted. Nil hides the button.
+    var copyText: String?
 
     init(message: String, onRetry: @escaping () -> Void, onDiscard: @escaping () -> Void) {
         self.message = message
@@ -42,6 +58,7 @@ struct FailedChangeNotice: View {
         message = failure
         onRetry = status.retry
         onDiscard = status.discard
+        copyText = status.text
     }
 
     var body: some View {
@@ -53,6 +70,14 @@ struct FailedChangeNotice: View {
                 .lineLimit(3)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 8)
+            if let copyText {
+                Button("Copy") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(copyText, forType: .string)
+                }
+                .buttonStyle(QuietButtonStyle())
+                .help("Copy the text, such as to post it again yourself")
+            }
             Button("Retry", action: onRetry)
                 .buttonStyle(QuietButtonStyle())
                 .help("Send this change to GitHub again")

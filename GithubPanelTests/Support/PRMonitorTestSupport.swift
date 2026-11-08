@@ -58,6 +58,8 @@ final class FakeGitHubAPI: GitHubAPIClient {
     var commentsHandler: ((PullRequestReference, PullRequestCommentLimits) async throws -> PullRequestComments)?
     private(set) var commentsCalls: [(token: String, reference: PullRequestReference)] = []
     private(set) var postCommentCalls: [(token: String, reference: PullRequestReference, comment: NewPullRequestComment)] = []
+    /// Answers a posted comment with its REST ID. Without it, comments are numbered from 1.
+    var postCommentHandler: ((NewPullRequestComment, PullRequestReference) async throws -> Int)?
     private(set) var editCalls: [(token: String, reference: PullRequestReference, title: String?, body: String?)] = []
     var editHandler: ((PullRequestReference, String?, String?) async throws -> Void)?
     private(set) var reviewCalls: [(token: String, reference: PullRequestReference, review: NewPullRequestReview)] = []
@@ -173,9 +175,11 @@ final class FakeGitHubAPI: GitHubAPIClient {
         return comments
     }
 
-    func postPullRequestComment(token: String, reference: PullRequestReference, comment: NewPullRequestComment) async throws {
+    func postPullRequestComment(token: String, reference: PullRequestReference, comment: NewPullRequestComment) async throws -> Int {
         if let error { throw error }
         postCommentCalls.append((token, reference, comment))
+        if let postCommentHandler { return try await postCommentHandler(comment, reference) }
+        return postCommentCalls.count
     }
 
     func setReviewThreadResolved(token: String, threadID: String, resolved: Bool) async throws {

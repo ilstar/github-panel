@@ -100,7 +100,8 @@ struct PullRequestDetailView: View {
                                                 onRerunCheck: { rerun in Task { await viewModel.rerun(rerun) } },
                                                 onRerunFailedChecks: { Task { await viewModel.rerunFailedChecks() } },
                                                 commentFocusRequest: commentFocusRequest,
-                                                onComment: { body in try await viewModel.post(.general(body: body)) },
+                                                commentStatus: { viewModel.status(of: $0) },
+                                                onComment: { body in viewModel.post(.general(body: body)) },
                                                 onSaveBody: { body in viewModel.edit(body: body) },
                                                 bodyStatus: viewModel.status(of: .body),
                                                 onSetTask: { index, checked in viewModel.setTask(index, checked: checked) },
@@ -847,6 +848,9 @@ struct PullRequestConversationView: View {
     var onRerunFailedChecks: () -> Void = {}
     /// Goes up by one each time the comment box should take focus.
     var commentFocusRequest = 0
+    /// How each of the viewer's comments GitHub hasn't confirmed is doing. Nil for the rest.
+    var commentStatus: (PullRequestComment) -> ChangeStatus? = { _ in nil }
+    /// Posts a comment, which shows in the list right away.
     let onComment: (String) async throws -> Void
     /// Saves a new description, which shows right away.
     let onSaveBody: (String) -> Void
@@ -920,7 +924,7 @@ struct PullRequestConversationView: View {
                             .activityCard()
                     }
                     ForEach(comments) { comment in
-                        PullRequestCommentView(comment: comment)
+                        PullRequestCommentView(comment: comment, sendStatus: commentStatus(comment))
                             .padding(.horizontal, 16)
                             .padding(.vertical, 14)
                             .activityCard()

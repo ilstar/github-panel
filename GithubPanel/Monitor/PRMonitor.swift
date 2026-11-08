@@ -613,11 +613,6 @@ final class PRMonitor: ObservableObject {
         }
     }
 
-    func postPullRequestComment(_ comment: NewPullRequestComment, on reference: PullRequestReference) async throws {
-        guard let token = loadSessionToken() else { throw MissingTokenError() }
-        try await api.postPullRequestComment(token: token, reference: reference, comment: comment)
-    }
-
     /// Merges the base branch into the pull request's branch, then refreshes the list, whose merge state changes.
     func updatePullRequestBranch(pullRequestID: String, expectedHeadSHA: String) async throws {
         guard let token = loadSessionToken() else { throw MissingTokenError() }

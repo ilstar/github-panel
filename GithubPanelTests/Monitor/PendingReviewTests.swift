@@ -47,6 +47,7 @@ final class PendingReviewTests: XCTestCase {
         await viewModel.load()
 
         try await viewModel.postInlineComment("Single", at: anchor)
+        await viewModel.waitForPendingChanges()
 
         XCTAssertEqual(recorder.posted, [.inline(body: "Single", commitID: "abc123", anchor: anchor)])
         XCTAssertTrue(recorder.drafts.isEmpty)
@@ -224,7 +225,10 @@ final class PendingReviewTests: XCTestCase {
                 if recorder.failReload && loads > 1 { throw TestError(message: "Reload failed") }
                 return recorder.comments
             },
-            postComment: { comment, _ in recorder.posted.append(comment) },
+            postComment: { comment, _ in
+                recorder.posted.append(comment)
+                return recorder.posted.count
+            },
             submitReview: { review, _ in recorder.reviews.append(review) },
             startPendingReview: { pullRequestID, commitID in
                 recorder.started.append((pullRequestID, commitID))

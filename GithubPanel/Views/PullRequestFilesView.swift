@@ -644,6 +644,7 @@ struct PullRequestFilesView: View {
         ReviewThreadView(thread: thread,
                          isReviewPending: viewModel.isReviewPending,
                          resolveStatus: viewModel.status(of: .threadResolved(threadID: thread.id)),
+                         commentStatus: { viewModel.status(of: $0) },
                          onReply: { body in try await viewModel.reply(body, to: thread) },
                          onSetResolved: { resolved in viewModel.setResolved(resolved, thread: thread) })
     }

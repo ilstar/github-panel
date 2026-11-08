@@ -7,10 +7,11 @@ final class LocalStoreTests: XCTestCase {
         let store = LocalStore.inMemory()
 
         try store.database.read { db in
-            XCTAssertEqual(try LocalStore.migrator.appliedMigrations(db), ["createCaches", "addPendingChanges"])
+            XCTAssertEqual(try LocalStore.migrator.appliedMigrations(db),
+                           ["createCaches", "addPendingChanges", "addPostedCommentID"])
             XCTAssertEqual(try db.columns(in: "pull_request_list").map(\.name), ["kind", "rows", "savedAt"])
             XCTAssertEqual(try db.columns(in: "pending_change").map(\.name), [
-                "id", "repoFullName", "number", "kind", "payload", "createdAt", "state", "error",
+                "id", "repoFullName", "number", "kind", "payload", "createdAt", "state", "error", "postedCommentID",
             ])
             XCTAssertEqual(try db.primaryKey("pending_change").columns, ["id"])
             XCTAssertEqual(try db.columns(in: "pull_request_detail").map(\.name), [
@@ -52,7 +53,10 @@ final class LocalStoreTests: XCTestCase {
     func testSavesPendingChangesOldestFirst() async {
         let store = LocalStore.inMemory()
         let reference = PullRequestReference(repoFullName: "acme/widgets", number: 7)
+        // The first is failed, which a comment stays after a restart.
         let kinds: [PendingChange.Kind] = [
+            .comment(.inline(body: "Why?", commitID: "abc", anchor: DiffCommentAnchor(path: "a.swift", line: 2, side: .left)),
+                     authorLogin: "monalisa"),
             .title("Title"), .body("Body"), .fileViewed(pullRequestID: "PR", path: "a.swift", viewed: true),
             .threadResolved(threadID: "T", resolved: false), .reviewRequested(name: "acme/web", kind: .team, requested: true),
         ]
@@ -88,7 +92,8 @@ final class LocalStoreTests: XCTestCase {
         let store = LocalStore.open(at: url)
 
         try store.database.read { db in
-            XCTAssertEqual(try LocalStore.migrator.appliedMigrations(db), ["createCaches", "addPendingChanges"])
+            XCTAssertEqual(try LocalStore.migrator.appliedMigrations(db),
+                           ["createCaches", "addPendingChanges", "addPostedCommentID"])
             XCTAssertEqual(try db.columns(in: "pull_request_list").map(\.name), ["kind", "rows", "savedAt"])
         }
     }

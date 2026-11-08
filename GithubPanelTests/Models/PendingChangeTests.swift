@@ -53,6 +53,84 @@ final class PendingChangeTests: XCTestCase {
         XCTAssertFalse(removed.content.detail.reviewers.isRequested("user:hubot"))
     }
 
+    func testAGeneralCommentShowsAfterTheLoadedOnesAsTheViewersAndCounts() throws {
+        let posting = change(.comment(.general(body: "Looks good"), authorLogin: "monalisa"))
+
+        let shown = try XCTUnwrap(PendingChange.apply(posting, to: entryWithComments()).comments)
+
+        XCTAssertEqual(shown.comments.map(\.body), ["First", "Looks good"])
+        let added = try XCTUnwrap(shown.comments.last)
+        XCTAssertEqual(added.authorLogin, "monalisa")
+        XCTAssertEqual(added.pendingChangeID, posting.id)
+        XCTAssertEqual(added.createdAt, posting.createdAt)
+        XCTAssertEqual(shown.totalCommentCount, 11)
+        XCTAssertEqual(shown.threads, entryWithComments().comments?.threads)
+    }
+
+    func testAReplyShowsAtTheEndOfItsThread() throws {
+        let replying = change(.comment(.reply(body: "Fixed", commentID: 41), authorLogin: "monalisa"))
+        let elsewhere = change(.comment(.reply(body: "Lost", commentID: 999), authorLogin: "monalisa"))
+
+        let shown = try XCTUnwrap(PendingChange.apply(replying, to: entryWithComments()).comments)
+        let unloaded = PendingChange.apply(elsewhere, to: entryWithComments()).comments
+
+        XCTAssertEqual(shown.threads.map { $0.comments.map(\.body) }, [["Why?", "Fixed"]])
+        XCTAssertEqual(shown.threads.first?.comments.last?.pendingChangeID, replying.id)
+        XCTAssertEqual(shown.comments, entryWithComments().comments?.comments)
+        XCTAssertEqual(unloaded, entryWithComments().comments, "A reply to a thread that isn't loaded shows nothing")
+    }
+
+    func testAnInlineCommentStartsAThreadOnItsLine() throws {
+        let anchor = DiffCommentAnchor(path: "b.swift", line: 9, side: .left)
+        let commenting = change(.comment(.inline(body: "Why?", commitID: "sha-7", anchor: anchor), authorLogin: "monalisa"))
+
+        let shown = try XCTUnwrap(PendingChange.apply(commenting, to: entryWithComments()).comments)
+
+        let thread = try XCTUnwrap(shown.threads.last)
+        XCTAssertEqual(thread.anchor, anchor)
+        XCTAssertFalse(thread.isOutdated)
+        XCTAssertEqual(thread.comments.map(\.body), ["Why?"])
+        XCTAssertEqual(thread.comments.first?.pendingChangeID, commenting.id)
+        XCTAssertEqual(shown.totalThreadCount, 6)
+        XCTAssertEqual(shown.unloadedThreadCount, 4)
+    }
+
+    func testAnInlineCommentOnAnOlderHeadShowsOutdatedRatherThanOnALine() throws {
+        let anchor = DiffCommentAnchor(path: "b.swift", line: 9, side: .right)
+        let commenting = change(.comment(.inline(body: "Why?", commitID: "old-sha", anchor: anchor), authorLogin: nil))
+
+        let thread = try XCTUnwrap(PendingChange.apply(commenting, to: entryWithComments()).comments?.threads.last)
+
+        XCTAssertTrue(thread.isOutdated)
+        XCTAssertNil(thread.anchor, "Not moved onto a line of the new diff")
+        XCTAssertEqual(thread.path, "b.swift")
+        XCTAssertEqual(thread.comments.first?.authorLogin, "", "Shown as You until the viewer's login loads")
+    }
+
+    func testACommentGitHubsCopyAlreadyHasShowsOnce() {
+        var posted = change(.comment(.general(body: "First"), authorLogin: "monalisa"))
+        posted.postedCommentID = 1
+        var reply = change(.comment(.reply(body: "Why?", commentID: 41), authorLogin: "monalisa"))
+        reply.postedCommentID = 41
+
+        XCTAssertEqual(PendingChange.apply([posted, reply], to: entryWithComments()), entryWithComments())
+    }
+
+    func testACommentBeforeTheCommentsLoadShowsNothing() {
+        var noComments = entry()
+        noComments.comments = nil
+
+        XCTAssertNil(PendingChange.apply(change(.comment(.general(body: "Hi"), authorLogin: nil)), to: noComments).comments)
+    }
+
+    func testCommentsAreNotSentAgainAfterARestartAndReplaceNothing() {
+        let comment = PendingChange.Kind.comment(.general(body: "Hi"), authorLogin: nil)
+
+        XCTAssertFalse(comment.isSafeToResend)
+        XCTAssertNil(comment.field)
+        XCTAssertTrue(PendingChange.Kind.title("a").isSafeToResend)
+    }
+
     func testChangesApplyInOrderSoTheLastToAFieldWins() {
         let shown = PendingChange.apply([change(.body("First")), change(.title("New")), change(.body("Second"))],
                                         to: entry())
@@ -74,6 +152,21 @@ final class PendingChangeTests: XCTestCase {
 
     private func change(_ kind: PendingChange.Kind) -> PendingChange {
         PendingChange(reference: reference, kind: kind)
+    }
+
+    /// One general comment of ten, and one thread of five, started by the comment with REST ID 41.
+    private func entryWithComments() -> PullRequestDetailCache.Entry {
+        func comment(_ id: Int, _ body: String) -> PullRequestComment {
+            PullRequestComment(id: "c\(id)", databaseID: id, authorLogin: "octocat", body: body,
+                               createdAt: Date(timeIntervalSince1970: 0), htmlURL: nil)
+        }
+        var entry = entry()
+        entry.comments = PullRequestComments(
+            comments: [comment(1, "First")],
+            threads: [ReviewThread(id: "t1", path: "a.swift", line: 1, startLine: nil, side: .right, isResolved: false,
+                                   isOutdated: false, comments: [comment(41, "Why?")])],
+            totalCommentCount: 10, totalThreadCount: 5)
+        return entry
     }
 
     private func entry() -> PullRequestDetailCache.Entry {

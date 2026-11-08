@@ -52,7 +52,7 @@ its own optimistic state, or doesn't.
 | `pull_request_list` | list kind (`open`, `history:<page>`, `reviewRequests`) | rows blob, `savedAt` |
 | `pull_request_detail` | `repoFullName`, `number` | content, comments, comment limits, checks, files since last review (blobs), `lastUsedAt` |
 | `sync_state` | resource key | `fetchedAt`, `lastError`, `lastAttemptAt` |
-| `pending_change` | id | PR key, kind, payload blob, `createdAt`, state (`pending` / `sending` / `failed`), error |
+| `pending_change` | id | PR key, kind, payload blob, `createdAt`, state (`pending` / `sending` / `failed`), error, `postedCommentID` |
 
 The detail table keeps the current limit: the 100 most recently used PRs.
 
@@ -105,7 +105,20 @@ refresh landing mid-write can't make the UI flicker back.
   change is applied to the cached snapshot instead, so it keeps showing.
 - On failure, the change becomes `failed` with its error. The view shows it
   inline with Retry / Discard, and it stays applied until the user picks one.
-  Composers keep their draft until the change is confirmed.
+  Nothing is retried on its own.
+- **Comments** (general, replies, new inline threads) are one `comment` kind
+  whose payload is the comment to post and the viewer's login. The overlay adds
+  it where GitHub will show it, as the viewer's, marked sending. Composers clear
+  on submit: the draft lives on in the pending change, which shows in place
+  until confirmed, and a failed one offers Retry (same text), Discard and Copy.
+  The POST returns the comment's REST ID, saved as `postedCommentID` before the
+  confirming reload; the overlay skips a comment whose ID GitHub's copy already
+  has, so it never shows twice even before the confirm lands. A failure that may
+  have reached GitHub (timeout, lost connection, 5xx) says so and reloads the
+  comments; a 4xx is a plain failure. An inline comment keeps the commit it was
+  written on, as GitHub does: once the head moves it shows as outdated rather
+  than on a line of the new diff, and if GitHub refuses that commit the error
+  says new commits were pushed.
 - A new change to the same field (title, body, one file's viewed mark, one
   thread, one reviewer) replaces an earlier one that hasn't started sending or
   that failed. One that's sending stays, and the new one sends after it.
@@ -119,8 +132,9 @@ refresh landing mid-write can't make the UI flicker back.
     checkbox, title/body edit, file viewed, resolve thread, reviewer
     add/remove. These are sent again.
   - **Not replayed** (posting twice would be wrong): comments, replies, inline
-    comments, reviews. These become `failed` ("Not sent — the app quit before
-    GitHub answered") so the user decides.
+    comments, reviews. Pending or sending ones become `failed` ("Not sent — the
+    app quit before GitHub answered.") so the user decides. One with a
+    `postedCommentID` was posted, so it's dropped; the next load shows it.
 - **Merge, enqueue, auto-merge, update branch and rerun checks stay direct calls
   that the user waits on.** Their failures (conflicts, required checks, a stale
   head SHA) need an answer right away, and replaying one later is dangerous.
@@ -162,7 +176,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
        function, the send loop, and the failed/retry UI. Move over task
        checkboxes (replacing `setTask`'s own chaining), title/body edits, file
        viewed, resolve thread, and reviewer add/remove.
-5. [ ] **Pending changes, comments.** General comments, replies, and inline
+5. [x] **Pending changes, comments.** General comments, replies, and inline
        comments: they show right away as "sending", composers keep drafts until
        confirmed, and they aren't replayed after a restart.
 6. [ ] **Pending changes, reviews.** Pending review start/add/submit/discard
@@ -171,8 +185,11 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
 
 ## Open questions
 
-- Whether to normalize comments and review threads into their own tables (step 5
-  may want per-thread updates), or keep blobs.
+- ~~Whether to normalize comments and review threads into their own tables (step 5
+  may want per-thread updates), or keep blobs.~~ Resolved in step 5: keep the
+  blobs. Comments add to the blob through the overlay, and the posted comment's
+  REST ID is enough to avoid duplicates, so no query needs comment rows. Revisit
+  if step 6 needs per-thread updates the overlay can't express.
 - Whether REST reads should send ETags (`If-None-Match`), which turns unchanged
   responses into 304s that don't count against the rate limit. This would be a
   follow-up to step 2.
@@ -213,3 +230,15 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done
   `PRMonitor` did. Credential change: pending changes are dropped (see above). `PRMonitor`'s `editPullRequest`,
   `setFileViewed`, `setReviewThreadResolved` and `setReviewRequested` are gone; the title and description editors
   close on Save, and failures show by what they changed with Retry and Discard.
+- 2026-11-07: Step 5 done. General comments, replies and new inline comments are a `comment` pending change
+  (migration `addPostedCommentID`), sent by the engine; `PRMonitor.postPullRequestComment` is gone. They show right
+  away where GitHub will put them, as the viewer's (login from My PRs, kept in `PullRequestListCache.viewerLogin`), and
+  failed ones show there with Retry, Discard and Copy. Design changes: `postPullRequestComment` returns the new
+  comment's REST ID, which the overlay uses to skip a comment GitHub's copy already has (step 4's one-transaction
+  confirm alone still published the reloaded copy with the change on top a step earlier, which would have shown it
+  twice); composers clear on submit instead of keeping the draft, since the text lives on in the change; comments
+  never replace each other (`Kind.field` is nil); after a restart, waiting or sending comments fail and posted ones
+  are dropped; a failure that may have reached GitHub says so and reloads the comments; a new inline thread on a
+  commit that's no longer the head shows outdated. Known gap: a comments load sent after GitHub posted the comment
+  but landing before its answer shows it twice until that answer arrives. Comment drafts for a pending review stay
+  direct calls until step 6.
