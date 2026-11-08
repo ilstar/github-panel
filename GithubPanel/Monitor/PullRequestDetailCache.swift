@@ -185,8 +185,12 @@ final class PullRequestDetailCache {
         return change
     }
 
-    func markSending(_ id: UUID) {
+    /// Returns false when the change is gone, such as after a Discard, so it isn't sent.
+    @discardableResult
+    func markSending(_ id: UUID) -> Bool {
+        guard pending.contains(where: { $0.id == id }) else { return false }
         update(id) { $0.state = .sending }
+        return true
     }
 
     /// Puts a failed change back in line, for Retry.
@@ -203,6 +207,41 @@ final class PullRequestDetailCache {
         update(id) { $0.postedCommentID = commentID }
     }
 
+    /// Notes the pending review GitHub started for a `startReview` change, and sends the changes waiting for it to
+    /// that review. Saved together, so a restart never leaves a change waiting for a review that already started.
+    func markStarted(_ id: UUID, reviewID: String) {
+        guard let index = pending.firstIndex(where: { $0.id == id }),
+              case .startReview(let pullRequestID, let commitID, _) = pending[index].kind else { return }
+        pending[index].kind = .startReview(pullRequestID: pullRequestID, commitID: commitID, reviewID: reviewID)
+        let dependents = sendToReview(reviewID, changesStartedBy: id)
+        publishShown(pending[index].reference)
+        savePending([pending[index]] + dependents)
+    }
+
+    /// Sends the changes waiting for the `startReview` change `startID` to the pending review `reviewID` instead, and
+    /// drops that change, such as when GitHub already has a review the failed start may have made.
+    func useReview(_ reviewID: String, forChangesStartedBy startID: UUID) {
+        guard let start = pending.first(where: { $0.id == startID }) else { return }
+        let dependents = sendToReview(reviewID, changesStartedBy: startID)
+        pending.removeAll { $0.id == startID }
+        publishShown(start.reference)
+        savePending(dependents, removing: [startID])
+    }
+
+    /// The changes waiting for the `startReview` change `startID`, oldest first.
+    func changes(startedBy startID: UUID) -> [PendingChange] {
+        pending.filter { $0.kind.reviewTarget == .startedBy(startID) }
+    }
+
+    private func sendToReview(_ reviewID: String, changesStartedBy startID: UUID) -> [PendingChange] {
+        var dependents: [PendingChange] = []
+        for index in pending.indices where pending[index].kind.reviewTarget == .startedBy(startID) {
+            pending[index].kind = pending[index].kind.sending(toReview: reviewID)
+            dependents.append(pending[index])
+        }
+        return dependents
+    }
+
     func markFailed(_ id: UUID, error: String) {
         update(id) {
             $0.state = .failed
@@ -210,12 +249,29 @@ final class PullRequestDetailCache {
         }
     }
 
-    /// Drops a change, so the pull request shows as GitHub last returned it.
+    /// Drops a change, so the pull request shows as GitHub last returned it. Dropping the last change waiting for a
+    /// pending review that GitHub hasn't started, and isn't starting now, drops the change that would start it too.
     func discard(_ id: UUID) {
         guard let index = pending.firstIndex(where: { $0.id == id }) else { return }
         let change = pending.remove(at: index)
+        var removed = [id]
+        if case .startedBy(let startID)? = change.kind.reviewTarget, changes(startedBy: startID).isEmpty,
+           let start = pending.first(where: { $0.id == startID }), start.state != .sending {
+            pending.removeAll { $0.id == startID }
+            removed.append(startID)
+        }
         publishShown(change.reference)
-        savePending([], removing: [id])
+        savePending([], removing: removed)
+    }
+
+    /// Drops a `startReview` change and every change waiting for it, such as a pending review discarded before
+    /// GitHub was asked to start it.
+    func discardReview(startedBy startID: UUID) {
+        guard let start = pending.first(where: { $0.id == startID }) else { return }
+        let removed = [startID] + changes(startedBy: startID).map(\.id)
+        pending.removeAll { removed.contains($0.id) }
+        publishShown(start.reference)
+        savePending([], removing: removed)
     }
 
     /// Drops a change GitHub accepted. The entry was refreshed after it, or, when that failed, gets the change

@@ -429,6 +429,264 @@ final class PendingChangeSendingTests: XCTestCase {
                        + "it on the commit you wrote it on. Copy it and comment on the current diff.")
     }
 
+    // MARK: - Reviews
+
+    func testAPendingReviewsChangesSendInOrderWithTheIDOfTheReviewTheStartGot() async throws {
+        let api = loadingAPI()
+        api.startPendingReviewHandler = { _, _ in "PRR_7" }
+        let store = LocalStore.inMemory()
+        let cache = PullRequestDetailCache(store: store)
+        let engine = makeEngine(api: api, cache: cache, store: store)
+        try await engine.request(.detail(reference(1)))
+        try await engine.request(.comments(reference(1), PullRequestCommentLimits()))
+
+        let start = cache.add(.startReview(pullRequestID: "node-1", commitID: "sha-1", reviewID: nil), to: reference(1))
+        cache.add(.reviewComment(.reply(body: "One", threadID: "T"), review: .startedBy(start.id), authorLogin: nil),
+                  to: reference(1))
+        cache.add(.submitPendingReview(review: .startedBy(start.id), event: .approve, body: "", authorLogin: nil),
+                  to: reference(1))
+        var startedFrame: [PendingChange.Kind]?
+        let subscription = cache.updates.sink { [unowned self] _ in
+            let changes = cache.pendingChanges(for: reference(1))
+            if startedFrame == nil, case .startReview(_, _, "PRR_7")? = changes.first?.kind {
+                startedFrame = changes.map(\.kind)
+            }
+        }
+        await engine.sendPendingChanges()
+        await engine.waitForPendingChanges()
+        subscription.cancel()
+
+        XCTAssertEqual(api.startPendingReviewCalls.map(\.pullRequestID), ["node-1"])
+        XCTAssertEqual(api.startPendingReviewCalls.map(\.commitID), ["sha-1"])
+        XCTAssertEqual(api.pendingCommentCalls.map(\.reviewID), ["PRR_7"])
+        XCTAssertEqual(api.submitPendingReviewCalls.map(\.reviewID), ["PRR_7"])
+        XCTAssertEqual(startedFrame?.dropFirst().map(\.reviewTarget), [.review(id: "PRR_7"), .review(id: "PRR_7")],
+                       "The later changes get the review's ID as soon as it starts")
+        XCTAssertTrue(cache.pendingChanges(for: reference(1)).isEmpty)
+        await cache.saveNow()
+        let saved = await store.pendingChanges()
+        XCTAssertTrue(saved.isEmpty)
+    }
+
+    func testAFailedStartFailsTheChangesWaitingForItWithoutSendingThem() async throws {
+        let api = loadingAPI()
+        api.startPendingReviewHandler = { _, _ in throw GraphQLError(message: "One pending review per pull request") }
+        let cache = PullRequestDetailCache()
+        let engine = makeEngine(api: api, cache: cache)
+        try await engine.request(.detail(reference(1)))
+
+        let start = cache.add(.startReview(pullRequestID: "node-1", commitID: "sha-1", reviewID: nil), to: reference(1))
+        cache.add(.reviewComment(.reply(body: "One", threadID: "T"), review: .startedBy(start.id), authorLogin: nil),
+                  to: reference(1))
+        cache.add(.discardPendingReview(review: .startedBy(start.id)), to: reference(1))
+        cache.add(.title("Unrelated"), to: reference(1))
+        await engine.sendPendingChanges()
+        await engine.waitForPendingChanges()
+
+        XCTAssertTrue(api.pendingCommentCalls.isEmpty)
+        XCTAssertTrue(api.deletePendingReviewCalls.isEmpty)
+        XCTAssertEqual(api.editCalls.map(\.title), ["Unrelated"], "Other changes still send")
+        let changes = cache.pendingChanges(for: reference(1))
+        XCTAssertEqual(changes.map(\.state), [.failed, .failed, .failed])
+        XCTAssertEqual(changes.map(\.error), [
+            "One pending review per pull request",
+            "Not sent — GitHub didn't start your pending review. One pending review per pull request",
+            "Not sent — GitHub didn't start your pending review. One pending review per pull request",
+        ])
+    }
+
+    func testADraftAndASubmittedReviewShowOnceThroughTheConfirmingReload() async throws {
+        let api = loadingAPI()
+        let date = Date(timeIntervalSince1970: 0)
+        var github = PullRequestComments(comments: [], threads: [], pendingReviewID: "PRR_1")
+        api.commentsHandler = { _, _ in github }
+        api.pendingCommentHandler = { comment, _ in
+            let draft = PullRequestComment(id: "RC_9", databaseID: 9, authorLogin: "monalisa", body: comment.body,
+                                           createdAt: date, htmlURL: nil, isPending: true)
+            github = github.adding(ReviewThread(id: "RT_9", path: "a.swift", line: 4, startLine: nil, side: .right,
+                                                isResolved: false, isOutdated: false, comments: [draft]))
+            return 9
+        }
+        api.submitPendingReviewHandler = { _, event, body in
+            github = github.publishingPendingReview()
+                .adding(review: PullRequestComment(id: "PRR_1", databaseID: 80, authorLogin: "monalisa", body: body,
+                                                   createdAt: date, htmlURL: nil, reviewState: event.reviewerState))
+            return 80
+        }
+        let cache = PullRequestDetailCache()
+        let engine = makeEngine(api: api, cache: cache)
+        try await engine.request(.detail(reference(1)))
+        try await engine.request(.comments(reference(1), PullRequestCommentLimits()))
+        var frames: [(drafts: Int, reviews: Int)] = []
+        let subscription = cache.updates.sink { entry in
+            let comments = entry.1.comments
+            frames.append((comments?.threads.flatMap(\.comments).count ?? 0, comments?.reviews.count ?? 0))
+        }
+
+        let anchor = DiffCommentAnchor(path: "a.swift", line: 4, side: .right)
+        cache.add(.reviewComment(.thread(body: "Why?", anchor: anchor), review: .review(id: "PRR_1"),
+                                 authorLogin: "monalisa"), to: reference(1))
+        await engine.sendPendingChanges()
+        await engine.waitForPendingChanges()
+        cache.add(.submitPendingReview(review: .review(id: "PRR_1"), event: .approve, body: "LGTM",
+                                       authorLogin: "monalisa"), to: reference(1))
+        await engine.sendPendingChanges()
+        await engine.waitForPendingChanges()
+        subscription.cancel()
+
+        XCTAssertFalse(frames.isEmpty)
+        XCTAssertEqual(Set(frames.map(\.drafts)), [1], "The draft shows from the moment it's added, and never twice")
+        XCTAssertEqual(frames.first?.reviews, 0)
+        XCTAssertEqual(Set(frames.drop(while: { $0.reviews == 0 }).map(\.reviews)), [1], "The review never shows twice")
+        let shown = try XCTUnwrap(cache.shownEntry(for: reference(1))?.comments)
+        XCTAssertEqual(shown.reviews.map(\.id), ["PRR_1"])
+        XCTAssertEqual(shown.threads.flatMap(\.comments).map(\.isPending), [false])
+        XCTAssertTrue(cache.pendingChanges(for: reference(1)).isEmpty)
+        XCTAssertEqual(api.detailCalls.count, 2, "A submitted review reloads the reviewers too")
+        XCTAssertEqual(api.fetchReviewRequestsTokens, ["token"], "And To Review, which it answers")
+    }
+
+    func testReviewsLeftByTheLastRunFailButADiscardIsSentAgain() async throws {
+        let api = loadingAPI()
+        let store = LocalStore.inMemory()
+        let lastRun = PullRequestDetailCache(store: store)
+        await lastRun.waitForRestore()
+        let review = lastRun.add(.review(NewPullRequestReview(event: .approve, body: "", commitID: "sha-1"),
+                                         authorLogin: nil), to: reference(1))
+        let start = lastRun.add(.startReview(pullRequestID: "node-1", commitID: "sha-1", reviewID: nil),
+                                to: reference(1))
+        lastRun.markSending(start.id)
+        let draft = lastRun.add(.reviewComment(.reply(body: "Hi", threadID: "T"), review: .startedBy(start.id),
+                                               authorLogin: nil), to: reference(1))
+        let submit = lastRun.add(.submitPendingReview(review: .review(id: "PRR_1"), event: .comment, body: "Done",
+                                                      authorLogin: nil), to: reference(1))
+        lastRun.markSending(submit.id)
+        let started = lastRun.add(.startReview(pullRequestID: "node-2", commitID: "sha-2", reviewID: nil),
+                                  to: reference(2))
+        let startedDraft = lastRun.add(.reviewComment(.reply(body: "Kept", threadID: "T"),
+                                                      review: .startedBy(started.id), authorLogin: nil),
+                                       to: reference(2))
+        lastRun.markSending(started.id)
+        lastRun.markStarted(started.id, reviewID: "PRR_2")
+        let discard = lastRun.add(.discardPendingReview(review: .review(id: "PRR_3")), to: reference(3))
+        lastRun.markSending(discard.id)
+        await lastRun.saveNow()
+
+        let cache = PullRequestDetailCache(store: store)
+        let engine = makeEngine(api: api, cache: cache, store: store)
+        await engine.sendPendingChanges()
+        await engine.waitForPendingChanges()
+
+        XCTAssertTrue(api.reviewCalls.isEmpty, "A review may have posted, so it's never sent again on its own")
+        XCTAssertTrue(api.startPendingReviewCalls.isEmpty)
+        XCTAssertTrue(api.pendingCommentCalls.isEmpty)
+        XCTAssertTrue(api.submitPendingReviewCalls.isEmpty)
+        XCTAssertEqual(api.deletePendingReviewCalls.map(\.reviewID), ["PRR_3"], "Discarding twice is harmless")
+        let changes = cache.pendingChanges(for: reference(1))
+        XCTAssertEqual(changes.map(\.id), [review.id, start.id, draft.id, submit.id])
+        XCTAssertEqual(Set(changes.map(\.state)), [.failed])
+        XCTAssertEqual(Set(changes.map(\.error)), [PendingChange.notSentAfterQuitError])
+        let second = cache.pendingChanges(for: reference(2))
+        XCTAssertEqual(second.map(\.id), [startedDraft.id], "A review GitHub started is dropped; its draft keeps its ID")
+        XCTAssertEqual(second.first?.kind.reviewTarget, .review(id: "PRR_2"))
+        XCTAssertEqual(second.first?.state, .failed)
+        XCTAssertTrue(cache.pendingChanges(for: reference(3)).isEmpty)
+    }
+
+    func testAReviewThatMayHaveReachedGitHubFailsAndReloadsWithoutBeingSentAgain() async throws {
+        let api = loadingAPI()
+        api.reviewHandler = { _, _ in throw URLError(.timedOut) }
+        let cache = PullRequestDetailCache()
+        let engine = makeEngine(api: api, cache: cache)
+        try await engine.request(.detail(reference(1)))
+        try await engine.request(.comments(reference(1), PullRequestCommentLimits()))
+
+        cache.add(.review(NewPullRequestReview(event: .approve, body: "", commitID: "sha-1"), authorLogin: nil),
+                  to: reference(1))
+        await engine.sendPendingChanges()
+        await engine.waitForPendingChanges()
+        await engine.sendPendingChanges()
+        await engine.waitForPendingChanges()
+
+        XCTAssertEqual(api.reviewCalls.count, 1)
+        let failed = try XCTUnwrap(cache.pendingChanges(for: reference(1)).first)
+        XCTAssertEqual(failed.state, .failed)
+        XCTAssertTrue(failed.error?.hasSuffix("GitHub may have submitted it anyway, so check before you retry.") == true,
+                      failed.error ?? "")
+        XCTAssertEqual(api.detailCalls.count, 2, "Reloads the reviewers")
+        XCTAssertEqual(api.commentsCalls.count, 2, "And the Activity list, so a review GitHub did take shows")
+    }
+
+    func testAStartThatMayHaveReachedGitHubSaysSo() async throws {
+        let api = loadingAPI()
+        api.startPendingReviewHandler = { _, _ in throw URLError(.networkConnectionLost) }
+        let cache = PullRequestDetailCache()
+        let engine = makeEngine(api: api, cache: cache)
+        try await engine.request(.detail(reference(1)))
+        try await engine.request(.comments(reference(1), PullRequestCommentLimits()))
+
+        cache.add(.startReview(pullRequestID: "node-1", commitID: "sha-1", reviewID: nil), to: reference(1))
+        await engine.sendPendingChanges()
+        await engine.waitForPendingChanges()
+
+        XCTAssertTrue(cache.pendingChanges(for: reference(1)).first?.error?
+                        .hasSuffix("GitHub may have started the review anyway, so check before you retry.") == true)
+        XCTAssertEqual(api.commentsCalls.count, 2, "Reloads, so a review GitHub did start shows")
+    }
+
+    func testDiscardingAReviewThatIsAlreadyGoneCountsAsDone() async throws {
+        let api = loadingAPI()
+        var error: Error = GraphQLError(message: "Could not resolve to a node", type: "NOT_FOUND")
+        api.deletePendingReviewHandler = { _ in throw error }
+        let cache = PullRequestDetailCache()
+        let engine = makeEngine(api: api, cache: cache)
+        try await engine.request(.detail(reference(1)))
+
+        cache.add(.discardPendingReview(review: .review(id: "PRR_1")), to: reference(1))
+        await engine.sendPendingChanges()
+        await engine.waitForPendingChanges()
+        XCTAssertTrue(cache.pendingChanges(for: reference(1)).isEmpty)
+
+        error = GraphQLError(message: "Forbidden", type: "FORBIDDEN")
+        cache.add(.discardPendingReview(review: .review(id: "PRR_1")), to: reference(1))
+        await engine.sendPendingChanges()
+        await engine.waitForPendingChanges()
+        XCTAssertEqual(cache.pendingChanges(for: reference(1)).map(\.error), ["Forbidden"])
+    }
+
+    func testRetrySendsTheSameSubmitAgainAndDiscardDropsIt() async throws {
+        let api = loadingAPI()
+        var shouldFail = true
+        api.submitPendingReviewHandler = { _, _, _ in
+            if shouldFail { throw GraphQLError(message: "Refused") }
+            return nil
+        }
+        let cache = PullRequestDetailCache()
+        let engine = makeEngine(api: api, cache: cache)
+        try await engine.request(.detail(reference(1)))
+        try await engine.request(.comments(reference(1), PullRequestCommentLimits()))
+
+        let retried = cache.add(.submitPendingReview(review: .review(id: "PRR_1"), event: .approve, body: "A",
+                                                     authorLogin: nil), to: reference(1))
+        let discarded = cache.add(.submitPendingReview(review: .review(id: "PRR_1"), event: .comment, body: "B",
+                                                       authorLogin: nil), to: reference(1))
+        await engine.sendPendingChanges()
+        await engine.waitForPendingChanges()
+        XCTAssertEqual(cache.pendingChanges(for: reference(1)).map(\.state), [.failed, .failed])
+        XCTAssertEqual(cache.shownEntry(for: reference(1))?.comments?.reviews.map(\.body), ["A", "B"],
+                       "Failed reviews stay shown")
+
+        shouldFail = false
+        cache.markPending(retried.id)
+        await engine.sendPendingChanges()
+        await engine.waitForPendingChanges()
+        cache.discard(discarded.id)
+
+        XCTAssertEqual(api.submitPendingReviewCalls.map(\.body), ["A", "B", "A"])
+        XCTAssertTrue(cache.pendingChanges(for: reference(1)).isEmpty)
+        XCTAssertEqual(cache.shownEntry(for: reference(1))?.comments?.reviews, [])
+    }
+
     // MARK: - Helpers
 
     private func makeEngine(api: FakeGitHubAPI, cache: PullRequestDetailCache,

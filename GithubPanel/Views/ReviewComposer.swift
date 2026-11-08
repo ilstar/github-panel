@@ -1,22 +1,20 @@
 import SwiftUI
 
 /// Comment, approve, or request changes in one step, like GitHub's Review changes box.
-/// Keeps the draft and shows GitHub's error when the review is refused.
-/// With a pending review, submitting publishes its draft comments too.
+/// Submitting clears the form: the review shows right away in the Activity list, and if GitHub refuses it, it stays
+/// there with its text, the error, and Retry. With a pending review, submitting publishes its draft comments too.
 struct ReviewComposer: View {
     /// Draft comments in the pending review, published with the verdict.
     var pendingCommentCount = 0
     let onCancel: () -> Void
-    /// Submits the review. Throws to keep the draft and show the error.
-    let onSubmit: (PullRequestReviewEvent, String) async throws -> Void
-    /// Discards the pending review and its drafts. Nil when there is no pending review.
-    var onDiscard: (() async throws -> Void)?
+    /// Submits the review, which shows right away.
+    let onSubmit: (PullRequestReviewEvent, String) -> Void
+    /// Discards the pending review and its drafts, which disappear right away. Nil when there is no pending review.
+    var onDiscard: (() -> Void)?
 
     /// Starts on Comment, like GitHub, so an approval is always a deliberate choice.
     @State private var event: PullRequestReviewEvent = .comment
     @State private var text = ""
-    @State private var isSubmitting = false
-    @State private var errorMessage: String?
     @State private var isConfirmingDiscard = false
     @FocusState private var isFocused: Bool
 
@@ -57,7 +55,6 @@ struct ReviewComposer: View {
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .stroke(isFocused ? Color.accentColor : Color.secondary.opacity(0.3), lineWidth: 1)
                 )
-                .disabled(isSubmitting)
 
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(PullRequestReviewEvent.allCases) { option in
@@ -65,33 +62,20 @@ struct ReviewComposer: View {
                 }
             }
 
-            if let errorMessage {
-                Text(errorMessage)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
             HStack(spacing: 8) {
                 if onDiscard != nil {
                     Button("Discard review", role: .destructive) {
                         isConfirmingDiscard = true
                     }
-                    .disabled(isSubmitting)
                     .help("Delete the pending review and its draft comments")
                 }
                 Spacer(minLength: 0)
-                if isSubmitting {
-                    ProgressView().controlSize(.small)
-                }
                 Button("Cancel", action: onCancel)
                     .keyboardShortcut(.cancelAction)
-                    .disabled(isSubmitting)
                 Button("Submit review", action: submit)
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.return, modifiers: .command)
-                    .disabled(!Self.canSubmit(event, text: text, pendingCommentCount: pendingCommentCount) || isSubmitting)
+                    .disabled(!Self.canSubmit(event, text: text, pendingCommentCount: pendingCommentCount))
                     .help("Submit review (⌘Return)")
             }
         }
@@ -128,7 +112,6 @@ struct ReviewComposer: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(isSubmitting)
         .accessibilityAddTraits(event == option ? .isSelected : [])
     }
 
@@ -148,30 +131,12 @@ struct ReviewComposer: View {
     }
 
     private func discard() {
-        guard let onDiscard, !isSubmitting else { return }
-        isSubmitting = true
-        errorMessage = nil
-        Task {
-            do {
-                try await onDiscard()
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-            isSubmitting = false
-        }
+        onDiscard?()
     }
 
     private func submit() {
-        guard Self.canSubmit(event, text: text, pendingCommentCount: pendingCommentCount), !isSubmitting else { return }
-        isSubmitting = true
-        errorMessage = nil
-        Task {
-            do {
-                try await onSubmit(event, text)
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-            isSubmitting = false
-        }
+        guard Self.canSubmit(event, text: text, pendingCommentCount: pendingCommentCount) else { return }
+        onSubmit(event, text)
+        text = ""
     }
 }

@@ -150,6 +150,144 @@ final class PendingChangeTests: XCTestCase {
         XCTAssertNotEqual(PendingChange.Kind.title("a").field, PendingChange.Kind.body("a").field)
     }
 
+    // MARK: - Reviews
+
+    func testAReviewShowsInTheActivityListAndReviewersAsTheViewers() throws {
+        let requested = withReviewers([PullRequestReviewer(name: "Monalisa", kind: .user, state: .pending,
+                                                           isCodeOwner: true)], entryWithComments())
+        let review = change(.review(NewPullRequestReview(event: .requestChanges, body: "Add tests", commitID: "sha-7"),
+                                    authorLogin: "monalisa"))
+
+        let shown = PendingChange.apply(review, to: requested)
+
+        let item = try XCTUnwrap(shown.comments?.reviews.last)
+        XCTAssertEqual(item.body, "Add tests")
+        XCTAssertEqual(item.authorLogin, "monalisa")
+        XCTAssertEqual(item.reviewState, .changesRequested)
+        XCTAssertEqual(item.pendingChangeID, review.id)
+        XCTAssertEqual(shown.comments?.timeline.last?.id, item.id, "Shows after the loaded comments")
+        XCTAssertEqual(shown.content.detail.reviewers.reviewers,
+                       [PullRequestReviewer(name: "Monalisa", kind: .user, state: .changesRequested, isCodeOwner: true)],
+                       "The review answers the request")
+    }
+
+    func testAPlainCommentReviewKeepsAnEarlierVerdictAndAnUnknownViewerChangesNoReviewer() {
+        let approved = withReviewers([PullRequestReviewer(name: "monalisa", kind: .user, state: .approved)], entry())
+        let comment = NewPullRequestReview(event: .comment, body: "Nit", commitID: "sha-7")
+
+        XCTAssertEqual(PendingChange.apply(change(.review(comment, authorLogin: "monalisa")), to: approved)
+                        .content.detail.reviewers.reviewers.map(\.state), [.approved])
+        XCTAssertEqual(PendingChange.apply(change(.review(comment, authorLogin: nil)), to: entry())
+                        .content.detail.reviewers, entry().content.detail.reviewers)
+    }
+
+    func testAReviewGitHubsCopyAlreadyHasShowsOnce() {
+        var posted = change(.review(NewPullRequestReview(event: .approve, body: "", commitID: "sha-7"),
+                                    authorLogin: "monalisa"))
+        posted.postedCommentID = 80
+        var withReview = entryWithComments()
+        withReview.comments = withReview.comments?.adding(review: PullRequestComment(
+            id: "PRR_80", databaseID: 80, authorLogin: "monalisa", body: "", createdAt: Date(), htmlURL: nil,
+            reviewState: .approved))
+
+        XCTAssertEqual(PendingChange.apply(posted, to: withReview).comments?.reviews.map(\.id), ["PRR_80"])
+    }
+
+    func testAStartedReviewIsPendingBeforeTheCommentsReloadWithIt() {
+        let starting = change(.startReview(pullRequestID: "PR_node", commitID: "sha-7", reviewID: nil))
+        let started = change(.startReview(pullRequestID: "PR_node", commitID: "sha-7", reviewID: "PRR_1"))
+
+        XCTAssertNil(PendingChange.apply(starting, to: entryWithComments()).comments?.pendingReviewID)
+        XCTAssertEqual(PendingChange.apply(started, to: entryWithComments()).comments?.pendingReviewID, "PRR_1")
+    }
+
+    func testADraftShowsInItsPlaceAsPendingAndTheViewers() throws {
+        let anchor = DiffCommentAnchor(path: "a.swift", line: 9, side: .left)
+        let thread = change(.reviewComment(.thread(body: "Why?", anchor: anchor), review: .review(id: "PRR_1"),
+                                           authorLogin: "monalisa"))
+        let reply = change(.reviewComment(.reply(body: "Agreed", threadID: "t1"), review: .review(id: "PRR_1"),
+                                          authorLogin: "monalisa"))
+
+        let shown = try XCTUnwrap(PendingChange.apply([thread, reply], to: entryWithComments()).comments)
+
+        XCTAssertEqual(shown.threads.first?.comments.map(\.body), ["Why?", "Agreed"])
+        XCTAssertEqual(shown.threads.first?.comments.last?.isPending, true)
+        let newThread = try XCTUnwrap(shown.threads.last)
+        XCTAssertEqual(newThread.anchor, anchor)
+        XCTAssertTrue(newThread.isPending)
+        XCTAssertEqual(newThread.comments.first?.authorLogin, "monalisa")
+        XCTAssertEqual(newThread.comments.first?.pendingChangeID, thread.id)
+        XCTAssertEqual(shown.pendingCommentCount, 2)
+    }
+
+    func testSubmittingThePendingReviewPublishesItsDraftsAndShowsTheReview() throws {
+        let draft = change(.reviewComment(.reply(body: "Why?", threadID: "t1"), review: .review(id: "PRR_1"),
+                                          authorLogin: "monalisa"))
+        let submit = change(.submitPendingReview(review: .review(id: "PRR_1"), event: .approve, body: "",
+                                                 authorLogin: "monalisa"))
+        var pending = entryWithComments()
+        pending.comments = pending.comments?.settingPendingReviewID("PRR_1")
+
+        let shown = PendingChange.apply([draft, submit], to: pending)
+
+        XCTAssertNil(shown.comments?.pendingReviewID)
+        XCTAssertEqual(shown.comments?.pendingCommentCount, 0)
+        XCTAssertEqual(shown.comments?.reviews.map(\.reviewState), [.approved])
+        XCTAssertEqual(shown.content.detail.reviewers.reviewers.map(\.state), [.approved])
+    }
+
+    func testDiscardingThePendingReviewHidesItsDraftsAndTheirThreads() throws {
+        let anchor = DiffCommentAnchor(path: "a.swift", line: 9, side: .left)
+        let thread = change(.reviewComment(.thread(body: "Why?", anchor: anchor), review: .review(id: "PRR_1"),
+                                           authorLogin: nil))
+        let reply = change(.reviewComment(.reply(body: "Agreed", threadID: "t1"), review: .review(id: "PRR_1"),
+                                          authorLogin: nil))
+        var pending = entryWithComments()
+        pending.comments = pending.comments?.settingPendingReviewID("PRR_1")
+
+        let shown = try XCTUnwrap(PendingChange.apply([thread, reply, change(.discardPendingReview(
+            review: .review(id: "PRR_1")))], to: pending).comments)
+
+        XCTAssertNil(shown.pendingReviewID)
+        XCTAssertEqual(shown.threads.map(\.id), ["t1"])
+        XCTAssertEqual(shown.threads.first?.comments.map(\.body), ["Why?"], "Keeps the published comment")
+        XCTAssertEqual(shown.totalThreadCount, 5)
+    }
+
+    func testOnlyDiscardingAPendingReviewIsSentAgainAfterARestart() {
+        let review = NewPullRequestReview(event: .approve, body: "", commitID: "sha")
+        let kinds: [PendingChange.Kind] = [
+            .review(review, authorLogin: nil),
+            .startReview(pullRequestID: "PR", commitID: "sha", reviewID: nil),
+            .reviewComment(.reply(body: "a", threadID: "t"), review: .review(id: "PRR"), authorLogin: nil),
+            .submitPendingReview(review: .review(id: "PRR"), event: .approve, body: "", authorLogin: nil),
+        ]
+        for kind in kinds {
+            XCTAssertFalse(kind.isSafeToResend, kind.name)
+            XCTAssertNil(kind.field, "\(kind.name) replaces nothing")
+        }
+        XCTAssertTrue(PendingChange.Kind.discardPendingReview(review: .review(id: "PRR")).isSafeToResend)
+    }
+
+    func testAChangeWaitingForAStartGoesToTheReviewItStarted() {
+        let start = UUID()
+        let kind = PendingChange.Kind.submitPendingReview(review: .startedBy(start), event: .comment, body: "b",
+                                                          authorLogin: "me")
+
+        XCTAssertEqual(kind.sending(toReview: "PRR_1"),
+                       .submitPendingReview(review: .review(id: "PRR_1"), event: .comment, body: "b", authorLogin: "me"))
+        XCTAssertEqual(kind.text, "b")
+    }
+
+    private func withReviewers(_ reviewers: [PullRequestReviewer],
+                               _ entry: PullRequestDetailCache.Entry) -> PullRequestDetailCache.Entry {
+        var entry = entry
+        var detail = entry.content.detail
+        detail.reviewers = PullRequestReviewers(reviewers: reviewers)
+        entry.content = PullRequestDetailContent(detail: detail, files: entry.content.files)
+        return entry
+    }
+
     private func change(_ kind: PendingChange.Kind) -> PendingChange {
         PendingChange(reference: reference, kind: kind)
     }

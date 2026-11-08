@@ -1433,22 +1433,30 @@ final class GitHubAPITests: XCTestCase {
     func testPendingReviewMutations() async throws {
         let transport = MockHTTPTransport()
         transport.enqueue(json: #"{"data":{"addPullRequestReview":{"pullRequestReview":{"id":"PRR_1"}}}}"#)
-        transport.enqueue(json: #"{"data":{"addPullRequestReviewThread":{"thread":{"id":"RT_9"}}}}"#)
-        transport.enqueue(json: #"{"data":{"addPullRequestReviewThreadReply":{"comment":{"id":"RC_9"}}}}"#)
-        transport.enqueue(json: #"{"data":{"submitPullRequestReview":{"pullRequestReview":{"id":"PRR_1"}}}}"#)
+        transport.enqueue(json: #"{"data":{"addPullRequestReviewThread":{"thread":{"id":"RT_9","comments":{"nodes":[{"databaseId":91}]}}}}}"#)
+        transport.enqueue(json: #"{"data":{"addPullRequestReviewThreadReply":{"comment":{"id":"RC_9","databaseId":92}}}}"#)
+        transport.enqueue(json: #"{"data":{"submitPullRequestReview":{"pullRequestReview":{"id":"PRR_1","databaseId":80}}}}"#)
         transport.enqueue(json: #"{"data":{"submitPullRequestReview":{"pullRequestReview":{"id":"PRR_1"}}}}"#)
         transport.enqueue(json: #"{"data":{"deletePullRequestReview":{"pullRequestReview":{"id":"PRR_1"}}}}"#)
         let api = GitHubAPI(transport: transport)
         let anchor = DiffCommentAnchor(path: "Sources/New.swift", line: 4, side: .left)
 
         let reviewID = try await api.startPendingReview(token: "token", pullRequestID: "PR_node", commitID: "abc123")
-        try await api.addPendingReviewComment(token: "token", reviewID: reviewID, comment: .thread(body: "Why?", anchor: anchor))
-        try await api.addPendingReviewComment(token: "token", reviewID: reviewID, comment: .reply(body: "Agreed", threadID: "RT_1"))
-        try await api.submitPendingReview(token: "token", reviewID: reviewID, event: .requestChanges, body: "See comments")
-        try await api.submitPendingReview(token: "token", reviewID: reviewID, event: .comment, body: "")
+        let threadID = try await api.addPendingReviewComment(token: "token", reviewID: reviewID,
+                                                             comment: .thread(body: "Why?", anchor: anchor))
+        let replyID = try await api.addPendingReviewComment(token: "token", reviewID: reviewID,
+                                                            comment: .reply(body: "Agreed", threadID: "RT_1"))
+        let submittedID = try await api.submitPendingReview(token: "token", reviewID: reviewID, event: .requestChanges,
+                                                            body: "See comments")
+        let unnumberedID = try await api.submitPendingReview(token: "token", reviewID: reviewID, event: .comment, body: "")
         try await api.deletePendingReview(token: "token", reviewID: reviewID)
 
         XCTAssertEqual(reviewID, "PRR_1")
+        // REST IDs, so the drafts and the review show once when the comments reload.
+        XCTAssertEqual(threadID, 91)
+        XCTAssertEqual(replyID, 92)
+        XCTAssertEqual(submittedID, 80)
+        XCTAssertNil(unnumberedID)
         let start = try transport.graphQLBody(at: 0)
         XCTAssertTrue(start.query.contains("addPullRequestReview(input: { pullRequestId: $id, commitOID: $commit })"))
         XCTAssertFalse(start.query.contains("event"), "A review without a verdict stays pending")
@@ -1456,6 +1464,7 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertEqual(start.variables["commit"] as? String, "abc123")
         let thread = try transport.graphQLBody(at: 1)
         XCTAssertTrue(thread.query.contains("addPullRequestReviewThread(input: { pullRequestReviewId: $review"))
+        XCTAssertTrue(thread.query.contains("comments(first: 1) { nodes { databaseId } }"))
         XCTAssertEqual(thread.variables["review"] as? String, "PRR_1")
         XCTAssertEqual(thread.variables["path"] as? String, "Sources/New.swift")
         XCTAssertEqual(thread.variables["line"] as? Int, 4)
@@ -1474,6 +1483,34 @@ final class GitHubAPITests: XCTestCase {
         let delete = try transport.graphQLBody(at: 5)
         XCTAssertTrue(delete.query.contains("deletePullRequestReview(input: { pullRequestReviewId: $review })"))
         XCTAssertEqual(delete.variables["review"] as? String, "PRR_1")
+    }
+
+    func testDeletingAReviewThatIsGoneIsANotFoundError() async {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: #"{"errors":[{"type":"NOT_FOUND","message":"Could not resolve to a node with the global id of 'PRR_1'"}]}"#)
+
+        do {
+            try await GitHubAPI(transport: transport).deletePendingReview(token: "token", reviewID: "PRR_1")
+            XCTFail("Expected an error")
+        } catch {
+            XCTAssertEqual((error as? GraphQLError)?.isNotFound, true)
+        }
+    }
+
+    func testFetchPullRequestCommentsLoadsSubmittedReviewsForTheActivityList() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: submittedReviewsResponse)
+
+        let comments = try await GitHubAPI(transport: transport)
+            .fetchPullRequestComments(token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7))
+
+        XCTAssertEqual(comments.reviews.map(\.id), ["PRR_1", "PRR_2"])
+        XCTAssertEqual(comments.reviews.map(\.databaseID), [80, 81])
+        XCTAssertEqual(comments.reviews.map(\.reviewState), [.approved, .changesRequested])
+        XCTAssertEqual(comments.reviews.map(\.authorLogin), ["hubot", "ghost"])
+        XCTAssertEqual(comments.reviews.first?.body, "Ship it")
+        let body = try transport.graphQLBody(at: 0)
+        XCTAssertTrue(body.query.contains("submittedReviews: reviews(last: 50, states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED])"))
     }
 
     func testPendingReviewSurfacesGraphQLErrors() async {
@@ -1706,6 +1743,27 @@ private let pendingCommentsResponse = """
               ] } }
           ]
         }
+      }
+    }
+  }
+}
+"""
+
+private let submittedReviewsResponse = """
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "comments": { "nodes": [] },
+        "reviews": { "nodes": [] },
+        "submittedReviews": { "nodes": [
+          { "id": "PRR_1", "databaseId": 80, "body": "Ship it", "state": "APPROVED",
+            "submittedAt": "2026-04-10T08:00:00Z", "url": "https://github.com/acme/widgets/pull/7#pullrequestreview-80",
+            "author": { "login": "hubot" } },
+          { "id": "PRR_2", "databaseId": 81, "body": "", "state": "CHANGES_REQUESTED",
+            "submittedAt": "2026-04-10T09:00:00Z", "url": null, "author": null }
+        ] },
+        "reviewThreads": { "nodes": [] }
       }
     }
   }

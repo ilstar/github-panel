@@ -13,12 +13,12 @@ extension PullRequestDetailViewModel {
                      postComment: ((NewPullRequestComment, PullRequestReference) async throws -> Int)? = nil,
                      setResolved: @escaping (String, Bool) async throws -> Void = { _, _ in },
                      edit: @escaping (PullRequestReference, String?, String?) async throws -> Void = { _, _, _ in },
-                     submitReview: @escaping SubmitReview = { _, _ in },
+                     submitReview: ((NewPullRequestReview, PullRequestReference) async throws -> Int)? = nil,
                      updateBranch: @escaping UpdateBranch = { _, _ in },
-                     startPendingReview: @escaping StartPendingReview = { _, _ in "" },
-                     addPendingComment: @escaping AddPendingComment = { _, _ in },
-                     submitPendingReview: @escaping SubmitPendingReview = { _, _, _ in },
-                     deletePendingReview: @escaping DeletePendingReview = { _ in },
+                     startPendingReview: ((String, String) async throws -> String)? = nil,
+                     addPendingComment: ((PendingReviewComment, String) async throws -> Int?)? = nil,
+                     submitPendingReview: ((String, PullRequestReviewEvent, String) async throws -> Int?)? = nil,
+                     deletePendingReview: ((String) async throws -> Void)? = nil,
                      fetchChecks: @escaping (PullRequestReference) async throws -> PullRequestChecks = { _ in .empty },
                      rerunChecks: @escaping RerunChecks = { _, _ in },
                      fetchReviewerCandidates: @escaping FetchReviewerCandidates = { _, _ in [] },
@@ -37,6 +37,11 @@ extension PullRequestDetailViewModel {
         api.editHandler = edit
         api.setReviewRequestedHandler = setReviewRequested
         api.postCommentHandler = postComment
+        api.reviewHandler = submitReview
+        api.startPendingReviewHandler = startPendingReview
+        api.pendingCommentHandler = addPendingComment
+        api.submitPendingReviewHandler = submitPendingReview
+        api.deletePendingReviewHandler = deletePendingReview
         let session = UUID()
         let lists = PullRequestListCache()
         lists.viewerLogin = viewerLogin
@@ -44,10 +49,7 @@ extension PullRequestDetailViewModel {
                                 lists: lists) {
             SyncEngine.Credential(token: "token", session: session)
         }
-        self.init(reference: reference, engine: engine,
-                  submitReview: submitReview, updateBranch: updateBranch,
-                  startPendingReview: startPendingReview, addPendingComment: addPendingComment,
-                  submitPendingReview: submitPendingReview, deletePendingReview: deletePendingReview,
+        self.init(reference: reference, engine: engine, updateBranch: updateBranch,
                   rerunChecks: rerunChecks, fetchReviewerCandidates: fetchReviewerCandidates,
                   searchMentionCandidates: searchMentionCandidates)
     }

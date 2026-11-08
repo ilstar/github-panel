@@ -612,6 +612,9 @@ final class GitHubAPI: GitHubAPIClient {
             pullRequest(number: $number) {
               comments(last: \(commentPageSize)) { totalCount \(earlierPageInfo) nodes { ...CommentFields } }
               reviews(states: PENDING, first: 1) { nodes { id viewerDidAuthor } }
+              submittedReviews: reviews(last: \(Self.submittedReviewLimit), states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED]) {
+                nodes { id databaseId body state submittedAt url author { login } }
+              }
               reviewThreads(first: \(threadPageSize)) {
                 totalCount
                 \(pageInfo)
@@ -676,9 +679,13 @@ final class GitHubAPI: GitHubAPIClient {
             // GitHub shows a pending review only to its author, but check in case that changes.
             pendingReviewID: pullRequest.reviews?.nodes.first { $0.viewerDidAuthor }?.id,
             totalCommentCount: pullRequest.comments.totalCount,
-            totalThreadCount: pullRequest.reviewThreads.totalCount
+            totalThreadCount: pullRequest.reviewThreads.totalCount,
+            reviews: (pullRequest.submittedReviews?.nodes ?? []).compactMap(\.review)
         )
     }
+
+    /// The newest submitted reviews the Activity list shows.
+    static let submittedReviewLimit = 50
 
     /// Posts through REST so each comment is published right away instead of joining a pending review.
     @discardableResult
@@ -725,7 +732,8 @@ final class GitHubAPI: GitHubAPIClient {
     }
 
     /// Submits a review with its verdict in one step, so GitHub publishes it right away instead of keeping it pending.
-    func submitReview(token: String, reference: PullRequestReference, review: NewPullRequestReview) async throws {
+    @discardableResult
+    func submitReview(token: String, reference: PullRequestReference, review: NewPullRequestReview) async throws -> Int {
         let (owner, name) = try repoParts(reference.repoFullName)
         var request = makeRequest(path: "/repos/\(owner)/\(name)/pulls/\(reference.number)/reviews", token: token)
         request.httpMethod = "POST"
@@ -736,7 +744,7 @@ final class GitHubAPI: GitHubAPIClient {
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: fields)
         struct Created: Decodable { let id: Int }
-        _ = try await decode(Created.self, request: request)
+        return try await decode(Created.self, request: request).id
     }
 
     /// Starts a pending review, which holds draft comments until it is submitted with a verdict.
@@ -758,7 +766,9 @@ final class GitHubAPI: GitHubAPIClient {
     }
 
     /// Adds a draft comment to a pending review. The pull request's author is not notified until the review is submitted.
-    func addPendingReviewComment(token: String, reviewID: String, comment: PendingReviewComment) async throws {
+    /// Returns the draft's REST ID, so it isn't shown twice once the comments reload.
+    @discardableResult
+    func addPendingReviewComment(token: String, reviewID: String, comment: PendingReviewComment) async throws -> Int? {
         let query: String
         var variables: [String: Any] = ["review": reviewID]
         switch comment {
@@ -766,7 +776,7 @@ final class GitHubAPI: GitHubAPIClient {
             query = """
             mutation($review: ID!, $path: String!, $line: Int!, $side: DiffSide!, $body: String!) {
               addPullRequestReviewThread(input: { pullRequestReviewId: $review, path: $path, line: $line, side: $side, body: $body }) {
-                thread { id }
+                thread { id comments(first: 1) { nodes { databaseId } } }
               }
             }
             """
@@ -778,23 +788,36 @@ final class GitHubAPI: GitHubAPIClient {
             query = """
             mutation($review: ID!, $thread: ID!, $body: String!) {
               addPullRequestReviewThreadReply(input: { pullRequestReviewId: $review, pullRequestReviewThreadId: $thread, body: $body }) {
-                comment { id }
+                comment { id databaseId }
               }
             }
             """
             variables["thread"] = threadID
             variables["body"] = body
         }
-        struct Response: Decodable {}
-        _ = try await graphQL(Response.self, query: query, variables: variables, token: token)
+        struct Comment: Decodable { let databaseId: Int? }
+        struct Thread: Decodable {
+            struct Comments: Decodable { let nodes: [Comment] }
+            let comments: Comments?
+        }
+        struct Response: Decodable {
+            struct NewThread: Decodable { let thread: Thread? }
+            struct Reply: Decodable { let comment: Comment? }
+            let addPullRequestReviewThread: NewThread?
+            let addPullRequestReviewThreadReply: Reply?
+        }
+        let response = try await graphQL(Response.self, query: query, variables: variables, token: token)
+        return response.addPullRequestReviewThread?.thread?.comments?.nodes.first?.databaseId
+            ?? response.addPullRequestReviewThreadReply?.comment?.databaseId
     }
 
-    /// Publishes a pending review and all its draft comments with a verdict.
-    func submitPendingReview(token: String, reviewID: String, event: PullRequestReviewEvent, body: String) async throws {
+    /// Publishes a pending review and all its draft comments with a verdict. Returns the review's REST ID.
+    @discardableResult
+    func submitPendingReview(token: String, reviewID: String, event: PullRequestReviewEvent, body: String) async throws -> Int? {
         let query = """
         mutation($review: ID!, $event: PullRequestReviewEvent!, $body: String) {
           submitPullRequestReview(input: { pullRequestReviewId: $review, event: $event, body: $body }) {
-            pullRequestReview { id }
+            pullRequestReview { id databaseId }
           }
         }
         """
@@ -802,8 +825,13 @@ final class GitHubAPI: GitHubAPIClient {
         if !body.isEmpty {
             variables["body"] = body
         }
-        struct Response: Decodable {}
-        _ = try await graphQL(Response.self, query: query, variables: variables, token: token)
+        struct Response: Decodable {
+            struct Payload: Decodable { let pullRequestReview: Review? }
+            struct Review: Decodable { let databaseId: Int? }
+            let submitPullRequestReview: Payload?
+        }
+        let response = try await graphQL(Response.self, query: query, variables: variables, token: token)
+        return response.submitPullRequestReview?.pullRequestReview?.databaseId
     }
 
     /// Discards a pending review and its draft comments.
@@ -1103,7 +1131,7 @@ final class GitHubAPI: GitHubAPIClient {
             return GraphQLResult(value: value, ssoAuthorizationURL: url)
         }
         if !errors.isEmpty {
-            throw GraphQLError(message: errors.map(\.message).joined(separator: " "))
+            throw GraphQLError(message: errors.map(\.message).joined(separator: " "), type: errors.first?.type)
         }
         guard let value = envelope.data else {
             throw GraphQLError(message: "Empty response from GitHub.")
@@ -1342,6 +1370,30 @@ private struct CommentsResponse: Decodable {
         let reviewThreads: GraphQLPage<Thread>
         /// The viewer's pending review, if any.
         let reviews: Connection<Review>?
+        let submittedReviews: Connection<SubmittedReview>?
+    }
+    struct SubmittedReview: Decodable {
+        let id: String
+        let databaseId: Int
+        let body: String
+        let state: String
+        let submittedAt: Date?
+        let url: URL?
+        /// Missing when the author's account was deleted.
+        let author: Comment.Author?
+
+        var review: PullRequestComment? {
+            guard let submittedAt else { return nil }
+            let reviewState: PullRequestReviewer.State
+            switch state {
+            case "APPROVED": reviewState = .approved
+            case "CHANGES_REQUESTED": reviewState = .changesRequested
+            case "DISMISSED": reviewState = .dismissed
+            default: reviewState = .commented
+            }
+            return PullRequestComment(id: id, databaseID: databaseId, authorLogin: author?.login ?? "ghost", body: body,
+                                      createdAt: submittedAt, htmlURL: url, reviewState: reviewState)
+        }
     }
     struct Review: Decodable {
         let id: String
@@ -1720,6 +1772,11 @@ enum SAMLSSO {
 struct GraphQLError: LocalizedError {
     let message: String
     var statusCode: Int? = nil
+    /// GitHub's error type, such as `NOT_FOUND`.
+    var type: String? = nil
+
+    /// Whether GitHub found nothing with the ID it was given, such as a review that was already deleted.
+    var isNotFound: Bool { type == "NOT_FOUND" }
 
     var errorDescription: String? { message }
 }

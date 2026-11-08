@@ -1,7 +1,7 @@
 import Foundation
 
 /// The verdict of a submitted review. Raw values are the REST API's review events.
-enum PullRequestReviewEvent: String, CaseIterable, Identifiable {
+enum PullRequestReviewEvent: String, CaseIterable, Identifiable, Codable {
     case comment = "COMMENT"
     case approve = "APPROVE"
     case requestChanges = "REQUEST_CHANGES"
@@ -29,7 +29,7 @@ enum PullRequestReviewEvent: String, CaseIterable, Identifiable {
         self != .approve
     }
 
-    /// Shown once GitHub accepts the review.
+    /// Shown once the review is submitted.
     var confirmation: String {
         switch self {
         case .comment: return "You reviewed this pull request."
@@ -37,10 +37,19 @@ enum PullRequestReviewEvent: String, CaseIterable, Identifiable {
         case .requestChanges: return "You requested changes on this pull request."
         }
     }
+
+    /// How the Reviewers list shows the reviewer once the review lands.
+    var reviewerState: PullRequestReviewer.State {
+        switch self {
+        case .comment: return .commented
+        case .approve: return .approved
+        case .requestChanges: return .changesRequested
+        }
+    }
 }
 
 /// A review to submit in one step: the verdict, its message, and the commit it reviews.
-struct NewPullRequestReview: Equatable {
+struct NewPullRequestReview: Equatable, Codable {
     let event: PullRequestReviewEvent
     let body: String
     /// The head commit that was loaded, so the review is not applied to commits pushed since.

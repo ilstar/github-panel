@@ -68,6 +68,15 @@ final class FakeGitHubAPI: GitHubAPIClient {
     private(set) var pendingCommentCalls: [(token: String, reviewID: String, comment: PendingReviewComment)] = []
     private(set) var submitPendingReviewCalls: [(token: String, reviewID: String, event: PullRequestReviewEvent, body: String)] = []
     private(set) var deletePendingReviewCalls: [(token: String, reviewID: String)] = []
+    /// Answers a review with its REST ID. Without it, reviews are numbered from 1.
+    var reviewHandler: ((NewPullRequestReview, PullRequestReference) async throws -> Int)?
+    /// Answers with the started review's node ID. Without it, every review is `PRR_pending`.
+    var startPendingReviewHandler: ((String, String) async throws -> String)?
+    /// Answers a draft with its REST ID, if any.
+    var pendingCommentHandler: ((PendingReviewComment, String) async throws -> Int?)?
+    /// Answers a submitted pending review with its REST ID, if any.
+    var submitPendingReviewHandler: ((String, PullRequestReviewEvent, String) async throws -> Int?)?
+    var deletePendingReviewHandler: ((String) async throws -> Void)?
     var checks: PullRequestChecks = .empty
     var checksHandler: ((PullRequestReference) async throws -> PullRequestChecks)?
     var reviewerCandidates: [ReviewerCandidate] = []
@@ -194,9 +203,11 @@ final class FakeGitHubAPI: GitHubAPIClient {
         try await editHandler?(reference, title, body)
     }
 
-    func submitReview(token: String, reference: PullRequestReference, review: NewPullRequestReview) async throws {
+    func submitReview(token: String, reference: PullRequestReference, review: NewPullRequestReview) async throws -> Int {
         if let error { throw error }
         reviewCalls.append((token, reference, review))
+        if let reviewHandler { return try await reviewHandler(review, reference) }
+        return reviewCalls.count
     }
 
     func updatePullRequestBranch(token: String, pullRequestID: String, expectedHeadSHA: String) async throws {
@@ -207,22 +218,26 @@ final class FakeGitHubAPI: GitHubAPIClient {
     func startPendingReview(token: String, pullRequestID: String, commitID: String) async throws -> String {
         if let error { throw error }
         startPendingReviewCalls.append((token, pullRequestID, commitID))
+        if let startPendingReviewHandler { return try await startPendingReviewHandler(pullRequestID, commitID) }
         return "PRR_pending"
     }
 
-    func addPendingReviewComment(token: String, reviewID: String, comment: PendingReviewComment) async throws {
+    func addPendingReviewComment(token: String, reviewID: String, comment: PendingReviewComment) async throws -> Int? {
         if let error { throw error }
         pendingCommentCalls.append((token, reviewID, comment))
+        return try await pendingCommentHandler?(comment, reviewID) ?? nil
     }
 
-    func submitPendingReview(token: String, reviewID: String, event: PullRequestReviewEvent, body: String) async throws {
+    func submitPendingReview(token: String, reviewID: String, event: PullRequestReviewEvent, body: String) async throws -> Int? {
         if let error { throw error }
         submitPendingReviewCalls.append((token, reviewID, event, body))
+        return try await submitPendingReviewHandler?(reviewID, event, body) ?? nil
     }
 
     func deletePendingReview(token: String, reviewID: String) async throws {
         if let error { throw error }
         deletePendingReviewCalls.append((token, reviewID))
+        try await deletePendingReviewHandler?(reviewID)
     }
 
     func fetchPullRequestChecks(token: String, reference: PullRequestReference) async throws -> PullRequestChecks {
