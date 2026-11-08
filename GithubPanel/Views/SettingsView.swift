@@ -11,6 +11,7 @@ struct SettingsView: View {
     @AppStorage(DetailPaneMode.defaultsKey, store: AppDefaults.store) private var detailPaneMode: DetailPaneMode = .native
     @AppStorage(PullRequestTextSize.defaultsKey, store: AppDefaults.store) private var prTextSize = PullRequestTextSize.defaultSize
     @AppStorage(BotReviewer.defaultsKey, store: AppDefaults.store) private var botReviewerLogin = ""
+    @AppStorage(MyPullRequestSections.groupsByStatusDefaultsKey, store: AppDefaults.store) private var groupsByStatus = true
     @AppStorage(SettingsTab.defaultsKey, store: AppDefaults.store) private var selectedTab: SettingsTab = .general
 
     var body: some View {
@@ -29,6 +30,7 @@ struct SettingsView: View {
             switch tab {
             case .general:
                 appearanceSection
+                myPullRequestsSection
                 refreshSection
                 shortcutSection
             case .account:
@@ -116,6 +118,19 @@ struct SettingsView: View {
             .disabled(prTextSize == PullRequestTextSize.defaultSize)
         } header: {
             Text("Appearance")
+        }
+    }
+
+    private var myPullRequestsSection: some View {
+        Section {
+            Toggle("Group by status", isOn: $groupsByStatus)
+        } header: {
+            Text("My PRs")
+        } footer: {
+            Text("Sorts My PRs into Needs You, Ready to Merge, Building, In Review, Merging and Drafts. Turn off to show one list in GitHub's order.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

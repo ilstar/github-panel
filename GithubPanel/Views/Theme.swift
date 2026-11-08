@@ -66,6 +66,9 @@ enum Theme {
     /// Merge conflicts: warmer than amber and softer than red, so it does not read as a failed check.
     static let orange = Color(light: NSColor(red: 0.89, green: 0.36, blue: 0.05, alpha: 1),
                               dark: NSColor(red: 1.00, green: 0.56, blue: 0.24, alpha: 1))
+    /// Count badges with white text, such as Needs You on the My PRs tab. One shade in both appearances, since
+    /// dark mode's lighter ``red`` would not keep white text readable.
+    static let badgeRed = Color(red: 0.84, green: 0.19, blue: 0.21)
     static let amber = Color(light: NSColor(red: 0.80, green: 0.50, blue: 0.05, alpha: 1),
                              dark: NSColor(red: 1.00, green: 0.72, blue: 0.30, alpha: 1))
     /// Branch name tags, in GitHub's blue on a pale blue fill.
@@ -360,6 +363,10 @@ struct GlassSegmentedControl<Value: Hashable>: View {
     struct Segment: Identifiable {
         let value: Value
         let title: String
+        /// A count in a red capsule after the title, such as how many pull requests need you. Nil shows none.
+        var badge: Int?
+        /// What the badge counts, for its tooltip and VoiceOver.
+        var badgeHelp: String?
         var id: Value { value }
     }
 
@@ -379,23 +386,37 @@ struct GlassSegmentedControl<Value: Hashable>: View {
                         selection = segment.value
                     }
                 } label: {
-                    Text(segment.title)
-                        .font(.system(size: 13, weight: isSelected ? .semibold : .medium))
-                        .foregroundStyle(isSelected ? Color.primary : Color.secondary)
-                        .lineLimit(1)
-                        .padding(.horizontal, 14)
-                        .frame(maxWidth: fillsWidth ? .infinity : nil)
-                        .frame(height: 28)
-                        .background {
-                            if isSelected {
-                                Capsule()
-                                    .fill(Theme.segmentSelection)
-                                    .shadow(color: .black.opacity(0.1), radius: 3, y: 1.5)
-                                    .overlay(Capsule().strokeBorder(Color.black.opacity(0.05), lineWidth: 0.5))
-                                    .matchedGeometryEffect(id: "selection", in: namespace)
-                            }
+                    HStack(spacing: 6) {
+                        Text(segment.title)
+                            .font(.system(size: 13, weight: isSelected ? .semibold : .medium))
+                            .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+                            .lineLimit(1)
+                        if let badge = segment.badge {
+                            Text(String(badge))
+                                .font(.system(size: 11, weight: .bold))
+                                .monospacedDigit()
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 5)
+                                .frame(minWidth: 18, minHeight: 18)
+                                .background(Capsule().fill(Theme.badgeRed))
+                                .fixedSize()
+                                .help(segment.badgeHelp ?? "")
+                                .accessibilityLabel(segment.badgeHelp ?? String(badge))
                         }
-                        .contentShape(Capsule())
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(maxWidth: fillsWidth ? .infinity : nil)
+                    .frame(height: 28)
+                    .background {
+                        if isSelected {
+                            Capsule()
+                                .fill(Theme.segmentSelection)
+                                .shadow(color: .black.opacity(0.1), radius: 3, y: 1.5)
+                                .overlay(Capsule().strokeBorder(Color.black.opacity(0.05), lineWidth: 0.5))
+                                .matchedGeometryEffect(id: "selection", in: namespace)
+                        }
+                    }
+                    .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
                 .focusEffectDisabledIfAvailable()

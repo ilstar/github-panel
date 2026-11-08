@@ -52,6 +52,8 @@ struct ContentView: View {
     @AppStorage(DetailPaneMode.defaultsKey, store: AppDefaults.store) private var detailPaneMode: DetailPaneMode = .native
     @AppStorage(BotReviewer.defaultsKey, store: AppDefaults.store) private var botReviewerLogin = ""
     @AppStorage(Self.forLaterExpandedDefaultsKey, store: AppDefaults.store) private var isForLaterExpanded = true
+    @AppStorage(CollapsedGroupsStorage.defaultsKey, store: AppDefaults.store) private var collapsedGroupsValue = ""
+    @AppStorage(MyPullRequestSections.groupsByStatusDefaultsKey, store: AppDefaults.store) private var groupsByStatus = true
     /// Made on first use of the GitHub pane, then kept so switching pull requests reuses one web view.
     @StateObject private var webSession = LazyWebSession()
     private let minuteTicker = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
@@ -153,7 +155,7 @@ struct ContentView: View {
             Color.clear
                 .frame(height: Self.windowButtonsClearance(titleBarHeight: titleBarHeight))
 
-            PullRequestTabPicker(selection: $monitor.selectedTab)
+            PullRequestTabPicker(selection: $monitor.selectedTab, needsYouCount: myPullRequests.needsYouCount)
 
             if monitor.isUsingMockData {
                 mockDataBanner
@@ -339,28 +341,50 @@ struct ContentView: View {
         }
     }
 
-    /// The ids of the My PRs rows on screen, in order. Rows under a collapsed For Later are left out.
+    /// My PRs in their status groups, counting the review bot from Settings like a person.
+    private var myPullRequests: MyPullRequestSections {
+        monitor.myPullRequests(botReviewer: BotReviewer.normalized(botReviewerLogin))
+    }
+
+    /// The My PRs groups folded away, saved across launches.
+    private var collapsedGroups: Set<MyPullRequestGroup> {
+        get { CollapsedGroupsStorage.decode(collapsedGroupsValue) }
+        nonmutating set { collapsedGroupsValue = CollapsedGroupsStorage.encode(newValue) }
+    }
+
+    /// The ids of the My PRs rows on screen, in order. Rows under a collapsed group or For Later are left out.
     private var visibleOpenRowIDs: [String] {
-        monitor.myPullRequests.visibleIDs(isForLaterExpanded: isForLaterExpanded)
+        myPullRequests.visibleIDs(groupsByStatus: groupsByStatus,
+                                  collapsed: collapsedGroups,
+                                  isForLaterExpanded: isForLaterExpanded)
     }
 
     private var openPullRequestsList: some View {
-        let sections = monitor.myPullRequests
+        let sections = myPullRequests
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 6) {
                     if monitor.prRows.isEmpty {
                         emptyStateSpacer
                     } else {
-                        ForEach(sections.activeEntries) { entry in
-                            openPullRequestEntry(entry, isForLater: false, stackPositions: sections.stackPositions)
+                        if groupsByStatus {
+                            groupedPullRequests(sections)
+                        } else {
+                            ForEach(sections.listEntries) { entry in
+                                openPullRequestEntry(entry, isForLater: false, sections: sections)
+                            }
                         }
                         if !sections.forLater.isEmpty {
-                            forLaterHeading(count: sections.forLater.count)
-                                .padding(.top, sections.active.isEmpty ? 4 : 12)
+                            sectionHeading(title: MyPullRequestSections.forLaterTitle,
+                                           count: sections.forLater.count,
+                                           color: .accentColor,
+                                           isExpanded: isForLaterExpanded) {
+                                isForLaterExpanded.toggle()
+                            }
+                            .padding(.top, sections.active.isEmpty ? 4 : 12)
                             if isForLaterExpanded {
                                 ForEach(sections.forLaterEntries) { entry in
-                                    openPullRequestEntry(entry, isForLater: true, stackPositions: sections.stackPositions)
+                                    openPullRequestEntry(entry, isForLater: true, sections: sections)
                                 }
                             }
                         }
@@ -386,18 +410,40 @@ struct ContentView: View {
         }
     }
 
+    /// My PRs under a folding heading per status group, most urgent first.
+    @ViewBuilder
+    private func groupedPullRequests(_ sections: MyPullRequestSections) -> some View {
+        ForEach(Array(sections.groups.enumerated()), id: \.element.id) { index, group in
+            let isExpanded = !collapsedGroups.contains(group.group)
+            sectionHeading(title: group.group.title,
+                           count: group.rows.count,
+                           color: group.group.color,
+                           isExpanded: isExpanded) {
+                var groups = collapsedGroups
+                if isExpanded { groups.insert(group.group) } else { groups.remove(group.group) }
+                collapsedGroups = groups
+            }
+            .padding(.top, index == 0 ? 4 : 12)
+            if isExpanded {
+                ForEach(group.entries) { entry in
+                    openPullRequestEntry(entry, isForLater: false, sections: sections)
+                }
+            }
+        }
+    }
+
     /// A single row, or a stack's rows indented together beside a rail that ties them into one stack.
     @ViewBuilder
     private func openPullRequestEntry(_ entry: MyPullRequestEntry,
                                       isForLater: Bool,
-                                      stackPositions: [String: PullRequestStackPosition]) -> some View {
+                                      sections: MyPullRequestSections) -> some View {
         switch entry {
         case .single(let pr):
-            openPullRequestRow(pr, isForLater: isForLater, stackPosition: stackPositions[pr.id])
+            openPullRequestRow(pr, isForLater: isForLater, sections: sections)
         case .stack(let rows):
             VStack(spacing: 6) {
                 ForEach(rows) { pr in
-                    openPullRequestRow(pr, isForLater: isForLater, stackPosition: stackPositions[pr.id])
+                    openPullRequestRow(pr, isForLater: isForLater, sections: sections)
                 }
             }
             .padding(.leading, 12)
@@ -412,10 +458,11 @@ struct ContentView: View {
         }
     }
 
-    private func openPullRequestRow(_ pr: PullRequestRow, isForLater: Bool, stackPosition: PullRequestStackPosition?) -> some View {
+    private func openPullRequestRow(_ pr: PullRequestRow, isForLater: Bool, sections: MyPullRequestSections) -> some View {
         PRRow(
             pr: pr,
-            stackPosition: stackPosition,
+            stackPosition: sections.stackPositions[pr.id],
+            status: groupsByStatus ? sections.statuses[pr.id] : nil,
             botReviewer: BotReviewer.normalized(botReviewerLogin),
             isSelected: selectedPRID == pr.id,
             relativeFormatter: relativeFormatter,
@@ -442,21 +489,25 @@ struct ContentView: View {
         }
     }
 
-    /// The For Later heading under the other My PRs. Clicking it folds the parked pull requests away.
-    private func forLaterHeading(count: Int) -> some View {
+    /// A My PRs group's heading, or For Later's. Clicking it folds the group's pull requests away.
+    private func sectionHeading(title: String,
+                                count: Int,
+                                color: Color,
+                                isExpanded: Bool,
+                                toggle: @escaping () -> Void) -> some View {
         Button {
             withAnimation(.easeInOut(duration: 0.15)) {
-                isForLaterExpanded.toggle()
+                toggle()
             }
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 9, weight: .bold))
-                    .rotationEffect(.degrees(isForLaterExpanded ? 90 : 0))
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
                     .foregroundStyle(.secondary)
-                Text(MyPullRequestSections.forLaterTitle)
+                Text(title)
                     .font(.system(size: 12.5, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(color)
                 Text(String(count))
                     .font(.caption.weight(.medium))
                     .monospacedDigit()
@@ -468,7 +519,8 @@ struct ContentView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(isForLaterExpanded ? "Hide pull requests for later" : "Show pull requests for later")
+        .help(isExpanded ? "Hide \(title)" : "Show \(title)")
+        .accessibilityAddTraits(.isHeader)
     }
 
     private var reviewRequestsSection: some View {
@@ -965,6 +1017,8 @@ struct ContentView: View {
         case .open:
             if monitor.forLaterIDs.contains(request.reference.id) {
                 isForLaterExpanded = true
+            } else if let group = myPullRequests.group(containing: request.reference.id) {
+                collapsedGroups.remove(group)
             }
             selectedPRID = request.reference.id
         case .reviews:
@@ -1012,13 +1066,21 @@ struct ContentView: View {
 /// so its edges line up with the rows under it.
 struct PullRequestTabPicker: View {
     @Binding var selection: PullRequestTab
+    /// The red count on My PRs: how many pull requests need the author.
+    var needsYouCount = 0
 
-    static let segments = PullRequestTab.allCases.map {
-        GlassSegmentedControl<PullRequestTab>.Segment(value: $0, title: $0.title)
+    /// The tabs in order, with the Needs You count on My PRs when there is one.
+    static func segments(needsYouCount: Int) -> [GlassSegmentedControl<PullRequestTab>.Segment] {
+        PullRequestTab.allCases.map { tab in
+            GlassSegmentedControl<PullRequestTab>.Segment(value: tab,
+                                                          title: tab.title,
+                                                          badge: tab == .open && needsYouCount > 0 ? needsYouCount : nil,
+                                                          badgeHelp: "\(needsYouCount) need you")
+        }
     }
 
     var body: some View {
-        GlassSegmentedControl(selection: $selection, segments: Self.segments, fillsWidth: true)
+        GlassSegmentedControl(selection: $selection, segments: Self.segments(needsYouCount: needsYouCount), fillsWidth: true)
     }
 }
 
