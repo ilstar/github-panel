@@ -55,8 +55,14 @@ final class ContentViewTests: XCTestCase {
     }
 
     func testTabPickerListsTheTabsInOrder() {
-        XCTAssertEqual(PullRequestTabPicker.segments.map(\.value), PullRequestTab.allCases)
-        XCTAssertEqual(PullRequestTabPicker.segments.map(\.title), ["My PRs", "To Review", "History"])
+        XCTAssertEqual(PullRequestTabPicker.segments(needsYouCount: 0).map(\.value), PullRequestTab.allCases)
+        XCTAssertEqual(PullRequestTabPicker.segments(needsYouCount: 0).map(\.title), ["My PRs", "To Review", "History"])
+    }
+
+    func testTabPickerBadgesMyPRsOnlyWhenSomethingNeedsYou() {
+        XCTAssertEqual(PullRequestTabPicker.segments(needsYouCount: 0).map(\.badge), [nil, nil, nil])
+        XCTAssertEqual(PullRequestTabPicker.segments(needsYouCount: 3).map(\.badge), [3, nil, nil])
+        XCTAssertEqual(PullRequestTabPicker.segments(needsYouCount: 3).first?.badgeHelp, "3 need you")
     }
 
     func testTabPickerFillsTheWidthOfItsRow() throws {

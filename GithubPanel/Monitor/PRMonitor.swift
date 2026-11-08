@@ -444,9 +444,15 @@ final class PRMonitor: ObservableObject {
         prRows = rows
     }
 
-    /// My PRs split into the ones I am working on and the ones under For Later.
+    /// My PRs in their status groups, then the ones under For Later.
     var myPullRequests: MyPullRequestSections {
-        MyPullRequestSections(rows: prRows, forLaterIDs: forLaterIDs)
+        myPullRequests(botReviewer: nil)
+    }
+
+    /// My PRs in their status groups, counting the review bot's review like a person's. `botReviewer` is a login
+    /// from ``BotReviewer/normalized(_:)``.
+    func myPullRequests(botReviewer: String?) -> MyPullRequestSections {
+        MyPullRequestSections(rows: prRows, forLaterIDs: forLaterIDs, botReviewer: botReviewer)
     }
 
     /// Parks a pull request under For Later on My PRs, until it is moved back, merged or closed.

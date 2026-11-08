@@ -3,6 +3,8 @@ import SwiftUI
 struct PRRow: View {
     let pr: PullRequestRow
     var stackPosition: PullRequestStackPosition?
+    /// The My PRs group the row is in and why, shown before the repository. Nil hides it.
+    var status: MyPullRequestStatus?
     /// The review bot's login from Settings, normalized. Nil hides the bot chip.
     var botReviewer: String?
     let isSelected: Bool
@@ -35,9 +37,19 @@ struct PRRow: View {
 
             // The repository gives way first when the row is narrow, so the age and chips stay whole.
             HStack(spacing: 8) {
+                if let status {
+                    // The reason outlasts the repository when the row is narrow: it says why the row is here.
+                    Text(status.reason)
+                        .fontWeight(.medium)
+                        .foregroundStyle(status.group.color)
+                        .lineLimit(1)
+                        .layoutPriority(1)
+                        .help("\(status.group.title): \(status.reason)")
+                }
                 Text("\(pr.repoFullName)#\(String(pr.number))")
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .help("\(pr.repoFullName)#\(String(pr.number))")
                 Text(CompactAge.string(from: pr.updatedAt, to: now))
                     .foregroundStyle(.tertiary)
                     .fixedSize()
@@ -176,6 +188,20 @@ extension PullRequestState {
         case .queued: return Theme.purple
         case .autoMerge: return Theme.amber
         case .open: return Theme.green
+        }
+    }
+}
+
+extension MyPullRequestGroup {
+    /// The group's heading and its rows' reasons.
+    var color: Color {
+        switch self {
+        case .needsYou: return Theme.red
+        case .readyToMerge: return Theme.green
+        case .building: return Theme.amber
+        case .inReview: return Theme.branch
+        case .merging: return Theme.purple
+        case .drafts: return .secondary
         }
     }
 }
