@@ -56,6 +56,21 @@ final class ThemeTests: XCTestCase {
         XCTAssertGreaterThan(try resolvedWhite(color, in: .darkAqua), 0.95)
     }
 
+    func testSelectedRowStandsOutFromCardRows() throws {
+        // The selected chip must be clearly more opaque than an unselected card, even one under the pointer.
+        for name in [NSAppearance.Name.aqua, .darkAqua] {
+            let selected = try resolvedAlpha(NSColor(Theme.rowSelection), in: name)
+            let hoveredCard = try resolvedAlpha(NSColor(Theme.rowCardHover), in: name)
+            XCTAssertGreaterThanOrEqual(selected - hoveredCard, 0.08, name.rawValue)
+        }
+        XCTAssertEqual(try resolvedAlpha(NSColor(Theme.rowSelection), in: .aqua), 1, accuracy: 0.001)
+    }
+
+    func testSelectedRowHasAVisibleAccentOutline() {
+        XCTAssertEqual(Theme.rowSelectionBorder, Color.accentColor)
+        XCTAssertGreaterThanOrEqual(Theme.rowSelectionBorderWidth, 1.5)
+    }
+
     func testWindowAndSidebarAreOpaqueSoTheDesktopNeverShowsThrough() throws {
         let colors = [Theme.windowBackground, Theme.contentBackground, SidebarGradient.startColor, SidebarGradient.endColor]
         for color in colors {
