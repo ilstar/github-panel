@@ -265,7 +265,8 @@ actor SyncEngine {
             let response = try await fetch(job.resource, token: job.token, session: job.session)
             if job.isSuperseded { return }
             if case .detail = job.resource {} else { await waitForDetail(of: job) }
-            guard let stored = await save(response, for: job.resource, session: job.session) else {
+            guard let stored = await save(response, for: job.resource, session: job.session,
+                                          sentAt: attemptedAt) else {
                 throw CredentialChangedError()
             }
             // A request sent before the backoff began says nothing about whether GitHub has let up.
@@ -339,17 +340,20 @@ actor SyncEngine {
     }
 
     /// Saves the response to the cache. Returns whether the cache kept it, or nil when the session changed.
-    private func save(_ response: Response, for resource: Resource, session: UUID) async -> Bool? {
+    /// `sentAt` orders the head commit and checks it saw against other loads, which may arrive in any order.
+    private func save(_ response: Response, for resource: Resource, session: UUID, sentAt: Date) async -> Bool? {
         let fetchedAt = now()
         let stored = await MainActor.run { [cache, lists, credential] () -> Bool? in
             guard credential()?.session == session else { return nil }
-            if let reference = resource.reference { return Self.store(response, for: reference, in: cache) }
+            if let reference = resource.reference {
+                return Self.store(response, for: reference, in: cache, lists: lists, sentAt: sentAt)
+            }
             switch response {
-            case .openList(let result): lists.store(result, fetchedAt: fetchedAt)
+            case .openList(let result): lists.store(result, fetchedAt: fetchedAt, observedAt: sentAt)
             case .history(let page):
                 guard case .history(let number) = resource else { break }
                 lists.store(page, asPage: number, fetchedAt: fetchedAt)
-            case .reviewRequests(let requests): lists.store(requests, fetchedAt: fetchedAt)
+            case .reviewRequests(let requests): lists.store(requests, fetchedAt: fetchedAt, observedAt: sentAt)
             case .currentUser(let login): lists.viewerLogin = login
             case .detail, .comments, .checks, .changedFiles: break
             }
@@ -365,17 +369,23 @@ actor SyncEngine {
 
     @MainActor
     private static func store(_ response: Response, for reference: PullRequestReference,
-                              in cache: PullRequestDetailCache) -> Bool {
+                              in cache: PullRequestDetailCache, lists: PullRequestListCache, sentAt: Date) -> Bool {
         switch response {
         case .detail(let content):
             cache.store(content)
+            // A new head shows in the lists right away, with its checks pending until they load.
+            lists.observe(PullRequestStatus(headSHA: content.detail.headSHA, checkState: nil, observedAt: sentAt),
+                          for: reference)
             return true
         case .comments(let comments, let limits):
             return cache.store(comments, for: reference, limits: limits)
         case .checks(let checks):
             // Checks are for the head commit, which only the detail knows.
-            guard let headSHA = cache.entry(for: reference)?.content.detail.headSHA else { return false }
-            return cache.store(checks, for: reference, headSHA: headSHA)
+            guard let headSHA = cache.entry(for: reference)?.content.detail.headSHA,
+                  cache.store(checks, for: reference, headSHA: headSHA) else { return false }
+            lists.observe(PullRequestStatus(headSHA: headSHA, checkState: checks.checkState, observedAt: sentAt),
+                          for: reference)
+            return true
         case .changedFiles(let files, let base, let head):
             return cache.storeChanges(files, for: reference, baseSHA: base, headSHA: head)
         case .openList, .history, .reviewRequests, .currentUser:

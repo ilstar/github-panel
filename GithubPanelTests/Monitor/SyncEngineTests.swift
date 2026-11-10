@@ -356,7 +356,7 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(lists.openSSOAuthorizationURL, SAMLSSO.tokenSettingsURL)
         XCTAssertEqual(lists.reviewRequests, api.reviewRequests)
         XCTAssertEqual(lists.state(of: .open), PullRequestListCache.State(fetchedAt: clock.now))
-        XCTAssertEqual(store.pullRequestList(.open, as: [PullRequestRow].self)?.rows, api.rows)
+        XCTAssertEqual(PullRequestListCache(store: store).open, api.rows, "Restored after a restart")
         let state = await store.syncState(for: PullRequestListKind.reviewRequests.key)
         XCTAssertEqual(state, LocalStore.SyncState(fetchedAt: clock.now, lastAttemptAt: clock.now, lastError: nil))
     }
@@ -375,7 +375,6 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(api.historyUsernames, ["fred", "fred"])
         XCTAssertEqual(api.fetchClosedPRCalls.map(\.perPage), [10, 10])
         XCTAssertEqual(lists.historyPage(2), api.historyPages[2])
-        XCTAssertEqual(store.pullRequestList(.history(page: 2), as: PullRequestHistoryPage.self)?.rows, api.historyPages[2])
         XCTAssertEqual(PullRequestListCache(store: store).historyPage(2), api.historyPages[2], "Restored after a restart")
     }
 

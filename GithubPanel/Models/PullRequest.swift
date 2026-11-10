@@ -7,8 +7,8 @@ struct PullRequestRow: Identifiable, Equatable, Codable {
     let number: Int
     let repoFullName: String
     let htmlURL: URL
-    let headSHA: String
-    let status: CheckState
+    var headSHA: String
+    var status: CheckState
     let isDraft: Bool
     let isAutoMergeEnabled: Bool
     let canEnableAutoMerge: Bool

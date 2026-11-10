@@ -142,7 +142,8 @@ final class PullRequestDetailViewModel: ObservableObject {
         self.init(reference: reference,
                   engine: monitor.syncEngine,
                   updateBranch: { [monitor] pullRequestID, headSHA in
-                      try await monitor.updatePullRequestBranch(pullRequestID: pullRequestID, expectedHeadSHA: headSHA)
+                      try await monitor.updatePullRequestBranch(reference, pullRequestID: pullRequestID,
+                                                                expectedHeadSHA: headSHA)
                   },
                   rerunChecks: { [monitor] rerun, repoFullName in
                       try await monitor.rerunChecks(rerun, in: repoFullName)

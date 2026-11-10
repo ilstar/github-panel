@@ -226,7 +226,7 @@ final class PullRequestDetailCacheTests: XCTestCase {
         saving.store(content(number: 2))
         await saving.saveNow()
         try await store.database.write { db in
-            try db.execute(sql: "UPDATE pull_request_detail SET content = ? WHERE number = 1",
+            try db.execute(sql: "UPDATE pull_request SET content = ? WHERE number = 1",
                            arguments: [Data("not json".utf8)])
         }
 

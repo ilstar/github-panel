@@ -1,9 +1,9 @@
 import Foundation
 import GRDB
 
-/// The app's database: pull requests and lists as last loaded from GitHub, so they show right away, and the
-/// changes the user made that GitHub hasn't confirmed yet. Everything but those changes can be loaded again, so a
-/// file that can't be opened or migrated is deleted and started over.
+/// The app's database: one row per pull request with everything last loaded for it from GitHub, the lists that
+/// hold them, and the changes the user made that GitHub hasn't confirmed yet. Everything but those changes can be
+/// loaded again, so a file that can't be opened or migrated is deleted and started over.
 final class LocalStore: Sendable {
     let database: DatabaseQueue
 
@@ -105,11 +105,53 @@ final class LocalStore: Sendable {
                 t.add(column: "postedCommentID", .integer)
             }
         }
+        migrator.registerMigration("pullRequestRecords") { db in
+            // Lists and details were saved apart, so one pull request could show two states. Both are only caches,
+            // so they're dropped rather than copied, and the next load fills one row per pull request.
+            try db.drop(table: "pull_request_list")
+            try db.drop(table: "pull_request_detail")
+            try db.create(table: "pull_request") { t in
+                t.column("repoFullName", .text).notNull()
+                t.column("number", .integer).notNull()
+                // The status every list shows, from the newest load. See `PullRequestStatus`.
+                t.column("headSHA", .text)
+                t.column("checkState", .text)
+                t.column("statusObservedAt", .double)
+                // The row each list's query returned.
+                t.column("openRow", .blob)
+                t.column("reviewRequestRow", .blob)
+                t.column("historyRow", .blob)
+                // The detail: null until it loads, and again once it's evicted.
+                t.column("content", .blob)
+                t.column("comments", .blob)
+                t.column("commentLimits", .blob)
+                t.column("checks", .blob)
+                t.column("filesSinceLastReview", .blob)
+                t.column("detailUsedAt", .double).indexed()
+                t.primaryKey(["repoFullName", "number"])
+            }
+            try db.create(table: "pull_request_list") { t in
+                t.primaryKey("kind", .text)
+                t.column("savedAt", .double).notNull()
+                t.column("info", .blob).notNull()
+            }
+            try db.create(table: "pull_request_list_member") { t in
+                t.column("kind", .text).notNull().references("pull_request_list", onDelete: .cascade)
+                t.column("position", .integer).notNull()
+                t.column("reviewGroup", .text)
+                t.column("repoFullName", .text).notNull()
+                t.column("number", .integer).notNull()
+                t.primaryKey(["kind", "position"])
+                t.foreignKey(["repoFullName", "number"], references: "pull_request")
+            }
+            try db.create(index: "pull_request_list_member_on_pull_request", on: "pull_request_list_member",
+                          columns: ["repoFullName", "number"])
+        }
         return migrator
     }
 }
 
-// MARK: - Pull request lists
+// MARK: - Pull requests
 
 enum PullRequestListKind: Hashable {
     case open
@@ -124,35 +166,176 @@ enum PullRequestListKind: Hashable {
         case .reviewRequests: return "reviewRequests"
         }
     }
+
+    init?(key: String) {
+        switch key {
+        case "open": self = .open
+        case "reviewRequests": self = .reviewRequests
+        default:
+            let prefix = "history:"
+            guard key.hasPrefix(prefix), let page = Int(key.dropFirst(prefix.count)) else { return nil }
+            self = .history(page: page)
+        }
+    }
+}
+
+extension ReviewRequestGroup {
+    /// The `pull_request_list_member.reviewGroup` value.
+    var key: String {
+        switch self {
+        case .fromMe: return "fromMe"
+        case .fromMyTeams: return "fromMyTeams"
+        }
+    }
+
+    init?(key: String) {
+        guard let group = Self.allCases.first(where: { $0.key == key }) else { return nil }
+        self = group
+    }
 }
 
 extension LocalStore {
-    /// Nil when nothing is saved or the saved list no longer decodes, such as after an update changed its shape.
-    func pullRequestList<Rows>(_ kind: PullRequestListKind, as rows: Rows.Type = Rows.self)
-        -> CachedPullRequestList<Rows>? {
-        let row = try? database.read { db in
-            try Row.fetchOne(db, sql: "SELECT rows, savedAt FROM pull_request_list WHERE kind = ?",
-                             arguments: [kind.key])
-        }
-        guard let row, let data: Data = row["rows"],
-              let decoded = try? JSONDecoder().decode(Rows.self, from: data) else { return nil }
-        return CachedPullRequestList(savedAt: Date(timeIntervalSince1970: row["savedAt"]), rows: decoded)
+    struct SavedPullRequestList: Equatable {
+        /// When GitHub returned the list.
+        var savedAt: Date
+        var info: PullRequestListInfo
+        var members: [PullRequestListMember]
     }
 
-    /// Saves off the calling thread. Reads made afterwards wait for it.
-    func savePullRequestList<Rows>(_ list: CachedPullRequestList<Rows>, as kind: PullRequestListKind) {
-        guard let data = try? JSONEncoder().encode(list.rows) else { return }
-        let savedAt = list.savedAt.timeIntervalSince1970
+    struct SavedPullRequestLists: Equatable {
+        var lists: [PullRequestListKind: SavedPullRequestList] = [:]
+        /// The pull requests the lists hold.
+        var records: [PullRequestReference: PullRequestRecord] = [:]
+    }
+
+    /// The saved lists and their pull requests, read on the calling thread so they show as soon as the app starts.
+    /// Lists and rows that no longer decode, such as after an update changed their shape, are left out.
+    func pullRequestLists() -> SavedPullRequestLists {
+        (try? database.read { db in
+            let decoder = JSONDecoder()
+            var saved = SavedPullRequestLists()
+            var members: [PullRequestListKind: [PullRequestListMember]] = [:]
+            for row in try Row.fetchAll(db, sql: """
+                SELECT kind, reviewGroup, repoFullName, number FROM pull_request_list_member ORDER BY kind, position
+                """) {
+                guard let kind = PullRequestListKind(key: row["kind"] as String) else { continue }
+                let reference = PullRequestReference(repoFullName: row["repoFullName"], number: row["number"])
+                let group = (row["reviewGroup"] as String?).flatMap(ReviewRequestGroup.init(key:))
+                members[kind, default: []].append(PullRequestListMember(reference: reference, reviewGroup: group))
+            }
+            for row in try Row.fetchAll(db, sql: "SELECT kind, savedAt, info FROM pull_request_list") {
+                guard let kind = PullRequestListKind(key: row["kind"] as String), let data: Data = row["info"],
+                      let info = try? decoder.decode(PullRequestListInfo.self, from: data) else { continue }
+                saved.lists[kind] = SavedPullRequestList(savedAt: Date(timeIntervalSince1970: row["savedAt"]),
+                                                         info: info, members: members[kind] ?? [])
+            }
+            for row in try Row.fetchAll(db, sql: """
+                SELECT repoFullName, number, headSHA, checkState, statusObservedAt, openRow, reviewRequestRow, historyRow
+                FROM pull_request
+                WHERE EXISTS (SELECT 1 FROM pull_request_list_member m
+                              WHERE m.repoFullName = pull_request.repoFullName AND m.number = pull_request.number)
+                """) {
+                let reference = PullRequestReference(repoFullName: row["repoFullName"], number: row["number"])
+                saved.records[reference] = Self.record(from: row, decoder: decoder)
+            }
+            return saved
+        }) ?? SavedPullRequestLists()
+    }
+
+    private static func record(from row: Row, decoder: JSONDecoder) -> PullRequestRecord {
+        func decode<T: Decodable>(_ type: T.Type, _ column: String) -> T? {
+            (row[column] as Data?).flatMap { try? decoder.decode(type, from: $0) }
+        }
+        var record = PullRequestRecord(openRow: decode(PullRequestRow.self, "openRow"),
+                                       reviewRequestRow: decode(ReviewRequestRow.self, "reviewRequestRow"),
+                                       historyRow: decode(PullRequestHistoryRow.self, "historyRow"))
+        if let headSHA: String = row["headSHA"], let observedAt: Double = row["statusObservedAt"] {
+            record.status = PullRequestStatus(headSHA: headSHA,
+                                              checkState: (row["checkState"] as String?).flatMap(CheckState.init),
+                                              observedAt: Date(timeIntervalSince1970: observedAt))
+        }
+        return record
+    }
+
+    /// Saves a list, and the rows and status of the pull requests it holds, in one transaction off the calling thread.
+    /// Pull requests no list holds and no detail needs are deleted with it. Reads made afterwards wait for it.
+    func savePullRequestList(_ list: SavedPullRequestList, as kind: PullRequestListKind,
+                             records: [PullRequestReference: PullRequestRecord]) {
+        let encoder = JSONEncoder()
+        guard let info = try? encoder.encode(list.info) else { return }
+        let rows = records.map { reference, record in
+            (reference: reference, status: record.status,
+             open: record.openRow.flatMap { try? encoder.encode($0) },
+             reviewRequest: record.reviewRequestRow.flatMap { try? encoder.encode($0) },
+             history: record.historyRow.flatMap { try? encoder.encode($0) })
+        }
         database.asyncWrite({ db in
-            try db.execute(sql: "INSERT OR REPLACE INTO pull_request_list (kind, rows, savedAt) VALUES (?, ?, ?)",
-                           arguments: [kind.key, data, savedAt])
+            for row in rows {
+                let reference = row.reference
+                try db.execute(sql: """
+                    INSERT INTO pull_request (repoFullName, number, openRow, reviewRequestRow, historyRow)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(repoFullName, number) DO UPDATE SET
+                        openRow = excluded.openRow,
+                        reviewRequestRow = excluded.reviewRequestRow,
+                        historyRow = excluded.historyRow
+                    """, arguments: [reference.repoFullName, reference.number, row.open, row.reviewRequest, row.history])
+                try Self.saveStatus(row.status, for: reference, in: db)
+            }
+            try db.execute(sql: "DELETE FROM pull_request_list_member WHERE kind = ?", arguments: [kind.key])
+            try db.execute(sql: """
+                INSERT INTO pull_request_list (kind, savedAt, info) VALUES (?, ?, ?)
+                ON CONFLICT(kind) DO UPDATE SET savedAt = excluded.savedAt, info = excluded.info
+                """, arguments: [kind.key, list.savedAt.timeIntervalSince1970, info])
+            for (position, member) in list.members.enumerated() {
+                try db.execute(sql: """
+                    INSERT INTO pull_request_list_member (kind, position, reviewGroup, repoFullName, number)
+                    VALUES (?, ?, ?, ?, ?)
+                    """, arguments: [kind.key, position, member.reviewGroup?.key,
+                                     member.reference.repoFullName, member.reference.number])
+            }
+            try Self.deleteUnusedPullRequests(in: db)
         }, completion: { _, _ in })
+    }
+
+    /// Saves a status seen by a detail or checks load, off the calling thread.
+    func savePullRequestStatus(_ status: PullRequestStatus, for reference: PullRequestReference) {
+        database.asyncWrite({ db in
+            try db.execute(sql: "INSERT OR IGNORE INTO pull_request (repoFullName, number) VALUES (?, ?)",
+                           arguments: [reference.repoFullName, reference.number])
+            try Self.saveStatus(status, for: reference, in: db)
+        }, completion: { _, _ in })
+    }
+
+    private static func saveStatus(_ status: PullRequestStatus?, for reference: PullRequestReference,
+                                   in db: Database) throws {
+        try db.execute(sql: """
+            UPDATE pull_request SET headSHA = ?, checkState = ?, statusObservedAt = ?
+            WHERE repoFullName = ? AND number = ?
+            """, arguments: [status?.headSHA, status?.checkState?.rawValue, status?.observedAt.timeIntervalSince1970,
+                             reference.repoFullName, reference.number])
     }
 
     func removePullRequestLists() {
         database.asyncWrite({ db in
+            try db.execute(sql: "DELETE FROM pull_request_list_member")
             try db.execute(sql: "DELETE FROM pull_request_list")
+            try db.execute(sql: """
+                UPDATE pull_request SET openRow = NULL, reviewRequestRow = NULL, historyRow = NULL,
+                    headSHA = NULL, checkState = NULL, statusObservedAt = NULL
+                """)
+            try Self.deleteUnusedPullRequests(in: db)
         }, completion: { _, _ in })
+    }
+
+    /// Deletes pull requests that no list holds and whose detail isn't cached.
+    private static func deleteUnusedPullRequests(in db: Database) throws {
+        try db.execute(sql: """
+            DELETE FROM pull_request
+            WHERE content IS NULL
+              AND NOT EXISTS (SELECT 1 FROM pull_request_list_member m
+                              WHERE m.repoFullName = pull_request.repoFullName AND m.number = pull_request.number)
+            """)
     }
 }
 
@@ -177,11 +360,11 @@ extension LocalStore {
     /// The saved details, least recently used first. Rows that no longer decode are left out.
     func pullRequestDetails() async -> [SavedPullRequestDetail] {
         let rows = (try? await database.read { db in
-            try Row.fetchAll(db, sql: "SELECT * FROM pull_request_detail ORDER BY lastUsedAt")
+            try Row.fetchAll(db, sql: "SELECT * FROM pull_request WHERE content IS NOT NULL ORDER BY detailUsedAt")
         }) ?? []
         return rows.compactMap { row in
             guard let entry = try? Self.detailEntry(from: row) else { return nil }
-            return SavedPullRequestDetail(entry: entry, lastUsedAt: Date(timeIntervalSince1970: row["lastUsedAt"]))
+            return SavedPullRequestDetail(entry: entry, lastUsedAt: Date(timeIntervalSince1970: row["detailUsedAt"]))
         }
     }
 
@@ -203,7 +386,8 @@ extension LocalStore {
                                                                              "filesSinceLastReview"))
     }
 
-    /// Writes the changes in one transaction, off the calling thread.
+    /// Writes the changes in one transaction, off the calling thread. Only the detail columns change, so the lists'
+    /// rows and status for the same pull request stay.
     func savePullRequestDetails(_ changes: PullRequestDetailChanges) async {
         let encoder = JSONEncoder()
         _ = try? await database.write { db in
@@ -213,9 +397,16 @@ extension LocalStore {
                 guard let content = try? encoder.encode(entry.content),
                       let commentLimits = try? encoder.encode(entry.commentLimits) else { continue }
                 try db.execute(sql: """
-                    INSERT OR REPLACE INTO pull_request_detail
-                        (repoFullName, number, content, comments, commentLimits, checks, filesSinceLastReview, lastUsedAt)
+                    INSERT INTO pull_request
+                        (repoFullName, number, content, comments, commentLimits, checks, filesSinceLastReview, detailUsedAt)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(repoFullName, number) DO UPDATE SET
+                        content = excluded.content,
+                        comments = excluded.comments,
+                        commentLimits = excluded.commentLimits,
+                        checks = excluded.checks,
+                        filesSinceLastReview = excluded.filesSinceLastReview,
+                        detailUsedAt = excluded.detailUsedAt
                     """, arguments: [
                         reference.repoFullName, reference.number, content,
                         entry.comments.flatMap { try? encoder.encode($0) }, commentLimits,
@@ -226,13 +417,14 @@ extension LocalStore {
             }
             for (reference, lastUsedAt) in changes.used {
                 try db.execute(sql: """
-                    UPDATE pull_request_detail SET lastUsedAt = ? WHERE repoFullName = ? AND number = ?
+                    UPDATE pull_request SET detailUsedAt = ? WHERE repoFullName = ? AND number = ? AND content IS NOT NULL
                     """, arguments: [lastUsedAt.timeIntervalSince1970, reference.repoFullName, reference.number])
             }
             for reference in changes.removed {
-                try db.execute(sql: "DELETE FROM pull_request_detail WHERE repoFullName = ? AND number = ?",
+                try db.execute(sql: "\(Self.clearDetailSQL) WHERE repoFullName = ? AND number = ?",
                                arguments: [reference.repoFullName, reference.number])
             }
+            if !changes.removed.isEmpty { try Self.deleteUnusedPullRequests(in: db) }
             for id in changes.confirmed {
                 try db.execute(sql: "DELETE FROM pending_change WHERE id = ?", arguments: [id.uuidString])
             }
@@ -241,9 +433,15 @@ extension LocalStore {
 
     func removeAllPullRequestDetails() async {
         _ = try? await database.write { db in
-            try db.execute(sql: "DELETE FROM pull_request_detail")
+            try db.execute(sql: Self.clearDetailSQL)
+            try Self.deleteUnusedPullRequests(in: db)
         }
     }
+
+    private static let clearDetailSQL = """
+        UPDATE pull_request SET content = NULL, comments = NULL, commentLimits = NULL, checks = NULL,
+            filesSinceLastReview = NULL, detailUsedAt = NULL
+        """
 }
 
 // MARK: - Pending changes
