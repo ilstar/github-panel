@@ -280,7 +280,7 @@ final class PendingChangeTests: XCTestCase {
     }
 
     private func withReviewers(_ reviewers: [PullRequestReviewer],
-                               _ entry: PullRequestDetailCache.Entry) -> PullRequestDetailCache.Entry {
+                               _ entry: PullRequestDetailEntry) -> PullRequestDetailEntry {
         var entry = entry
         var detail = entry.content.detail
         detail.reviewers = PullRequestReviewers(reviewers: reviewers)
@@ -293,7 +293,7 @@ final class PendingChangeTests: XCTestCase {
     }
 
     /// One general comment of ten, and one thread of five, started by the comment with REST ID 41.
-    private func entryWithComments() -> PullRequestDetailCache.Entry {
+    private func entryWithComments() -> PullRequestDetailEntry {
         func comment(_ id: Int, _ body: String) -> PullRequestComment {
             PullRequestComment(id: "c\(id)", databaseID: id, authorLogin: "octocat", body: body,
                                createdAt: Date(timeIntervalSince1970: 0), htmlURL: nil)
@@ -307,7 +307,7 @@ final class PendingChangeTests: XCTestCase {
         return entry
     }
 
-    private func entry() -> PullRequestDetailCache.Entry {
+    private func entry() -> PullRequestDetailEntry {
         let content = detailContent(for: reference, title: "Old")
         var detail = content.detail
         detail.body = "Old body"
@@ -321,7 +321,7 @@ final class PendingChangeTests: XCTestCase {
             ReviewThread(id: id, path: "a.swift", line: 1, startLine: nil, side: .right, isResolved: false,
                          isOutdated: false, comments: [])
         }
-        return PullRequestDetailCache.Entry(content: PullRequestDetailContent(detail: detail, files: files),
+        return PullRequestDetailEntry(content: PullRequestDetailContent(detail: detail, files: files),
                                             comments: PullRequestComments(comments: [], threads: threads,
                                                                           totalThreadCount: 5))
     }

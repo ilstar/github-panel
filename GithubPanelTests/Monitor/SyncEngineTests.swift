@@ -9,7 +9,7 @@ final class SyncEngineTests: XCTestCase {
 
     func testRequestLoadsWithTheTokenIntoTheCacheAndRecordsIt() async throws {
         let api = loadingAPI()
-        let cache = PullRequestDetailCache()
+        let cache = PullRequestCache()
         let store = LocalStore.inMemory()
         let engine = makeEngine(api: api, cache: cache, store: store)
         clock.now = Date(timeIntervalSince1970: 100)
@@ -51,7 +51,7 @@ final class SyncEngineTests: XCTestCase {
             await gate.wait()
             return detailContent(for: reference, title: "Loaded")
         }
-        let cache = PullRequestDetailCache()
+        let cache = PullRequestCache()
         let engine = makeEngine(api: api, cache: cache)
 
         let first = await engine.start(.detail(reference(1)))
@@ -79,7 +79,7 @@ final class SyncEngineTests: XCTestCase {
             }
             return detailContent(for: reference, title: title)
         }
-        let cache = PullRequestDetailCache()
+        let cache = PullRequestCache()
         let engine = makeEngine(api: api, cache: cache)
 
         let first = await engine.start(.detail(reference(1)))
@@ -100,7 +100,7 @@ final class SyncEngineTests: XCTestCase {
             await gate.wait()
             return detailContent(for: reference)
         }
-        let cache = PullRequestDetailCache()
+        let cache = PullRequestCache()
         let engine = makeEngine(api: api, cache: cache)
 
         let detail = await engine.start(.detail(reference(1)))
@@ -171,7 +171,7 @@ final class SyncEngineTests: XCTestCase {
 
     func testAResourceLoadedWithinMaxAgeIsNotLoadedAgain() async throws {
         let api = loadingAPI()
-        let cache = PullRequestDetailCache()
+        let cache = PullRequestCache()
         let engine = makeEngine(api: api, cache: cache)
 
         try await engine.request(.detail(reference(1)))
@@ -186,7 +186,7 @@ final class SyncEngineTests: XCTestCase {
         try await engine.request(.detail(reference(1)), maxAge: 60)
         XCTAssertEqual(api.detailCalls.count, 3)
 
-        cache.removeAll()
+        cache.removeDetails()
         try await engine.request(.detail(reference(1)), maxAge: 60)
         XCTAssertEqual(api.detailCalls.count, 4, "Fresh only while the cache still holds it")
     }
@@ -241,8 +241,8 @@ final class SyncEngineTests: XCTestCase {
         let api = loadingAPI()
         let throttled = GitHubAPIError(message: "Rate limited", documentationURL: nil, statusCode: 429)
         api.openHandler = { _ in throw throttled }
-        let lists = PullRequestListCache()
-        let engine = makeEngine(api: api, lists: lists)
+        let cache = PullRequestCache()
+        let engine = makeEngine(api: api, cache: cache)
         await XCTAssertThrowsAsync(try await engine.request(.openList))
 
         await XCTAssertThrowsAsync(try await engine.request(.detail(reference(1))))
@@ -250,8 +250,8 @@ final class SyncEngineTests: XCTestCase {
 
         XCTAssertTrue(api.detailCalls.isEmpty)
         XCTAssertTrue(api.fetchCurrentUserTokens.isEmpty)
-        XCTAssertEqual(lists.state(of: .open).lastError, throttled.localizedDescription)
-        XCTAssertNil(lists.state(of: .history(page: 1)).lastError, "A request that backed off sent nothing to fail")
+        XCTAssertEqual(cache.state(of: .open).lastError, throttled.localizedDescription)
+        XCTAssertNil(cache.state(of: .history(page: 1)).lastError, "A request that backed off sent nothing to fail")
     }
 
     func testTheBackoffIsMeasuredInRefreshIntervals() async throws {
@@ -345,18 +345,18 @@ final class SyncEngineTests: XCTestCase {
         api.openSSOAuthorizationURL = SAMLSSO.tokenSettingsURL
         api.reviewRequests = ReviewRequests(fromMe: [reviewRequestRow(number: 2)], fromMyTeams: [])
         let store = LocalStore.inMemory()
-        let lists = PullRequestListCache(store: store)
-        let engine = makeEngine(api: api, store: store, lists: lists)
+        let cache = PullRequestCache(store: store)
+        let engine = makeEngine(api: api, cache: cache, store: store)
         clock.now = Date(timeIntervalSince1970: 100)
 
         try await engine.request(.openList)
         try await engine.request(.reviewRequests)
 
-        XCTAssertEqual(lists.open, api.rows)
-        XCTAssertEqual(lists.openSSOAuthorizationURL, SAMLSSO.tokenSettingsURL)
-        XCTAssertEqual(lists.reviewRequests, api.reviewRequests)
-        XCTAssertEqual(lists.state(of: .open), PullRequestListCache.State(fetchedAt: clock.now))
-        XCTAssertEqual(PullRequestListCache(store: store).open, api.rows, "Restored after a restart")
+        XCTAssertEqual(cache.open, api.rows)
+        XCTAssertEqual(cache.openSSOAuthorizationURL, SAMLSSO.tokenSettingsURL)
+        XCTAssertEqual(cache.reviewRequests, api.reviewRequests)
+        XCTAssertEqual(cache.state(of: .open), PullRequestCache.ListState(fetchedAt: clock.now))
+        XCTAssertEqual(PullRequestCache(store: store).open, api.rows, "Restored after a restart")
         let state = await store.syncState(for: PullRequestListKind.reviewRequests.key)
         XCTAssertEqual(state, LocalStore.SyncState(fetchedAt: clock.now, lastAttemptAt: clock.now, lastError: nil))
     }
@@ -365,8 +365,8 @@ final class SyncEngineTests: XCTestCase {
         let api = loadingAPI()
         api.historyPages[2] = PullRequestHistoryPage(rows: [historyRow(number: 11)], page: 2, perPage: 10, totalCount: 11)
         let store = LocalStore.inMemory()
-        let lists = PullRequestListCache(store: store)
-        let engine = makeEngine(api: api, store: store, lists: lists)
+        let cache = PullRequestCache(store: store)
+        let engine = makeEngine(api: api, cache: cache, store: store)
 
         try await engine.request(.history(page: 1))
         try await engine.request(.history(page: 2))
@@ -374,8 +374,8 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(api.fetchCurrentUserTokens, ["token"])
         XCTAssertEqual(api.historyUsernames, ["fred", "fred"])
         XCTAssertEqual(api.fetchClosedPRCalls.map(\.perPage), [10, 10])
-        XCTAssertEqual(lists.historyPage(2), api.historyPages[2])
-        XCTAssertEqual(PullRequestListCache(store: store).historyPage(2), api.historyPages[2], "Restored after a restart")
+        XCTAssertEqual(cache.historyPage(2), api.historyPages[2])
+        XCTAssertEqual(PullRequestCache(store: store).historyPage(2), api.historyPages[2], "Restored after a restart")
     }
 
     func testMyPRsSeedTheLoginForHistoryUntilTheTokenChanges() async throws {
@@ -428,12 +428,12 @@ final class SyncEngineTests: XCTestCase {
             }
             return OpenPullRequests(login: "fred", rows: [row(number: load, status: .success)])
         }
-        let lists = PullRequestListCache()
+        let cache = PullRequestCache()
         var loaded: [[Int]] = []
-        let subscription = lists.updates.sink { change in
-            if change == .loaded(.open) { loaded.append(lists.open?.map(\.number) ?? []) }
+        let subscription = cache.listUpdates.sink { change in
+            if change == .loaded(.open) { loaded.append(cache.open?.map(\.number) ?? []) }
         }
-        let engine = makeEngine(api: api, lists: lists)
+        let engine = makeEngine(api: api, cache: cache)
 
         let first = await engine.start(.openList)
         await fulfillment(of: [requested], timeout: 5)
@@ -444,7 +444,7 @@ final class SyncEngineTests: XCTestCase {
 
         _ = subscription
         XCTAssertEqual(loaded, [[2]], "The load sent before the write never shows")
-        XCTAssertFalse(lists.state(of: .open).isLoading)
+        XCTAssertFalse(cache.state(of: .open).isLoading)
     }
 
     func testAListLoadsAndFailsInItsState() async throws {
@@ -456,29 +456,29 @@ final class SyncEngineTests: XCTestCase {
             await gate.wait()
             throw TestError(message: "Offline")
         }
-        let lists = PullRequestListCache()
-        let engine = makeEngine(api: api, lists: lists)
+        let cache = PullRequestCache()
+        let engine = makeEngine(api: api, cache: cache)
 
         let load = await engine.start(.reviewRequests)
         await fulfillment(of: [requested], timeout: 5)
-        XCTAssertEqual(lists.state(of: .reviewRequests), PullRequestListCache.State(isLoading: true))
+        XCTAssertEqual(cache.state(of: .reviewRequests), PullRequestCache.ListState(isLoading: true))
         await gate.open()
         await XCTAssertThrowsAsync(try await load.value)
 
-        XCTAssertEqual(lists.state(of: .reviewRequests), PullRequestListCache.State(lastError: "Offline"))
+        XCTAssertEqual(cache.state(of: .reviewRequests), PullRequestCache.ListState(lastError: "Offline"))
     }
 
     func testAListLoadedWithinMaxAgeIsNotLoadedAgain() async throws {
         let api = loadingAPI()
-        let lists = PullRequestListCache()
-        let engine = makeEngine(api: api, lists: lists)
+        let cache = PullRequestCache()
+        let engine = makeEngine(api: api, cache: cache)
 
         try await engine.request(.openList, priority: .background)
         clock.now += 29
         try await engine.request(.openList, priority: .background, maxAge: 30)
         XCTAssertEqual(api.fetchOpenPRTokens.count, 1)
 
-        lists.removeAll()
+        cache.removeLists()
         try await engine.request(.openList, priority: .background, maxAge: 30)
         XCTAssertEqual(api.fetchOpenPRTokens.count, 2, "Fresh only while the cache still holds it")
     }
@@ -492,18 +492,18 @@ final class SyncEngineTests: XCTestCase {
             await gate.wait()
             return OpenPullRequests(login: "old-user", rows: [row(number: 1, status: .success)])
         }
-        let lists = PullRequestListCache()
-        let engine = makeEngine(api: api, lists: lists)
+        let cache = PullRequestCache()
+        let engine = makeEngine(api: api, cache: cache)
         let old = await engine.start(.openList)
         await fulfillment(of: [requested], timeout: 5)
 
         session = UUID()
-        lists.stopAllLoading()
+        cache.stopAllLoading()
         await gate.open()
 
         await XCTAssertThrowsAsync(try await old.value)
-        XCTAssertNil(lists.open)
-        XCTAssertEqual(lists.state(of: .open), PullRequestListCache.State())
+        XCTAssertNil(cache.open)
+        XCTAssertEqual(cache.state(of: .open), PullRequestCache.ListState())
     }
 
     // MARK: - Credential changes
@@ -521,14 +521,14 @@ final class SyncEngineTests: XCTestCase {
             }
             return detailContent(for: reference, title: "Load \(loads)")
         }
-        let cache = PullRequestDetailCache()
+        let cache = PullRequestCache()
         let engine = makeEngine(api: api, cache: cache)
         let old = await engine.start(.detail(reference(1)), maxAge: 60)
         await fulfillment(of: [requested], timeout: 5)
 
         session = UUID()
         token = "new-token"
-        cache.removeAll()
+        cache.removeDetails()
         let new = await engine.start(.detail(reference(1)), maxAge: 60)
         try await new.value
         await gate.open()
@@ -552,7 +552,7 @@ final class SyncEngineTests: XCTestCase {
             await gate.wait()
             return detailContent(for: reference)
         }
-        let cache = PullRequestDetailCache()
+        let cache = PullRequestCache()
         let engine = makeEngine(api: api, cache: cache, maxBackgroundRequests: 1)
         let running = await engine.start(.detail(reference(1)), priority: .background)
         await fulfillment(of: [requested], timeout: 5)
@@ -565,15 +565,15 @@ final class SyncEngineTests: XCTestCase {
         await XCTAssertThrowsAsync(try await running.value)
         await XCTAssertThrowsAsync(try await queued.value)
         XCTAssertTrue(api.checksCalls.isEmpty)
-        XCTAssertEqual(cache.count, 0)
+        XCTAssertEqual(cache.detailCount, 0)
     }
 
     // MARK: - Helpers
 
-    private func makeEngine(api: FakeGitHubAPI, cache: PullRequestDetailCache? = nil,
-                            store: LocalStore = .inMemory(), lists: PullRequestListCache? = nil,
+    private func makeEngine(api: FakeGitHubAPI, cache: PullRequestCache? = nil,
+                            store: LocalStore = .inMemory(),
                             refreshInterval: TimeInterval = 60, maxBackgroundRequests: Int = 3) -> SyncEngine {
-        SyncEngine(api: api, store: store, cache: cache ?? PullRequestDetailCache(), lists: lists ?? PullRequestListCache(),
+        SyncEngine(api: api, store: store, cache: cache ?? PullRequestCache(),
                    credential: { [unowned self] in token.map { SyncEngine.Credential(token: $0, session: session) } },
                    refreshInterval: { refreshInterval },
                    now: { [clock] in clock.now }, maxBackgroundRequests: maxBackgroundRequests)

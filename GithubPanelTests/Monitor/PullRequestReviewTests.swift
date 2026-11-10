@@ -177,7 +177,7 @@ final class PullRequestReviewTests: XCTestCase {
         let api = FakeGitHubAPI()
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: nil))
         api.detailHandler = { [self] _ in detail() }
-        monitor.detailCache.store(detail())
+        monitor.cache.store(detail())
         let viewModel = PullRequestDetailViewModel(reference: reference, monitor: monitor)
 
         viewModel.submitReview(.approve, body: "")

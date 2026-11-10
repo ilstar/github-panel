@@ -22,7 +22,7 @@ final class PendingChangeSendingTests: XCTestCase {
                 await gate.wait()
             }
         }
-        let cache = PullRequestDetailCache()
+        let cache = PullRequestCache()
         let engine = makeEngine(api: api, cache: cache)
         try await engine.request(.detail(reference(1)))
         try await engine.request(.detail(reference(2)))
@@ -51,14 +51,14 @@ final class PendingChangeSendingTests: XCTestCase {
         api.detailHandler = { reference in detailContent(for: reference, title: title) }
         api.editHandler = { _, newTitle, _ in title = newTitle ?? title }
         let store = LocalStore.inMemory()
-        let cache = PullRequestDetailCache(store: store, saveDelay: 60)
+        let cache = PullRequestCache(store: store, saveDelay: 60)
         let engine = makeEngine(api: api, cache: cache, store: store)
         try await engine.request(.detail(reference(1)))
         await cache.saveNow()
         let commits = CommitObserver()
         store.database.add(transactionObserver: commits)
         var shown: [String] = []
-        let subscription = cache.updates.sink { shown.append($0.1.content.detail.title) }
+        let subscription = cache.detailUpdates.sink { shown.append($0.1.content.detail.title) }
 
         cache.add(.title("New"), to: reference(1))
         await engine.sendPendingChanges()
@@ -78,7 +78,7 @@ final class PendingChangeSendingTests: XCTestCase {
 
     func testAChangeWhoseReloadFailsStaysInTheCachedCopy() async throws {
         let api = loadingAPI()
-        let cache = PullRequestDetailCache()
+        let cache = PullRequestCache()
         let engine = makeEngine(api: api, cache: cache)
         try await engine.request(.detail(reference(1)))
         api.detailHandler = { _ in throw GraphQLError(message: "Offline") }
@@ -102,7 +102,7 @@ final class PendingChangeSendingTests: XCTestCase {
             title = newTitle ?? title
         }
         let store = LocalStore.inMemory()
-        let cache = PullRequestDetailCache(store: store)
+        let cache = PullRequestCache(store: store)
         let engine = makeEngine(api: api, cache: cache, store: store)
         try await engine.request(.detail(reference(1)))
 
@@ -147,7 +147,7 @@ final class PendingChangeSendingTests: XCTestCase {
     func testChangesLeftByTheLastRunAreSentAgain() async throws {
         let api = loadingAPI()
         let store = LocalStore.inMemory()
-        let lastRun = PullRequestDetailCache(store: store)
+        let lastRun = PullRequestCache(store: store)
         await lastRun.waitForRestore()
         lastRun.add(.title("Waiting"), to: reference(1))
         let sending = lastRun.add(.threadResolved(threadID: "T", resolved: true), to: reference(2))
@@ -156,7 +156,7 @@ final class PendingChangeSendingTests: XCTestCase {
         lastRun.markFailed(failed.id, error: "Nope")
         await lastRun.saveNow()
 
-        let cache = PullRequestDetailCache(store: store)
+        let cache = PullRequestCache(store: store)
         let engine = makeEngine(api: api, cache: cache, store: store)
         await engine.sendPendingChanges()
         await engine.waitForPendingChanges()
@@ -178,7 +178,7 @@ final class PendingChangeSendingTests: XCTestCase {
         }
         let store = LocalStore.inMemory()
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "old"), store: store)
-        let cache = monitor.detailCache
+        let cache = monitor.cache
         try await monitor.syncEngine.request(.detail(reference(1)))
         cache.add(.title("Sending"), to: reference(1))
         cache.add(.body("Waiting"), to: reference(1))
@@ -200,7 +200,7 @@ final class PendingChangeSendingTests: XCTestCase {
     func testChangesWaitOutTheBackoffAsPending() async throws {
         let api = loadingAPI()
         api.checksHandler = { _ in throw GitHubAPIError(message: "Rate limited", documentationURL: nil, statusCode: 403) }
-        let cache = PullRequestDetailCache()
+        let cache = PullRequestCache()
         let engine = makeEngine(api: api, cache: cache)
         try await engine.request(.detail(reference(1)))
         await XCTAssertThrowsAsync(try await engine.request(.checks(reference(1))))
@@ -223,7 +223,7 @@ final class PendingChangeSendingTests: XCTestCase {
     func testARefusedWriteFailsWithoutBackingOff() async throws {
         let api = loadingAPI()
         api.editHandler = { _, _, _ in throw GitHubAPIError(message: "Forbidden", documentationURL: nil, statusCode: 403) }
-        let cache = PullRequestDetailCache()
+        let cache = PullRequestCache()
         let engine = makeEngine(api: api, cache: cache)
         try await engine.request(.detail(reference(1)))
 
@@ -238,7 +238,7 @@ final class PendingChangeSendingTests: XCTestCase {
 
     func testAResolvedThreadReloadsTheCommentsAndTitlesReloadMyPRs() async throws {
         let api = loadingAPI()
-        let cache = PullRequestDetailCache()
+        let cache = PullRequestCache()
         let engine = makeEngine(api: api, cache: cache)
         try await engine.request(.detail(reference(1)))
         try await engine.request(.comments(reference(1), PullRequestCommentLimits()))
@@ -269,7 +269,7 @@ final class PendingChangeSendingTests: XCTestCase {
             return 7
         }
         let store = LocalStore.inMemory()
-        let cache = PullRequestDetailCache(store: store, saveDelay: 60)
+        let cache = PullRequestCache(store: store, saveDelay: 60)
         let engine = makeEngine(api: api, cache: cache, store: store)
         try await engine.request(.detail(reference(1)))
         try await engine.request(.comments(reference(1), PullRequestCommentLimits()))
@@ -277,7 +277,7 @@ final class PendingChangeSendingTests: XCTestCase {
         let commits = CommitObserver()
         store.database.add(transactionObserver: commits)
         var shownCounts: [Int] = []
-        let subscription = cache.updates.sink { shownCounts.append($0.1.comments?.comments.count ?? 0) }
+        let subscription = cache.detailUpdates.sink { shownCounts.append($0.1.comments?.comments.count ?? 0) }
 
         cache.add(.comment(.general(body: "Hi"), authorLogin: "monalisa"), to: reference(1))
         await engine.sendPendingChanges()
@@ -300,7 +300,7 @@ final class PendingChangeSendingTests: XCTestCase {
     func testCommentsLeftByTheLastRunFailInsteadOfBeingSentAgain() async throws {
         let api = loadingAPI()
         let store = LocalStore.inMemory()
-        let lastRun = PullRequestDetailCache(store: store)
+        let lastRun = PullRequestCache(store: store)
         await lastRun.waitForRestore()
         let waiting = lastRun.add(.comment(.general(body: "Waiting"), authorLogin: "monalisa"), to: reference(1))
         let sending = lastRun.add(.comment(.reply(body: "Sending", commentID: 41), authorLogin: "monalisa"),
@@ -313,7 +313,7 @@ final class PendingChangeSendingTests: XCTestCase {
         lastRun.markSending(title.id)
         await lastRun.saveNow()
 
-        let cache = PullRequestDetailCache(store: store)
+        let cache = PullRequestCache(store: store)
         let engine = makeEngine(api: api, cache: cache, store: store)
         await engine.sendPendingChanges()
         await engine.waitForPendingChanges()
@@ -332,7 +332,7 @@ final class PendingChangeSendingTests: XCTestCase {
     func testACommentThatMayHaveReachedGitHubFailsWithoutBeingSentAgain() async throws {
         let api = loadingAPI()
         api.postCommentHandler = { _, _ in throw URLError(.timedOut) }
-        let cache = PullRequestDetailCache()
+        let cache = PullRequestCache()
         let engine = makeEngine(api: api, cache: cache)
         try await engine.request(.detail(reference(1)))
         try await engine.request(.comments(reference(1), PullRequestCommentLimits()))
@@ -369,7 +369,7 @@ final class PendingChangeSendingTests: XCTestCase {
             return 5
         }
         let store = LocalStore.inMemory()
-        let cache = PullRequestDetailCache(store: store)
+        let cache = PullRequestCache(store: store)
         let engine = makeEngine(api: api, cache: cache, store: store)
         try await engine.request(.detail(reference(1)))
         try await engine.request(.comments(reference(1), PullRequestCommentLimits()))
@@ -404,7 +404,7 @@ final class PendingChangeSendingTests: XCTestCase {
         api.postCommentHandler = { _, _ in
             throw GitHubAPIError(message: "Validation Failed", documentationURL: nil, statusCode: 422)
         }
-        let cache = PullRequestDetailCache()
+        let cache = PullRequestCache()
         let engine = makeEngine(api: api, cache: cache)
         try await engine.request(.detail(reference(1)))
         try await engine.request(.comments(reference(1), PullRequestCommentLimits()))
@@ -435,7 +435,7 @@ final class PendingChangeSendingTests: XCTestCase {
         let api = loadingAPI()
         api.startPendingReviewHandler = { _, _ in "PRR_7" }
         let store = LocalStore.inMemory()
-        let cache = PullRequestDetailCache(store: store)
+        let cache = PullRequestCache(store: store)
         let engine = makeEngine(api: api, cache: cache, store: store)
         try await engine.request(.detail(reference(1)))
         try await engine.request(.comments(reference(1), PullRequestCommentLimits()))
@@ -446,7 +446,7 @@ final class PendingChangeSendingTests: XCTestCase {
         cache.add(.submitPendingReview(review: .startedBy(start.id), event: .approve, body: "", authorLogin: nil),
                   to: reference(1))
         var startedFrame: [PendingChange.Kind]?
-        let subscription = cache.updates.sink { [unowned self] _ in
+        let subscription = cache.detailUpdates.sink { [unowned self] _ in
             let changes = cache.pendingChanges(for: reference(1))
             if startedFrame == nil, case .startReview(_, _, "PRR_7")? = changes.first?.kind {
                 startedFrame = changes.map(\.kind)
@@ -471,7 +471,7 @@ final class PendingChangeSendingTests: XCTestCase {
     func testAFailedStartFailsTheChangesWaitingForItWithoutSendingThem() async throws {
         let api = loadingAPI()
         api.startPendingReviewHandler = { _, _ in throw GraphQLError(message: "One pending review per pull request") }
-        let cache = PullRequestDetailCache()
+        let cache = PullRequestCache()
         let engine = makeEngine(api: api, cache: cache)
         try await engine.request(.detail(reference(1)))
 
@@ -513,12 +513,12 @@ final class PendingChangeSendingTests: XCTestCase {
                                                    createdAt: date, htmlURL: nil, reviewState: event.reviewerState))
             return 80
         }
-        let cache = PullRequestDetailCache()
+        let cache = PullRequestCache()
         let engine = makeEngine(api: api, cache: cache)
         try await engine.request(.detail(reference(1)))
         try await engine.request(.comments(reference(1), PullRequestCommentLimits()))
         var frames: [(drafts: Int, reviews: Int)] = []
-        let subscription = cache.updates.sink { entry in
+        let subscription = cache.detailUpdates.sink { entry in
             let comments = entry.1.comments
             frames.append((comments?.threads.flatMap(\.comments).count ?? 0, comments?.reviews.count ?? 0))
         }
@@ -549,7 +549,7 @@ final class PendingChangeSendingTests: XCTestCase {
     func testReviewsLeftByTheLastRunFailButADiscardIsSentAgain() async throws {
         let api = loadingAPI()
         let store = LocalStore.inMemory()
-        let lastRun = PullRequestDetailCache(store: store)
+        let lastRun = PullRequestCache(store: store)
         await lastRun.waitForRestore()
         let review = lastRun.add(.review(NewPullRequestReview(event: .approve, body: "", commitID: "sha-1"),
                                          authorLogin: nil), to: reference(1))
@@ -572,7 +572,7 @@ final class PendingChangeSendingTests: XCTestCase {
         lastRun.markSending(discard.id)
         await lastRun.saveNow()
 
-        let cache = PullRequestDetailCache(store: store)
+        let cache = PullRequestCache(store: store)
         let engine = makeEngine(api: api, cache: cache, store: store)
         await engine.sendPendingChanges()
         await engine.waitForPendingChanges()
@@ -596,7 +596,7 @@ final class PendingChangeSendingTests: XCTestCase {
     func testAReviewThatMayHaveReachedGitHubFailsAndReloadsWithoutBeingSentAgain() async throws {
         let api = loadingAPI()
         api.reviewHandler = { _, _ in throw URLError(.timedOut) }
-        let cache = PullRequestDetailCache()
+        let cache = PullRequestCache()
         let engine = makeEngine(api: api, cache: cache)
         try await engine.request(.detail(reference(1)))
         try await engine.request(.comments(reference(1), PullRequestCommentLimits()))
@@ -620,7 +620,7 @@ final class PendingChangeSendingTests: XCTestCase {
     func testAStartThatMayHaveReachedGitHubSaysSo() async throws {
         let api = loadingAPI()
         api.startPendingReviewHandler = { _, _ in throw URLError(.networkConnectionLost) }
-        let cache = PullRequestDetailCache()
+        let cache = PullRequestCache()
         let engine = makeEngine(api: api, cache: cache)
         try await engine.request(.detail(reference(1)))
         try await engine.request(.comments(reference(1), PullRequestCommentLimits()))
@@ -638,7 +638,7 @@ final class PendingChangeSendingTests: XCTestCase {
         let api = loadingAPI()
         var error: Error = GraphQLError(message: "Could not resolve to a node", type: "NOT_FOUND")
         api.deletePendingReviewHandler = { _ in throw error }
-        let cache = PullRequestDetailCache()
+        let cache = PullRequestCache()
         let engine = makeEngine(api: api, cache: cache)
         try await engine.request(.detail(reference(1)))
 
@@ -661,7 +661,7 @@ final class PendingChangeSendingTests: XCTestCase {
             if shouldFail { throw GraphQLError(message: "Refused") }
             return nil
         }
-        let cache = PullRequestDetailCache()
+        let cache = PullRequestCache()
         let engine = makeEngine(api: api, cache: cache)
         try await engine.request(.detail(reference(1)))
         try await engine.request(.comments(reference(1), PullRequestCommentLimits()))
@@ -689,9 +689,9 @@ final class PendingChangeSendingTests: XCTestCase {
 
     // MARK: - Helpers
 
-    private func makeEngine(api: FakeGitHubAPI, cache: PullRequestDetailCache,
+    private func makeEngine(api: FakeGitHubAPI, cache: PullRequestCache,
                             store: LocalStore = .inMemory()) -> SyncEngine {
-        SyncEngine(api: api, store: store, cache: cache, lists: PullRequestListCache(),
+        SyncEngine(api: api, store: store, cache: cache,
                    credential: { [unowned self] in SyncEngine.Credential(token: "token", session: session) },
                    now: { [clock] in clock.now })
     }

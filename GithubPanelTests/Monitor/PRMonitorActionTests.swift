@@ -8,7 +8,7 @@ final class PRMonitorActionTests: XCTestCase {
         api.mergeResult = true
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
         let item = row(number: 1, status: .success)
-        monitor.listCache.store(OpenPullRequests(login: "fred", rows: [item]), fetchedAt: Date(timeIntervalSince1970: 0))
+        monitor.cache.store(OpenPullRequests(login: "fred", rows: [item]), fetchedAt: Date(timeIntervalSince1970: 0))
 
         await monitor.requestMerge(for: item)
 
@@ -22,7 +22,7 @@ final class PRMonitorActionTests: XCTestCase {
         api.openHandler = { _ in try await gate.next() }
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
         let merged = row(number: 1, status: .success)
-        monitor.listCache.store(OpenPullRequests(login: "fred", rows: [merged, row(number: 2, status: .success)]),
+        monitor.cache.store(OpenPullRequests(login: "fred", rows: [merged, row(number: 2, status: .success)]),
                                 fetchedAt: Date(timeIntervalSince1970: 0))
 
         let merge = Task { await monitor.requestMerge(for: merged) }
@@ -67,7 +67,7 @@ final class PRMonitorActionTests: XCTestCase {
         api.mergeResult = false
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
         let item = row(number: 1, status: .success)
-        monitor.listCache.store(OpenPullRequests(login: "fred", rows: [item]), fetchedAt: Date(timeIntervalSince1970: 0))
+        monitor.cache.store(OpenPullRequests(login: "fred", rows: [item]), fetchedAt: Date(timeIntervalSince1970: 0))
 
         await monitor.requestMerge(for: item)
 

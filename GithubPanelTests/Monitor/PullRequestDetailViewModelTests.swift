@@ -163,7 +163,7 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         await viewModel.load()
 
         XCTAssertEqual(viewModel.content, content)
-        XCTAssertEqual(monitor.detailCache.entry(for: reference)?.content, content)
+        XCTAssertEqual(monitor.cache.entry(for: reference)?.content, content)
         XCTAssertEqual(api.detailCalls.map(\.token), ["token"])
         XCTAssertEqual(api.detailCalls.map(\.reference), [reference])
     }
@@ -308,7 +308,7 @@ final class PullRequestDetailViewModelTests: XCTestCase {
     }
 
     func testStartsFromTheCacheBeforeLoading() {
-        let cache = PullRequestDetailCache()
+        let cache = PullRequestCache()
         let comments = PullRequestComments(comments: [comment(1)], threads: [thread("t1", path: "a.swift", line: 2)])
         cache.store(detailContent(title: "Cached", files: [file("a.swift", patch: "@@ -1 +1 @@\n-a\n+b", isViewed: true)]))
         cache.store(comments, for: reference)
@@ -325,7 +325,7 @@ final class PullRequestDetailViewModelTests: XCTestCase {
     }
 
     func testReopeningRestoresChecksComparisonAndExpandedCommentLimits() async {
-        let cache = PullRequestDetailCache()
+        let cache = PullRequestCache()
         let checks = PullRequestChecks(checks: [check("ci", .failure, rerun: .workflowRun(1))])
         var comparisons = 0
         var requestedLimits: [PullRequestCommentLimits] = []
@@ -360,7 +360,7 @@ final class PullRequestDetailViewModelTests: XCTestCase {
     }
 
     func testCheckRefreshFailureKeepsCachedChecksAndRerunUpdatesCache() async {
-        let cache = PullRequestDetailCache()
+        let cache = PullRequestCache()
         var fail = false
         var checks = PullRequestChecks(checks: [check("ci", .failure, rerun: .workflowRun(1))])
         func makeViewModel() -> PullRequestDetailViewModel {
@@ -385,7 +385,7 @@ final class PullRequestDetailViewModelTests: XCTestCase {
     }
 
     func testLoadReplacesCachedContentAndStoresIt() async {
-        let cache = PullRequestDetailCache()
+        let cache = PullRequestCache()
         cache.store(detailContent(title: "Cached"))
         let comments = PullRequestComments(comments: [comment(2)], threads: [])
         let viewModel = PullRequestDetailViewModel(reference: reference,
@@ -401,7 +401,7 @@ final class PullRequestDetailViewModelTests: XCTestCase {
     }
 
     func testFailedLoadKeepsCachedContent() async {
-        let cache = PullRequestDetailCache()
+        let cache = PullRequestCache()
         cache.store(detailContent(title: "Cached"))
         let viewModel = PullRequestDetailViewModel(reference: reference,
                                                    fetch: { _ in throw GraphQLError(message: "Offline") },
@@ -415,7 +415,7 @@ final class PullRequestDetailViewModelTests: XCTestCase {
     }
 
     func testViewedMarksAndEditsShowFromTheCacheThenLandInIt() async throws {
-        let cache = PullRequestDetailCache()
+        let cache = PullRequestCache()
         var title = "Old"
         var body = ""
         var viewed: Set<String> = []
@@ -451,7 +451,7 @@ final class PullRequestDetailViewModelTests: XCTestCase {
     }
 
     func testPostedCommentsUpdateTheCache() async throws {
-        let cache = PullRequestDetailCache()
+        let cache = PullRequestCache()
         var stored = PullRequestComments.empty
         let viewModel = PullRequestDetailViewModel(reference: reference,
                                                    fetch: { [self] _ in detailContent(title: "Comments") },
@@ -838,7 +838,7 @@ final class PullRequestDetailViewModelTests: XCTestCase {
     func testSetTaskSavesTheDescriptionWithThatBoxChanged() async {
         var edits: [(String?, String?)] = []
         var body = "- [ ] a\n- [ ] b"
-        let cache = PullRequestDetailCache()
+        let cache = PullRequestCache()
         let viewModel = PullRequestDetailViewModel(reference: reference,
                                                    fetch: { [self] _ in detailContent(title: "Title", body: body, canEdit: true) },
                                                    edit: { _, title, newBody in
@@ -947,7 +947,7 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         await viewModel.waitForPendingChanges()
 
         XCTAssertTrue(api.postCommentCalls.isEmpty)
-        XCTAssertEqual(monitor.detailCache.pendingChanges(for: reference).map(\.state), [.pending])
+        XCTAssertEqual(monitor.cache.pendingChanges(for: reference).map(\.state), [.pending])
     }
 
     func testRequestingAReviewerShowsThemWaitingThenReloads() async {

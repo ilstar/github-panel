@@ -99,8 +99,8 @@ final class PRMonitorReviewNotificationTests: XCTestCase {
     func testShowPullRequestPicksTheTabThatListsIt() {
         let monitor = makeMonitor()
         let mine = row(number: 1, status: .success)
-        monitor.listCache.store(OpenPullRequests(login: "fred", rows: [mine]), fetchedAt: Date(timeIntervalSince1970: 0))
-        monitor.listCache.store(ReviewRequests(fromMe: [reviewRequestRow(number: 2)], fromMyTeams: []),
+        monitor.cache.store(OpenPullRequests(login: "fred", rows: [mine]), fetchedAt: Date(timeIntervalSince1970: 0))
+        monitor.cache.store(ReviewRequests(fromMe: [reviewRequestRow(number: 2)], fromMyTeams: []),
                                 fetchedAt: Date(timeIntervalSince1970: 0))
         monitor.selectedTab = .history
 
