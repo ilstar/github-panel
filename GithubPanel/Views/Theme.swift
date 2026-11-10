@@ -23,9 +23,6 @@ enum Theme {
     /// clear of the translucent card rows around it.
     static let rowSelection = Color(light: NSColor(white: 1, alpha: 1),
                                     dark: NSColor(white: 1, alpha: 0.16))
-    /// The outline around the selected row, in the accent color so the selection is obvious at a glance.
-    static let rowSelectionBorder = Color.accentColor
-    static let rowSelectionBorderWidth: CGFloat = 1.5
     /// Capsule controls that sit on the sidebar or a card, such as the tab switcher and refresh button.
     static let controlFill = Color(light: NSColor(white: 1, alpha: 0.58),
                                    dark: NSColor(white: 1, alpha: 0.08))
@@ -119,8 +116,7 @@ struct TagView: View {
     }
 }
 
-/// The rounded background behind a list row: a faint fill on hover, a raised chip with an accent
-/// outline when selected. A card row always has a soft fill and a hairline edge, so each row reads as its own card.
+/// The rounded background behind a list row: a faint fill on hover, a raised chip when selected. A card row always has a soft fill and a hairline edge, so each row reads as its own card.
 struct ListRowBackground: ViewModifier {
     let isSelected: Bool
     let isHovering: Bool
@@ -134,9 +130,7 @@ struct ListRowBackground: ViewModifier {
             .background(
                 shape
                     .fill(fill)
-                    .overlay(shape.strokeBorder(Theme.hairline, lineWidth: 0.5).opacity(!isSelected && isCard ? 0.7 : 0))
-                    .overlay(shape.strokeBorder(Theme.rowSelectionBorder, lineWidth: Theme.rowSelectionBorderWidth)
-                        .opacity(isSelected ? 1 : 0))
+                    .overlay(shape.strokeBorder(Theme.hairline, lineWidth: 0.5).opacity(isSelected || isCard ? 0.7 : 0))
                     .shadow(color: .black.opacity(isSelected ? 0.14 : 0), radius: 6, y: 2)
             )
             .contentShape(shape)

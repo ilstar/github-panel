@@ -66,11 +66,6 @@ final class ThemeTests: XCTestCase {
         XCTAssertEqual(try resolvedAlpha(NSColor(Theme.rowSelection), in: .aqua), 1, accuracy: 0.001)
     }
 
-    func testSelectedRowHasAVisibleAccentOutline() {
-        XCTAssertEqual(Theme.rowSelectionBorder, Color.accentColor)
-        XCTAssertGreaterThanOrEqual(Theme.rowSelectionBorderWidth, 1.5)
-    }
-
     func testWindowAndSidebarAreOpaqueSoTheDesktopNeverShowsThrough() throws {
         let colors = [Theme.windowBackground, Theme.contentBackground, SidebarGradient.startColor, SidebarGradient.endColor]
         for color in colors {
