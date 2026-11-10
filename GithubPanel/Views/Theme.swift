@@ -19,9 +19,10 @@ enum Theme {
                                dark: NSColor(white: 1, alpha: 0.045))
     static let rowCardHover = Color(light: NSColor(white: 1, alpha: 0.62),
                                     dark: NSColor(white: 1, alpha: 0.08))
-    /// The selected row: a raised white chip rather than an accent tint.
-    static let rowSelection = Color(light: NSColor(white: 1, alpha: 0.84),
-                                    dark: NSColor(white: 1, alpha: 0.13))
+    /// The selected row: a raised, opaque white chip rather than an accent tint, so it stands well
+    /// clear of the translucent card rows around it.
+    static let rowSelection = Color(light: NSColor(white: 1, alpha: 1),
+                                    dark: NSColor(white: 1, alpha: 0.16))
     /// Capsule controls that sit on the sidebar or a card, such as the tab switcher and refresh button.
     static let controlFill = Color(light: NSColor(white: 1, alpha: 0.58),
                                    dark: NSColor(white: 1, alpha: 0.08))
@@ -115,8 +116,7 @@ struct TagView: View {
     }
 }
 
-/// The rounded background behind a list row: a faint fill on hover, a raised chip when selected.
-/// A card row always has a soft fill and a hairline edge, so each row reads as its own card.
+/// The rounded background behind a list row: a faint fill on hover, a raised chip when selected. A card row always has a soft fill and a hairline edge, so each row reads as its own card.
 struct ListRowBackground: ViewModifier {
     let isSelected: Bool
     let isHovering: Bool
@@ -131,10 +131,11 @@ struct ListRowBackground: ViewModifier {
                 shape
                     .fill(fill)
                     .overlay(shape.strokeBorder(Theme.hairline, lineWidth: 0.5).opacity(isSelected || isCard ? 0.7 : 0))
-                    .shadow(color: .black.opacity(isSelected ? 0.07 : 0), radius: 5, y: 2)
+                    .shadow(color: .black.opacity(isSelected ? 0.14 : 0), radius: 6, y: 2)
             )
             .contentShape(shape)
             .animation(.easeOut(duration: 0.12), value: isHovering)
+            .animation(.easeOut(duration: 0.12), value: isSelected)
     }
 
     private var fill: Color {
