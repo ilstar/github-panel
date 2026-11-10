@@ -21,13 +21,25 @@ struct PullRequestStatus: Equatable, Codable {
     }
 }
 
-/// Everything the lists know about one pull request: the row each list's query returned, and its status.
-/// Saved as one `pull_request` row, which also holds the detail.
+/// A pull request's detail as last loaded, with what loaded alongside it.
+struct PullRequestDetailEntry: Equatable, Codable {
+    var content: PullRequestDetailContent
+    /// Nil until the comments first load.
+    var comments: PullRequestComments?
+    var commentLimits = PullRequestCommentLimits()
+    var checks: PullRequestChecks?
+    var filesSinceLastReview: [PullRequestFile]?
+}
+
+/// Everything loaded about one pull request: the row each list's query returned, its status, and its detail.
+/// Saved as one `pull_request` row.
 struct PullRequestRecord: Equatable {
     var openRow: PullRequestRow?
     var reviewRequestRow: ReviewRequestRow?
     var historyRow: PullRequestHistoryRow?
     var status: PullRequestStatus?
+    /// Nil until the detail loads, and again once it's evicted.
+    var detail: PullRequestDetailEntry?
 
     mutating func observe(_ status: PullRequestStatus) {
         self.status = self.status.map { $0.merging(status) } ?? status

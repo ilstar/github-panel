@@ -1,6 +1,6 @@
 import Foundation
 import Combine
-/// Shows the lists the sync engine loads into `listCache`, and keeps the settings, notifications, check hooks,
+/// Shows the lists the sync engine loads into `cache`, and keeps the settings, notifications, check hooks,
 /// For Later and hidden review requests. It asks the engine for everything it shows rather than fetching itself.
 @MainActor
 final class PRMonitor: ObservableObject {
@@ -32,13 +32,12 @@ final class PRMonitor: ObservableObject {
     let isUsingMockData: Bool
     /// A pull request a clicked notification asked to show. The main window selects it, then clears this.
     @Published var pullRequestToShow: PullRequestToShow?
-    /// Details and comments of pull requests loaded so far, shared by every detail view.
-    let detailCache: PullRequestDetailCache
-    /// My PRs, To Review and History as last loaded, with their loading and error state.
-    let listCache: PullRequestListCache
-    /// Loads pull requests and lists into the caches with the session token.
+    /// Pull requests loaded so far, one record each: My PRs, To Review and History with their loading and error
+    /// state, and the details and comments every detail view shares.
+    let cache: PullRequestCache
+    /// Loads pull requests and lists into the cache with the session token.
     private(set) lazy var syncEngine = SyncEngine(
-        api: api, store: store, cache: detailCache, lists: listCache,
+        api: api, store: store, cache: cache,
         credential: { [weak self] in self?.syncCredential },
         refreshInterval: { [weak self] in self?.refreshInterval ?? 60 },
         now: { [dateProvider] in dateProvider.now })
@@ -127,8 +126,7 @@ final class PRMonitor: ObservableObject {
         self.api = api
         // Mock data never reads or writes the saved store, so it can't mix with real pull requests.
         self.store = isUsingMockData ? .inMemory() : store
-        detailCache = PullRequestDetailCache(store: self.store)
-        listCache = PullRequestListCache(store: self.store)
+        cache = PullRequestCache(store: self.store)
         self.tokenStore = tokenStore
         self.notificationPoster = notificationPoster
         self.defaults = defaults
@@ -161,7 +159,7 @@ final class PRMonitor: ObservableObject {
         showOpenPullRequests()
         showReviewRequests()
         showHistory()
-        listSubscription = listCache.updates.sink { [weak self] change in self?.listChanged(change) }
+        listSubscription = cache.listUpdates.sink { [weak self] change in self?.listChanged(change) }
     }
 
     func start() {
@@ -193,7 +191,7 @@ final class PRMonitor: ObservableObject {
         didLoadSessionToken = true
         hasToken = false
         lastStates = [:]
-        listCache.removeAll()
+        cache.removeLists()
         requestedHistoryPage = 1
         historyPage = 1
         historyTotalCount = 0
@@ -211,8 +209,8 @@ final class PRMonitor: ObservableObject {
         pendingPrefetch = [:]
         lastReviewStatuses = [:]
         knownReviewRequestIDs = nil
-        detailCache.removeAll()
-        listCache.stopAllLoading()
+        cache.removeDetails()
+        cache.stopAllLoading()
     }
 
     private func refresh() {
@@ -356,9 +354,9 @@ final class PRMonitor: ObservableObject {
               let updatedAt = pendingPrefetch.removeValue(forKey: reference)?.updatedAt {
             guard !Task.isCancelled, session == credentialSession else { return }
             do {
-                let cached = detailCache.entry(for: reference)
+                let cached = cache.entry(for: reference)
                 var loads: [Task<Void, Error>] = []
-                if detailCache.needsRefresh(reference, updatedAt: updatedAt) {
+                if cache.needsRefresh(reference, updatedAt: updatedAt) {
                     let limits = cached?.commentLimits ?? PullRequestCommentLimits()
                     loads.append(await syncEngine.start(.detail(reference), priority: .background))
                     loads.append(await syncEngine.start(.comments(reference, limits), priority: .background))
@@ -390,17 +388,17 @@ final class PRMonitor: ObservableObject {
 
     // MARK: - Showing the lists
 
-    private func listChanged(_ change: PullRequestListCache.Change) {
+    private func listChanged(_ change: PullRequestCache.ListChange) {
         switch change {
         case .loaded(.open):
             listLoadCount += 1
-            let rows = listCache.open ?? []
+            let rows = cache.open ?? []
             updateNotificationsForRows(rows)
-            forgetClosedForLater(openRows: rows, isComplete: listCache.openSSOAuthorizationURL == nil)
+            forgetClosedForLater(openRows: rows, isComplete: cache.openSSOAuthorizationURL == nil)
             showOpenPullRequests()
         case .loaded(.reviewRequests):
             listLoadCount += 1
-            notifyAboutNewReviewRequests(listCache.reviewRequests ?? .empty)
+            notifyAboutNewReviewRequests(cache.reviewRequests ?? .empty)
             showReviewRequests()
         case .changed(.open):
             showOpenPullRequests()
@@ -413,9 +411,9 @@ final class PRMonitor: ObservableObject {
     }
 
     private func showOpenPullRequests() {
-        let state = listCache.state(of: .open)
-        setPRRows(listCache.open ?? [])
-        openPullRequestsSSOAuthorizationURL = listCache.openSSOAuthorizationURL
+        let state = cache.state(of: .open)
+        setPRRows(cache.open ?? [])
+        openPullRequestsSSOAuthorizationURL = cache.openSSOAuthorizationURL
         isLoading = state.isLoading
         // Keep the last list on screen; the error shows above it until a refresh succeeds.
         lastError = state.lastError
@@ -424,8 +422,8 @@ final class PRMonitor: ObservableObject {
 
     /// Shows the History page asked for, as last loaded. A failed load empties it.
     private func showHistory() {
-        let page = listCache.historyPage(requestedHistoryPage)
-        let state = listCache.state(of: .history(page: requestedHistoryPage))
+        let page = cache.historyPage(requestedHistoryPage)
+        let state = cache.state(of: .history(page: requestedHistoryPage))
         isHistoryLoading = state.isLoading
         lastHistoryError = state.lastError
         if state.lastError != nil {
@@ -498,13 +496,13 @@ final class PRMonitor: ObservableObject {
     /// Shows the loaded review requests that are not hidden. Forgets hidden requests that changed
     /// or are no longer waiting on me, so they show again if they come back.
     private func showReviewRequests() {
-        let state = listCache.state(of: .reviewRequests)
+        let state = cache.state(of: .reviewRequests)
         isReviewRequestsLoading = state.isLoading
         // Keep the last list on screen; the error shows above it until a refresh succeeds.
         lastReviewRequestsError = state.lastError
         lastReviewRequestsRefreshAt = state.fetchedAt
         // Before any list loads there is nothing to tell which hidden requests are gone.
-        guard let fetchedReviewRequests = listCache.reviewRequests else { return setReviewRequests(.empty) }
+        guard let fetchedReviewRequests = cache.reviewRequests else { return setReviewRequests(.empty) }
         let rows = Dictionary(fetchedReviewRequests.rows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let stillHidden = hiddenReviewRequests.filter { id, hidden in rows[id].map(hidden.hides) ?? false }
         if stillHidden != hiddenReviewRequests {
@@ -640,7 +638,7 @@ final class PRMonitor: ObservableObject {
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             guard session == credentialSession, !Task.isCancelled else { return }
             _ = try? await syncEngine.request(.detail(reference))
-            if let head = detailCache.entry(for: reference)?.content.detail.headSHA, head != headSHA { return }
+            if let head = cache.entry(for: reference)?.content.detail.headSHA, head != headSHA { return }
         }
     }
 
@@ -670,7 +668,7 @@ final class PRMonitor: ObservableObject {
             await requireFreshRefresh(for: session)
         } catch {
             guard session == credentialSession else { return }
-            listCache.showError(error.localizedDescription, on: .open)
+            cache.showError(error.localizedDescription, on: .open)
         }
     }
 
@@ -688,7 +686,7 @@ final class PRMonitor: ObservableObject {
                                                             number: row.number, method: mergeMethod(for: row))
                 guard session == credentialSession else { return }
                 if merged {
-                    listCache.removeOpenPullRequest(id: row.id)
+                    cache.removeOpenPullRequest(id: row.id)
                     lastStates.removeValue(forKey: row.id)
                     await requireFreshRefresh(for: session)
                 }
@@ -704,7 +702,7 @@ final class PRMonitor: ObservableObject {
             }
         } catch {
             guard session == credentialSession else { return }
-            listCache.showError(error.localizedDescription, on: .open)
+            cache.showError(error.localizedDescription, on: .open)
         }
     }
 }

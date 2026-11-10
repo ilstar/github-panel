@@ -9,7 +9,7 @@ final class PRMonitorStatusTests: XCTestCase {
     func testANewHeadFromTheDetailShowsInMyPRsWithItsChecksPending() async throws {
         let api = FakeGitHubAPI()
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
-        monitor.listCache.store(OpenPullRequests(login: "fred", rows: [row(number: 1, status: .failure)]),
+        monitor.cache.store(OpenPullRequests(login: "fred", rows: [row(number: 1, status: .failure)]),
                                 fetchedAt: Date(timeIntervalSince1970: 0))
         api.detailHandler = { [self] _ in content(headSHA: "merged") }
 
@@ -22,7 +22,7 @@ final class PRMonitorStatusTests: XCTestCase {
     func testChecksFromTheDetailShowInMyPRs() async throws {
         let api = FakeGitHubAPI()
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
-        monitor.listCache.store(OpenPullRequests(login: "fred", rows: [row(number: 1, status: .failure)]),
+        monitor.cache.store(OpenPullRequests(login: "fred", rows: [row(number: 1, status: .failure)]),
                                 fetchedAt: Date(timeIntervalSince1970: 0))
         api.detailHandler = { [self] _ in content(headSHA: "sha-1") }
         api.checksHandler = { _ in
@@ -69,7 +69,7 @@ final class PRMonitorStatusTests: XCTestCase {
         let api = FakeGitHubAPI()
         let store = LocalStore.inMemory()
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"), store: store)
-        monitor.listCache.store(OpenPullRequests(login: "fred", rows: [row(number: 1, status: .failure)]),
+        monitor.cache.store(OpenPullRequests(login: "fred", rows: [row(number: 1, status: .failure)]),
                                 fetchedAt: Date(timeIntervalSince1970: 0))
         api.detailHandler = { [self] _ in content(headSHA: "merged") }
         try await monitor.syncEngine.request(.detail(reference))
@@ -84,7 +84,7 @@ final class PRMonitorStatusTests: XCTestCase {
         let api = FakeGitHubAPI()
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
         monitor.branchUpdatePollDelays = [0, 0, 0, 0]
-        monitor.listCache.store(OpenPullRequests(login: "fred", rows: [row(number: 1, status: .failure)]),
+        monitor.cache.store(OpenPullRequests(login: "fred", rows: [row(number: 1, status: .failure)]),
                                 fetchedAt: Date(timeIntervalSince1970: 0))
         var events: [String] = []
         api.detailHandler = { [self] _ in

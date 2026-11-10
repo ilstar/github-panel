@@ -26,7 +26,7 @@ extension PullRequestDetailViewModel {
                          async throws -> Void = { _, _, _, _ in },
                      searchMentionCandidates: @escaping SearchMentionCandidates = { _, _ in [] },
                      viewerLogin: String? = nil,
-                     cache: PullRequestDetailCache? = nil) {
+                     cache: PullRequestCache? = nil) {
         let api = FakeGitHubAPI()
         api.detailHandler = fetch
         api.changedFilesHandler = fetchChangedFiles
@@ -43,10 +43,9 @@ extension PullRequestDetailViewModel {
         api.submitPendingReviewHandler = submitPendingReview
         api.deletePendingReviewHandler = deletePendingReview
         let session = UUID()
-        let lists = PullRequestListCache()
-        lists.viewerLogin = viewerLogin
-        let engine = SyncEngine(api: api, store: .inMemory(), cache: cache ?? PullRequestDetailCache(),
-                                lists: lists) {
+        let cache = cache ?? PullRequestCache()
+        cache.viewerLogin = viewerLogin
+        let engine = SyncEngine(api: api, store: .inMemory(), cache: cache) {
             SyncEngine.Credential(token: "token", session: session)
         }
         self.init(reference: reference, engine: engine, updateBranch: updateBranch,

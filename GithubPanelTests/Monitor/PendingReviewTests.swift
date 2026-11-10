@@ -280,8 +280,8 @@ final class PendingReviewTests: XCTestCase {
     func testDiscardingAReviewGitHubWasNotAskedToStartDropsItHere() async throws {
         let api = FakeGitHubAPI()
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: nil))
-        monitor.detailCache.store(detail(isViewerAuthor: false))
-        monitor.detailCache.store(PullRequestComments.empty, for: reference)
+        monitor.cache.store(detail(isViewerAuthor: false))
+        monitor.cache.store(PullRequestComments.empty, for: reference)
         let viewModel = PullRequestDetailViewModel(reference: reference, monitor: monitor)
 
         viewModel.addToReview(.thread(body: "Why?", anchor: anchor))

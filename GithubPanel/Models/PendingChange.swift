@@ -183,11 +183,11 @@ struct PendingChange: Identifiable, Equatable {
     }
 
     /// The entry with each change applied in order, which is what the detail view shows.
-    static func apply(_ changes: [PendingChange], to entry: PullRequestDetailCache.Entry) -> PullRequestDetailCache.Entry {
+    static func apply(_ changes: [PendingChange], to entry: PullRequestDetailEntry) -> PullRequestDetailEntry {
         changes.reduce(entry) { entry, change in apply(change, to: entry) }
     }
 
-    static func apply(_ change: PendingChange, to entry: PullRequestDetailCache.Entry) -> PullRequestDetailCache.Entry {
+    static func apply(_ change: PendingChange, to entry: PullRequestDetailEntry) -> PullRequestDetailEntry {
         var entry = entry
         var detail = entry.content.detail
         var files = entry.content.files

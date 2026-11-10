@@ -343,7 +343,7 @@ extension LocalStore {
 
 extension LocalStore {
     struct SavedPullRequestDetail {
-        var entry: PullRequestDetailCache.Entry
+        var entry: PullRequestDetailEntry
         var lastUsedAt: Date
     }
 
@@ -368,7 +368,7 @@ extension LocalStore {
         }
     }
 
-    private static func detailEntry(from row: Row) throws -> PullRequestDetailCache.Entry {
+    private static func detailEntry(from row: Row) throws -> PullRequestDetailEntry {
         let decoder = JSONDecoder()
         func decode<T: Decodable>(_ type: T.Type, _ column: String) throws -> T? {
             guard let data: Data = row[column] else { return nil }
@@ -378,7 +378,7 @@ extension LocalStore {
               let commentLimits = try decode(PullRequestCommentLimits.self, "commentLimits") else {
             throw DecodingError.valueNotFound(Data.self, .init(codingPath: [], debugDescription: "Missing blob"))
         }
-        return PullRequestDetailCache.Entry(content: content,
+        return PullRequestDetailEntry(content: content,
                                             comments: try decode(PullRequestComments.self, "comments"),
                                             commentLimits: commentLimits,
                                             checks: try decode(PullRequestChecks.self, "checks"),

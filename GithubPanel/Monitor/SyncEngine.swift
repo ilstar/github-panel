@@ -1,9 +1,9 @@
 import Foundation
 
 /// The only code that reads pull requests and their lists from GitHub. Callers ask for a resource, and the engine
-/// fetches it, saves it to the details or lists cache, and records when in `sync_state`. Views show what lands in
+/// fetches it, saves it to the cache, and records when in `sync_state`. Views show what lands in
 /// the caches. Requests for a resource already loading join it, and requests the user waits on never queue behind
-/// preloading. It also sends the changes the user makes, which wait in the details cache until GitHub confirms them.
+/// preloading. It also sends the changes the user makes, which wait in the cache until GitHub confirms them.
 actor SyncEngine {
     enum Resource: Hashable {
         case detail(PullRequestReference)
@@ -74,8 +74,7 @@ actor SyncEngine {
         var errorDescription: String? { "The GitHub token changed while this was loading." }
     }
 
-    let cache: PullRequestDetailCache
-    let lists: PullRequestListCache
+    let cache: PullRequestCache
     private let api: GitHubAPIClient
     private let store: LocalStore
     private let credential: @MainActor () -> Credential?
@@ -156,15 +155,13 @@ actor SyncEngine {
         case currentUser(String)
     }
 
-    init(api: GitHubAPIClient, store: LocalStore, cache: PullRequestDetailCache,
-         lists: PullRequestListCache,
+    init(api: GitHubAPIClient, store: LocalStore, cache: PullRequestCache,
          credential: @escaping @MainActor () -> Credential?,
          refreshInterval: @escaping @MainActor () -> TimeInterval = { 60 },
          now: @escaping @Sendable () -> Date = { Date() }, maxBackgroundRequests: Int = 3) {
         self.api = api
         self.store = store
         self.cache = cache
-        self.lists = lists
         self.credential = credential
         self.refreshInterval = refreshInterval
         self.now = now
@@ -188,9 +185,9 @@ actor SyncEngine {
            now().timeIntervalSince(last) < maxAge {
             fetchedAt = last
         }
-        var (credential, isFresh) = await MainActor.run { [cache, lists, credential, fetchedAt] in
+        var (credential, isFresh) = await MainActor.run { [cache, credential, fetchedAt] in
             // A fresh `sync_state` counts only while the cache still holds what loaded.
-            (credential(), fetchedAt != nil && Self.cacheHolds(resource, cache: cache, lists: lists))
+            (credential(), fetchedAt != nil && Self.cacheHolds(resource, cache: cache))
         }
         guard let credential else { return Task { throw MissingTokenError() } }
         if case .currentUser = resource { isFresh = isFresh && login?.session == credential.session }
@@ -242,9 +239,9 @@ actor SyncEngine {
     private func run(_ job: Job) async throws {
         defer { finish(job) }
         guard let list = job.resource.list else { return try await load(job) }
-        await MainActor.run { [lists, credential] in
+        await MainActor.run { [cache, credential] in
             guard credential()?.session == job.session else { return }
-            lists.startLoading(list, id: job.id)
+            cache.startLoading(list, id: job.id)
         }
         do {
             try await load(job)
@@ -286,12 +283,12 @@ actor SyncEngine {
 
     /// Ends a list's loading state, with the error the load failed with, if the token hasn't changed since.
     private func stopLoading(_ list: PullRequestListKind, job: Job, error: Error?) async {
-        await MainActor.run { [lists, credential] in
+        await MainActor.run { [cache, credential] in
             guard credential()?.session == job.session else { return }
             if let error, !(error is CredentialChangedError) {
-                lists.showError(error.localizedDescription, on: list)
+                cache.showError(error.localizedDescription, on: list)
             }
-            lists.stopLoading(list, id: job.id)
+            cache.stopLoading(list, id: job.id)
         }
     }
 
@@ -343,18 +340,18 @@ actor SyncEngine {
     /// `sentAt` orders the head commit and checks it saw against other loads, which may arrive in any order.
     private func save(_ response: Response, for resource: Resource, session: UUID, sentAt: Date) async -> Bool? {
         let fetchedAt = now()
-        let stored = await MainActor.run { [cache, lists, credential] () -> Bool? in
+        let stored = await MainActor.run { [cache, credential] () -> Bool? in
             guard credential()?.session == session else { return nil }
             if let reference = resource.reference {
-                return Self.store(response, for: reference, in: cache, lists: lists, sentAt: sentAt)
+                return Self.store(response, for: reference, in: cache, sentAt: sentAt)
             }
             switch response {
-            case .openList(let result): lists.store(result, fetchedAt: fetchedAt, observedAt: sentAt)
+            case .openList(let result): cache.store(result, fetchedAt: fetchedAt, observedAt: sentAt)
             case .history(let page):
                 guard case .history(let number) = resource else { break }
-                lists.store(page, asPage: number, fetchedAt: fetchedAt)
-            case .reviewRequests(let requests): lists.store(requests, fetchedAt: fetchedAt, observedAt: sentAt)
-            case .currentUser(let login): lists.viewerLogin = login
+                cache.store(page, asPage: number, fetchedAt: fetchedAt)
+            case .reviewRequests(let requests): cache.store(requests, fetchedAt: fetchedAt, observedAt: sentAt)
+            case .currentUser(let login): cache.viewerLogin = login
             case .detail, .comments, .checks, .changedFiles: break
             }
             return true
@@ -369,23 +366,17 @@ actor SyncEngine {
 
     @MainActor
     private static func store(_ response: Response, for reference: PullRequestReference,
-                              in cache: PullRequestDetailCache, lists: PullRequestListCache, sentAt: Date) -> Bool {
+                              in cache: PullRequestCache, sentAt: Date) -> Bool {
         switch response {
         case .detail(let content):
-            cache.store(content)
-            // A new head shows in the lists right away, with its checks pending until they load.
-            lists.observe(PullRequestStatus(headSHA: content.detail.headSHA, checkState: nil, observedAt: sentAt),
-                          for: reference)
+            cache.store(content, sentAt: sentAt)
             return true
         case .comments(let comments, let limits):
             return cache.store(comments, for: reference, limits: limits)
         case .checks(let checks):
             // Checks are for the head commit, which only the detail knows.
-            guard let headSHA = cache.entry(for: reference)?.content.detail.headSHA,
-                  cache.store(checks, for: reference, headSHA: headSHA) else { return false }
-            lists.observe(PullRequestStatus(headSHA: headSHA, checkState: checks.checkState, observedAt: sentAt),
-                          for: reference)
-            return true
+            guard let headSHA = cache.entry(for: reference)?.content.detail.headSHA else { return false }
+            return cache.store(checks, for: reference, headSHA: headSHA, sentAt: sentAt)
         case .changedFiles(let files, let base, let head):
             return cache.storeChanges(files, for: reference, baseSHA: base, headSHA: head)
         case .openList, .history, .reviewRequests, .currentUser:
@@ -394,9 +385,8 @@ actor SyncEngine {
     }
 
     @MainActor
-    private static func cacheHolds(_ resource: Resource, cache: PullRequestDetailCache,
-                                   lists: PullRequestListCache) -> Bool {
-        if let list = resource.list { return lists.holds(list) }
+    private static func cacheHolds(_ resource: Resource, cache: PullRequestCache) -> Bool {
+        if let list = resource.list { return cache.holds(list) }
         guard let reference = resource.reference else { return true }
         guard let entry = cache.entry(for: reference) else { return false }
         switch resource {
@@ -567,7 +557,7 @@ actor SyncEngine {
 
     /// GitHub's error, or for a comment or review, what it means for it.
     @MainActor
-    private static func failureMessage(for change: PendingChange, error: Error, cache: PullRequestDetailCache) -> String {
+    private static func failureMessage(for change: PendingChange, error: Error, cache: PullRequestCache) -> String {
         let message = error.localizedDescription
         if error is PendingChange.ReviewNotStartedError, case .startedBy(let startID)? = change.kind.reviewTarget,
            let startError = cache.pendingChanges(for: change.reference).first(where: { $0.id == startID })?.error {
@@ -619,7 +609,7 @@ actor SyncEngine {
     /// What GitHub changed: the detail, the comments (once they loaded), or both, for a review, whose verdict shows
     /// in the Reviewers list and its message in the Activity list.
     @MainActor
-    private static func resources(changedBy change: PendingChange, cache: PullRequestDetailCache) -> [Resource] {
+    private static func resources(changedBy change: PendingChange, cache: PullRequestCache) -> [Resource] {
         let reference = change.reference
         var comments: [Resource] = []
         if let entry = cache.entry(for: reference), entry.comments != nil {
@@ -637,12 +627,12 @@ actor SyncEngine {
 
     /// Runs `update` if the token hasn't changed since `session`, since the cache dropped that token's changes.
     @discardableResult
-    private func updateCache(session: UUID, _ update: @escaping @MainActor (PullRequestDetailCache) -> Void) async -> Bool {
+    private func updateCache(session: UUID, _ update: @escaping @MainActor (PullRequestCache) -> Void) async -> Bool {
         await readCache(session: session, update) != nil
     }
 
     /// Like `updateCache`, returning what `read` returns, or nil when the token changed.
-    private func readCache<T>(session: UUID, _ read: @escaping @MainActor (PullRequestDetailCache) -> T) async -> T? {
+    private func readCache<T>(session: UUID, _ read: @escaping @MainActor (PullRequestCache) -> T) async -> T? {
         await MainActor.run { [cache, credential] () -> T? in
             guard credential()?.session == session else { return nil }
             return read(cache)

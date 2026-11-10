@@ -65,7 +65,7 @@ final class PullRequestDetailViewModel: ObservableObject {
     private var submittedReviewChange: (id: UUID, event: PullRequestReviewEvent)?
     /// How much of the discussion loads. Reloads keep what the "more" buttons added.
     private var commentLimits = PullRequestCommentLimits()
-    private let cache: PullRequestDetailCache
+    private let cache: PullRequestCache
     private var cacheSubscription: AnyCancellable?
     private var isApplyingCacheUpdate = false
     /// The diff lines of each file changed since the last review, parsed the first time the file is shown.
@@ -114,7 +114,7 @@ final class PullRequestDetailViewModel: ObservableObject {
                 apply(comments)
             }
         }
-        cacheSubscription = cache.updates.sink { [weak self] reference, entry in
+        cacheSubscription = cache.detailUpdates.sink { [weak self] reference, entry in
             guard let self, reference == self.reference, !self.isApplyingCacheUpdate else { return }
             self.isApplyingCacheUpdate = true
             defer { self.isApplyingCacheUpdate = false }
@@ -326,7 +326,7 @@ final class PullRequestDetailViewModel: ObservableObject {
     /// Who the viewer is, to show their unsent comments as theirs. Nil until My PRs first loads, unless they opened
     /// this pull request.
     private var viewerLogin: String? {
-        engine.lists.viewerLogin ?? content.flatMap { $0.detail.isViewerAuthor ? $0.detail.authorLogin : nil }
+        engine.cache.viewerLogin ?? content.flatMap { $0.detail.isViewerAuthor ? $0.detail.authorLogin : nil }
     }
 
     /// Saves a new title, description, or both, which show right away. A blank title is ignored, since GitHub

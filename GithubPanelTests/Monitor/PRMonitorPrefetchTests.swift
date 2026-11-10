@@ -16,9 +16,9 @@ final class PRMonitorPrefetchTests: XCTestCase {
         XCTAssertEqual(api.detailCalls.map(\.token), ["token", "token"])
         XCTAssertEqual(Set(api.commentsCalls.map(\.reference.number)), [1, 2])
         XCTAssertEqual(Set(api.checksCalls.map(\.reference.number)), [1, 2])
-        XCTAssertNotNil(monitor.detailCache.entry(for: reference(1))?.checks)
-        XCTAssertEqual(monitor.detailCache.entry(for: reference(1))?.content.detail.title, "PR 1")
-        XCTAssertEqual(monitor.detailCache.entry(for: reference(2))?.comments, comments)
+        XCTAssertNotNil(monitor.cache.entry(for: reference(1))?.checks)
+        XCTAssertEqual(monitor.cache.entry(for: reference(1))?.content.detail.title, "PR 1")
+        XCTAssertEqual(monitor.cache.entry(for: reference(2))?.comments, comments)
     }
 
     func testPreloadFetchesChecksAlongsideTheContent() async {
@@ -37,7 +37,7 @@ final class PRMonitorPrefetchTests: XCTestCase {
         await monitor.waitForPrefetch()
 
         XCTAssertTrue(checksStartedBeforeContentLoaded)
-        XCTAssertNotNil(monitor.detailCache.entry(for: reference(1))?.checks)
+        XCTAssertNotNil(monitor.cache.entry(for: reference(1))?.checks)
     }
 
     func testPreloadKeepsTheContentWhenChecksFail() async {
@@ -48,8 +48,8 @@ final class PRMonitorPrefetchTests: XCTestCase {
         await monitor.refreshNow()
         await monitor.waitForPrefetch()
 
-        XCTAssertEqual(monitor.detailCache.entry(for: reference(1))?.content.detail.title, "PR 1")
-        XCTAssertNil(monitor.detailCache.entry(for: reference(1))?.checks)
+        XCTAssertEqual(monitor.cache.entry(for: reference(1))?.content.detail.title, "PR 1")
+        XCTAssertNil(monitor.cache.entry(for: reference(1))?.checks)
     }
 
     func testRefreshOnlyPrefetchesPullRequestsThatChanged() async {
@@ -69,7 +69,7 @@ final class PRMonitorPrefetchTests: XCTestCase {
         await monitor.waitForPrefetch()
 
         XCTAssertEqual(api.detailCalls.map(\.reference.number), [1, 2, 2])
-        XCTAssertEqual(monitor.detailCache.entry(for: reference(2))?.content.detail.updatedAt,
+        XCTAssertEqual(monitor.cache.entry(for: reference(2))?.content.detail.updatedAt,
                        Date(timeIntervalSince1970: 50))
     }
 
@@ -83,7 +83,7 @@ final class PRMonitorPrefetchTests: XCTestCase {
 
         XCTAssertEqual(api.detailCalls.map(\.reference.number), [1, 2, 3])
         XCTAssertEqual(api.checksCalls.map(\.reference.number), [1, 2, 3])
-        XCTAssertNotNil(monitor.detailCache.entry(for: reference(3))?.comments)
+        XCTAssertNotNil(monitor.cache.entry(for: reference(3))?.comments)
     }
 
     func testPreloadTakesTheTopRowsOfBothTabsFirst() async {
@@ -105,7 +105,7 @@ final class PRMonitorPrefetchTests: XCTestCase {
         await monitor.refreshReviewRequests()
         await monitor.waitForPrefetch()
         XCTAssertEqual(api.detailCalls.map(\.reference.number), [2])
-        XCTAssertNotNil(monitor.detailCache.entry(for: reference(2))?.checks)
+        XCTAssertNotNil(monitor.cache.entry(for: reference(2))?.checks)
     }
 
     func testBackgroundRefreshUpdatesOpenDetailsAndChecksWithoutUpdatedAtChanging() async {
@@ -191,13 +191,13 @@ final class PRMonitorPrefetchTests: XCTestCase {
         await monitor.refreshNow()
         await monitor.waitForPrefetch()
         let limits = PullRequestCommentLimits().addingEarlierComments().addingThreads()
-        monitor.detailCache.store(.empty, for: reference(1), limits: limits)
+        monitor.cache.store(.empty, for: reference(1), limits: limits)
         api.rows = [row(number: 1, status: .success, updatedAt: Date(timeIntervalSince1970: 50))]
 
         await monitor.refreshNow()
         await monitor.waitForPrefetch()
 
-        XCTAssertEqual(monitor.detailCache.entry(for: reference(1))?.commentLimits, limits)
+        XCTAssertEqual(monitor.cache.entry(for: reference(1))?.commentLimits, limits)
     }
 
     func testPrefetchStopsWhenGitHubThrottles() async {
@@ -211,7 +211,7 @@ final class PRMonitorPrefetchTests: XCTestCase {
         await monitor.waitForPrefetch()
 
         XCTAssertEqual(api.detailCalls.map(\.reference.number), [1])
-        XCTAssertEqual(monitor.detailCache.count, 0)
+        XCTAssertEqual(monitor.cache.detailCount, 0)
         XCTAssertNil(monitor.lastError)
     }
 
@@ -228,8 +228,8 @@ final class PRMonitorPrefetchTests: XCTestCase {
 
         XCTAssertEqual(monitor.prRows.map(\.number), [1, 2])
         XCTAssertNil(monitor.lastError)
-        XCTAssertNil(monitor.detailCache.entry(for: reference(1)))
-        XCTAssertNotNil(monitor.detailCache.entry(for: reference(2)))
+        XCTAssertNil(monitor.cache.entry(for: reference(1)))
+        XCTAssertNotNil(monitor.cache.entry(for: reference(2)))
     }
 
     func testChangingTheTokenEmptiesTheCache() async {
@@ -237,11 +237,11 @@ final class PRMonitorPrefetchTests: XCTestCase {
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
         await monitor.refreshNow()
         await monitor.waitForPrefetch()
-        XCTAssertEqual(monitor.detailCache.count, 1)
+        XCTAssertEqual(monitor.cache.detailCount, 1)
 
         monitor.clearToken()
 
-        XCTAssertEqual(monitor.detailCache.count, 0)
+        XCTAssertEqual(monitor.cache.detailCount, 0)
     }
 
     func testPrefetchStartedBeforeTheTokenChangedIsDropped() async {
@@ -262,7 +262,7 @@ final class PRMonitorPrefetchTests: XCTestCase {
         // Let the prefetch finish its request before checking it stored nothing.
         for _ in 0..<20 { await Task.yield() }
 
-        XCTAssertEqual(monitor.detailCache.count, 0)
+        XCTAssertEqual(monitor.cache.detailCount, 0)
     }
 
     private func prefetchingAPI(rows: [PullRequestRow]) -> FakeGitHubAPI {

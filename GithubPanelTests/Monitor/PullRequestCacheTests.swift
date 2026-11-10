@@ -3,9 +3,60 @@ import GRDB
 @testable import GithubPanel
 
 @MainActor
-final class PullRequestDetailCacheTests: XCTestCase {
+final class PullRequestCacheTests: XCTestCase {
+    // MARK: - One record per pull request
+
+    func testEvictingADetailKeepsItsRowInTheList() {
+        let cache = PullRequestCache(capacity: 1)
+        let listed = row(number: 1, status: .success)
+        cache.store(OpenPullRequests(login: "fred", rows: [listed]), fetchedAt: Date(timeIntervalSince1970: 0))
+        cache.store(detailContent(for: listed.reference))
+
+        cache.store(detailContent(for: PullRequestReference(repoFullName: "acme/widgets", number: 2)))
+
+        XCTAssertNil(cache.entry(for: listed.reference))
+        XCTAssertEqual(cache.open, [listed])
+        XCTAssertEqual(cache.detailCount, 1)
+    }
+
+    func testAPullRequestLeavingTheListsKeepsItsDetailUntilItIsEvicted() {
+        let cache = PullRequestCache(capacity: 1)
+        let listed = row(number: 1, status: .success)
+        cache.store(OpenPullRequests(login: "fred", rows: [listed]), fetchedAt: Date(timeIntervalSince1970: 0))
+        cache.store(detailContent(for: listed.reference))
+
+        cache.store(OpenPullRequests(login: "fred", rows: []), fetchedAt: Date(timeIntervalSince1970: 1))
+
+        XCTAssertEqual(cache.open, [])
+        XCTAssertNotNil(cache.entry(for: listed.reference))
+
+        cache.store(detailContent(for: PullRequestReference(repoFullName: "acme/widgets", number: 2)))
+
+        XCTAssertNil(cache.records[listed.reference], "Nothing needs it anymore")
+    }
+
+    func testRemovingTheListsKeepsTheDetailsAndRemovingTheDetailsKeepsTheLists() {
+        let cache = PullRequestCache()
+        let listed = row(number: 1, status: .success)
+        cache.store(OpenPullRequests(login: "fred", rows: [listed]), fetchedAt: Date(timeIntervalSince1970: 0))
+        cache.store(detailContent(for: listed.reference))
+
+        cache.removeDetails()
+
+        XCTAssertEqual(cache.open, [listed])
+        XCTAssertEqual(cache.detailCount, 0)
+
+        cache.store(detailContent(for: listed.reference))
+        cache.removeLists()
+
+        XCTAssertNil(cache.open)
+        XCTAssertNotNil(cache.entry(for: listed.reference))
+    }
+
+    // MARK: - Details
+
     func testStoresDetailAndKeepsCommentsAcrossDetailUpdates() {
-        let cache = PullRequestDetailCache()
+        let cache = PullRequestCache()
         let comments = PullRequestComments(comments: [], threads: [])
 
         cache.store(content(number: 1, title: "First"))
@@ -18,16 +69,16 @@ final class PullRequestDetailCacheTests: XCTestCase {
     }
 
     func testIgnoresCommentsWithoutDetail() {
-        let cache = PullRequestDetailCache()
+        let cache = PullRequestCache()
 
         cache.store(.empty, for: reference(1))
 
         XCTAssertNil(cache.entry(for: reference(1)))
-        XCTAssertEqual(cache.count, 0)
+        XCTAssertEqual(cache.detailCount, 0)
     }
 
     func testNeedsRefreshWhenMissingIncompleteOrOlderThanTheList() {
-        let cache = PullRequestDetailCache()
+        let cache = PullRequestCache()
         let updatedAt = Date(timeIntervalSince1970: 100)
 
         XCTAssertTrue(cache.needsRefresh(reference(1), updatedAt: updatedAt))
@@ -48,7 +99,7 @@ final class PullRequestDetailCacheTests: XCTestCase {
     }
 
     func testCommitChangesInvalidateChecksAndComparisonButKeepComments() {
-        let cache = PullRequestDetailCache()
+        let cache = PullRequestCache()
         var original = content(number: 1).detail
         original.lastReviewedSHA = "base"
         cache.store(PullRequestDetailContent(detail: original, files: []))
@@ -76,7 +127,7 @@ final class PullRequestDetailCacheTests: XCTestCase {
     }
 
     func testEvictsTheLeastRecentlyUsedEntry() {
-        let cache = PullRequestDetailCache(capacity: 2)
+        let cache = PullRequestCache(capacity: 2)
         cache.store(content(number: 1))
         cache.store(content(number: 2))
         _ = cache.entry(for: reference(1))
@@ -86,21 +137,21 @@ final class PullRequestDetailCacheTests: XCTestCase {
         XCTAssertNotNil(cache.entry(for: reference(1)))
         XCTAssertNil(cache.entry(for: reference(2)))
         XCTAssertNotNil(cache.entry(for: reference(3)))
-        XCTAssertEqual(cache.count, 2)
+        XCTAssertEqual(cache.detailCount, 2)
     }
 
     func testRemoveAllEmptiesTheCache() {
-        let cache = PullRequestDetailCache()
+        let cache = PullRequestCache()
         cache.store(content(number: 1))
 
-        cache.removeAll()
+        cache.removeDetails()
 
         XCTAssertNil(cache.entry(for: reference(1)))
-        XCTAssertEqual(cache.count, 0)
+        XCTAssertEqual(cache.detailCount, 0)
     }
 
     func testKeepsAHundredEntriesByDefault() {
-        XCTAssertEqual(PullRequestDetailCache().capacity, 100)
+        XCTAssertEqual(PullRequestCache().capacity, 100)
     }
 
     func testRestoresSavedEntriesFromTheStore() async {
@@ -121,30 +172,30 @@ final class PullRequestDetailCacheTests: XCTestCase {
             PullRequestReviewer(name: "hubot", kind: .user, state: .approved)
         ])
 
-        let saving = PullRequestDetailCache(store: store)
+        let saving = PullRequestCache(store: store)
         saving.store(PullRequestDetailContent(detail: detail, files: [file]))
         saving.store(comments, for: reference(1))
         saving.store(checks, for: reference(1), headSHA: detail.headSHA)
         saving.store(content(number: 2))
         await saving.saveNow()
 
-        let restored = PullRequestDetailCache(store: store)
+        let restored = PullRequestCache(store: store)
         await restored.waitForRestore()
 
-        XCTAssertEqual(restored.count, 2)
+        XCTAssertEqual(restored.detailCount, 2)
         XCTAssertEqual(restored.entry(for: reference(1)), saving.entry(for: reference(1)))
         XCTAssertFalse(restored.needsRefresh(reference(1), updatedAt: Date(timeIntervalSince1970: 100)))
     }
 
     func testRestoreKeepsTheUseOrderAndCapacity() async {
         let store = LocalStore.inMemory()
-        let saving = PullRequestDetailCache(store: store)
+        let saving = PullRequestCache(store: store)
         saving.store(content(number: 1))
         saving.store(content(number: 2))
         saving.store(content(number: 3))
         await saving.saveNow()
 
-        let restored = PullRequestDetailCache(capacity: 2, store: store)
+        let restored = PullRequestCache(capacity: 2, store: store)
         await restored.waitForRestore()
 
         XCTAssertNil(restored.entry(for: reference(1)), "The least recently used entry does not fit")
@@ -154,11 +205,11 @@ final class PullRequestDetailCacheTests: XCTestCase {
 
     func testEntriesStoredBeforeTheRestoreFinishesWin() async {
         let store = LocalStore.inMemory()
-        let saving = PullRequestDetailCache(store: store)
+        let saving = PullRequestCache(store: store)
         saving.store(content(number: 1, title: "Saved"))
         await saving.saveNow()
 
-        let restored = PullRequestDetailCache(store: store)
+        let restored = PullRequestCache(store: store)
         restored.store(content(number: 1, title: "Fresh"))
         await restored.waitForRestore()
 
@@ -167,21 +218,21 @@ final class PullRequestDetailCacheTests: XCTestCase {
 
     func testSavesOnItsOwnAfterChanges() async throws {
         let store = LocalStore.inMemory()
-        let saving = PullRequestDetailCache(store: store, saveDelay: 0.01)
+        let saving = PullRequestCache(store: store, saveDelay: 0.01)
         saving.store(content(number: 1))
 
         for _ in 0..<200 where await store.pullRequestDetails().isEmpty {
             try await Task.sleep(nanoseconds: 10_000_000)
         }
 
-        let restored = PullRequestDetailCache(store: store)
+        let restored = PullRequestCache(store: store)
         await restored.waitForRestore()
         XCTAssertNotNil(restored.entry(for: reference(1)))
     }
 
     func testSavesUseOrderAndEvictions() async {
         let store = LocalStore.inMemory()
-        let saving = PullRequestDetailCache(capacity: 2, store: store)
+        let saving = PullRequestCache(capacity: 2, store: store)
         saving.store(content(number: 1))
         saving.store(content(number: 2))
         await saving.saveNow()
@@ -195,7 +246,7 @@ final class PullRequestDetailCacheTests: XCTestCase {
 
     func testAnEvictedEntryStoredAgainIsSaved() async {
         let store = LocalStore.inMemory()
-        let saving = PullRequestDetailCache(capacity: 1, store: store)
+        let saving = PullRequestCache(capacity: 1, store: store)
         saving.store(content(number: 1))
         saving.store(content(number: 2))
         saving.store(content(number: 1))
@@ -207,11 +258,11 @@ final class PullRequestDetailCacheTests: XCTestCase {
 
     func testRemoveAllDeletesTheSavedEntries() async {
         let store = LocalStore.inMemory()
-        let saving = PullRequestDetailCache(store: store)
+        let saving = PullRequestCache(store: store)
         saving.store(content(number: 1))
         await saving.saveNow()
 
-        saving.removeAll()
+        saving.removeDetails()
         saving.store(content(number: 2))
         await saving.saveNow()
 
@@ -221,7 +272,7 @@ final class PullRequestDetailCacheTests: XCTestCase {
 
     func testIgnoresASavedEntryThatNoLongerDecodes() async throws {
         let store = LocalStore.inMemory()
-        let saving = PullRequestDetailCache(store: store)
+        let saving = PullRequestCache(store: store)
         saving.store(content(number: 1))
         saving.store(content(number: 2))
         await saving.saveNow()
@@ -230,20 +281,20 @@ final class PullRequestDetailCacheTests: XCTestCase {
                            arguments: [Data("not json".utf8)])
         }
 
-        let cache = PullRequestDetailCache(store: store)
+        let cache = PullRequestCache(store: store)
         await cache.waitForRestore()
 
-        XCTAssertEqual(cache.count, 1)
+        XCTAssertEqual(cache.detailCount, 1)
         XCTAssertNotNil(cache.entry(for: reference(2)))
     }
 
     // MARK: - Pending changes
 
     func testPendingChangesShowOnTopOfGitHubsCopy() {
-        let cache = PullRequestDetailCache()
+        let cache = PullRequestCache()
         cache.store(content(number: 1, title: "Old"))
         var shown: [String] = []
-        let subscription = cache.updates.sink { shown.append($0.1.content.detail.title) }
+        let subscription = cache.detailUpdates.sink { shown.append($0.1.content.detail.title) }
 
         cache.add(.title("New"), to: reference(1))
         cache.store(content(number: 1, title: "Reloaded"))
@@ -255,7 +306,7 @@ final class PullRequestDetailCacheTests: XCTestCase {
     }
 
     func testAChangeReplacesAnEarlierOneToTheSameFieldUntilItStartsSending() {
-        let cache = PullRequestDetailCache()
+        let cache = PullRequestCache()
         cache.store(content(number: 1))
 
         cache.add(.body("First"), to: reference(1))
@@ -272,7 +323,7 @@ final class PullRequestDetailCacheTests: XCTestCase {
     }
 
     func testCommentsNeverReplaceEachOther() {
-        let cache = PullRequestDetailCache()
+        let cache = PullRequestCache()
         cache.store(content(number: 1))
 
         cache.add(.comment(.general(body: "Same"), authorLogin: nil), to: reference(1))
@@ -283,7 +334,7 @@ final class PullRequestDetailCacheTests: XCTestCase {
 
     func testPendingChangesAreSavedAndRestoredAndOnesThatWereSendingSendAgain() async {
         let store = LocalStore.inMemory()
-        let saving = PullRequestDetailCache(store: store)
+        let saving = PullRequestCache(store: store)
         saving.store(content(number: 1, title: "Old"))
         let sending = saving.add(.title("New"), to: reference(1))
         saving.markSending(sending.id)
@@ -291,7 +342,7 @@ final class PullRequestDetailCacheTests: XCTestCase {
         saving.markFailed(failed.id, error: "Nope")
         await saving.saveNow()
 
-        let restored = PullRequestDetailCache(store: store)
+        let restored = PullRequestCache(store: store)
         await restored.waitForRestore()
 
         let changes = restored.pendingChanges(for: reference(1))
@@ -304,12 +355,12 @@ final class PullRequestDetailCacheTests: XCTestCase {
 
     func testRemoveAllDropsPendingChanges() async {
         let store = LocalStore.inMemory()
-        let saving = PullRequestDetailCache(store: store)
+        let saving = PullRequestCache(store: store)
         saving.store(content(number: 1))
         saving.add(.title("New"), to: reference(1))
         await saving.saveNow()
 
-        saving.removeAll()
+        saving.removeDetails()
         await saving.saveNow()
 
         XCTAssertTrue(saving.pendingChanges(for: reference(1)).isEmpty)

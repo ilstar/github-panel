@@ -102,8 +102,8 @@ final class PRMonitorRefreshTests: XCTestCase {
         let mutationGate = MutationCalls()
         api.enqueueHandler = { id in await mutationGate.record(id) }
         var loadsStarted = 0
-        let subscription = monitor.listCache.updates.sink { change in
-            if change == .changed(.open), monitor.listCache.state(of: .open).isLoading { loadsStarted += 1 }
+        let subscription = monitor.cache.listUpdates.sink { change in
+            if change == .changed(.open), monitor.cache.state(of: .open).isLoading { loadsStarted += 1 }
         }
 
         let refresh = Task { await monitor.refreshNow() }
@@ -254,7 +254,7 @@ final class PRMonitorRefreshTests: XCTestCase {
         let api = FakeGitHubAPI()
         api.error = TestError(message: "boom")
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
-        monitor.listCache.store(OpenPullRequests(login: "fred", rows: [row(number: 1, status: .success)]),
+        monitor.cache.store(OpenPullRequests(login: "fred", rows: [row(number: 1, status: .success)]),
                                 fetchedAt: Date(timeIntervalSince1970: 0))
 
         await monitor.refreshNow()

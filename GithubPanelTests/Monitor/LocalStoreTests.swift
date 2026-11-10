@@ -218,7 +218,7 @@ final class LocalStoreTests: XCTestCase {
     }
 
     private func detail(for reference: PullRequestReference) -> LocalStore.SavedPullRequestDetail {
-        LocalStore.SavedPullRequestDetail(entry: PullRequestDetailCache.Entry(content: detailContent(for: reference)),
+        LocalStore.SavedPullRequestDetail(entry: PullRequestDetailEntry(content: detailContent(for: reference)),
                                           lastUsedAt: Date(timeIntervalSince1970: 1))
     }
 
