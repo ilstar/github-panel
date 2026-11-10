@@ -1109,8 +1109,9 @@ final class PullRequestDetailViewModelTests: XCTestCase {
     func testMonitorUpdatesBranchWithSessionTokenAndRefreshesTheList() async throws {
         let api = FakeGitHubAPI()
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+        monitor.branchUpdatePollDelays = []
 
-        try await monitor.updatePullRequestBranch(pullRequestID: "PR_node", expectedHeadSHA: "abc123")
+        try await monitor.updatePullRequestBranch(reference, pullRequestID: "PR_node", expectedHeadSHA: "abc123")
 
         XCTAssertEqual(api.updateBranchCalls.map(\.token), ["token"])
         XCTAssertEqual(api.updateBranchCalls.map(\.pullRequestID), ["PR_node"])
@@ -1123,7 +1124,7 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: nil))
 
         do {
-            try await monitor.updatePullRequestBranch(pullRequestID: "PR_node", expectedHeadSHA: "abc123")
+            try await monitor.updatePullRequestBranch(reference, pullRequestID: "PR_node", expectedHeadSHA: "abc123")
             XCTFail("Expected an error")
         } catch {
             XCTAssertTrue(error is MissingTokenError)

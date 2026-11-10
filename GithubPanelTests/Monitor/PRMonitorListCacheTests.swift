@@ -130,8 +130,15 @@ final class PRMonitorListCacheTests: XCTestCase {
     func testUnreadableSavedListIsIgnored() async throws {
         let store = LocalStore.inMemory()
         try await store.database.write { db in
-            try db.execute(sql: "INSERT INTO pull_request_list (kind, rows, savedAt) VALUES ('open', ?, 0)",
-                           arguments: [Data("[{\"id\": 1}]".utf8)])
+            try db.execute(sql: """
+                INSERT INTO pull_request (repoFullName, number, openRow) VALUES ('acme/widgets', 1, ?)
+                """, arguments: [Data("{\"id\": 1}".utf8)])
+            try db.execute(sql: "INSERT INTO pull_request_list (kind, savedAt, info) VALUES ('open', 0, ?)",
+                           arguments: [Data("{}".utf8)])
+            try db.execute(sql: """
+                INSERT INTO pull_request_list_member (kind, position, repoFullName, number)
+                VALUES ('open', 0, 'acme/widgets', 1)
+                """)
         }
 
         XCTAssertTrue(makeMonitor(store: store).prRows.isEmpty)
@@ -139,8 +146,11 @@ final class PRMonitorListCacheTests: XCTestCase {
 
     func testWhenAListLastLoadedComesFromSyncState() async {
         let store = LocalStore.inMemory()
-        store.savePullRequestList(CachedPullRequestList(savedAt: Date(timeIntervalSince1970: 100),
-                                                        rows: [row(number: 1, status: .success)]), as: .open)
+        let saved = row(number: 1, status: .success)
+        store.savePullRequestList(LocalStore.SavedPullRequestList(savedAt: Date(timeIntervalSince1970: 100),
+                                                                  info: PullRequestListInfo(),
+                                                                  members: [PullRequestListMember(reference: saved.reference)]),
+                                  as: .open, records: [saved.reference: PullRequestRecord(openRow: saved)])
         await store.recordSync(for: PullRequestListKind.open.key, attemptedAt: Date(timeIntervalSince1970: 300),
                                fetchedAt: Date(timeIntervalSince1970: 200))
 

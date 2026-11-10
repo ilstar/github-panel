@@ -619,12 +619,29 @@ final class PRMonitor: ObservableObject {
         }
     }
 
+    /// How long to wait before each load that looks for the commit Update branch makes.
+    var branchUpdatePollDelays: [TimeInterval] = [1, 2, 3, 5]
+
     /// Merges the base branch into the pull request's branch, then refreshes the list, whose merge state changes.
-    func updatePullRequestBranch(pullRequestID: String, expectedHeadSHA: String) async throws {
+    /// GitHub makes the merge commit after it answers, so a refresh right away would still show the old head and its
+    /// checks. The detail reloads until the head changes, which shows the new commit in the lists with its checks
+    /// pending, and the list refreshes after that.
+    func updatePullRequestBranch(_ reference: PullRequestReference, pullRequestID: String,
+                                 expectedHeadSHA: String) async throws {
         guard let token = loadSessionToken() else { throw MissingTokenError() }
         let session = credentialSession
         try await api.updatePullRequestBranch(token: token, pullRequestID: pullRequestID, expectedHeadSHA: expectedHeadSHA)
+        await waitForNewHead(of: reference, replacing: expectedHeadSHA, session: session)
         await requireFreshRefresh(for: session)
+    }
+
+    private func waitForNewHead(of reference: PullRequestReference, replacing headSHA: String, session: UUID) async {
+        for delay in branchUpdatePollDelays {
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard session == credentialSession, !Task.isCancelled else { return }
+            _ = try? await syncEngine.request(.detail(reference))
+            if let head = detailCache.entry(for: reference)?.content.detail.headSHA, head != headSHA { return }
+        }
     }
 
     func fetchReviewerCandidates(_ reference: PullRequestReference, query: String) async throws -> [ReviewerCandidate] {

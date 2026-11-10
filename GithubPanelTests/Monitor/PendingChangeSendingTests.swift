@@ -68,7 +68,7 @@ final class PendingChangeSendingTests: XCTestCase {
 
         XCTAssertFalse(shown.isEmpty)
         XCTAssertEqual(Set(shown), ["New"], "Never flickers back to the old title")
-        XCTAssertTrue(commits.tables.contains { $0.contains("insert pull_request_detail") && $0.contains("delete pending_change") },
+        XCTAssertTrue(commits.tables.contains { savesPullRequest($0) && $0.contains("delete pending_change") },
                       "Saved in one transaction: \(commits.tables)")
         let saved = await store.pullRequestDetails()
         XCTAssertEqual(saved.map(\.entry.content.detail.title), ["New"])
@@ -289,7 +289,7 @@ final class PendingChangeSendingTests: XCTestCase {
         XCTAssertEqual(Set(shownCounts), [1], "Shows from the moment it's posted, and never twice")
         XCTAssertEqual(cache.shownEntry(for: reference(1))?.comments?.comments.map(\.id), ["IC_7"])
         XCTAssertTrue(cache.pendingChanges(for: reference(1)).isEmpty)
-        XCTAssertTrue(commits.tables.contains { $0.contains("insert pull_request_detail") && $0.contains("delete pending_change") },
+        XCTAssertTrue(commits.tables.contains { savesPullRequest($0) && $0.contains("delete pending_change") },
                       "Saved in one transaction: \(commits.tables)")
         let saved = await store.pullRequestDetails()
         XCTAssertEqual(saved.first?.entry.comments?.comments.map(\.id), ["IC_7"])
@@ -718,7 +718,7 @@ final class PendingChangeSendingTests: XCTestCase {
     }
 }
 
-/// Records what each committed transaction changed, such as "insert pull_request_detail".
+/// Records what each committed transaction changed, such as "insert pull_request".
 private final class CommitObserver: TransactionObserver {
     private(set) var tables: [Set<String>] = []
     private var current: Set<String> = []
@@ -743,4 +743,9 @@ private final class CommitObserver: TransactionObserver {
     func databaseDidRollback(_ db: Database) {
         current = []
     }
+}
+
+/// The detail is saved into the pull request's row, which a list or status may have made already.
+private func savesPullRequest(_ changes: Set<String>) -> Bool {
+    changes.contains("insert pull_request") || changes.contains("update pull_request")
 }
