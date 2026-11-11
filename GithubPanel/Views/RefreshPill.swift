@@ -16,6 +16,13 @@ enum RefreshAnimation {
         let delay = max(0, (stopCycle * spinDuration) - elapsed)
         return RefreshAnimationStopPlan(cycle: stopCycle, delay: delay)
     }
+
+    /// The width for the pill's label. While `holdsWidth`, such as during a refresh, it only grows, so a shorter
+    /// text, such as To Review's count after My PRs', never makes the pill shrink until the refresh is over.
+    static func labelWidth(current: CGFloat?, measured: CGFloat, holdsWidth: Bool) -> CGFloat {
+        guard holdsWidth, let current else { return measured }
+        return max(current, measured)
+    }
 }
 
 /// The steps the refresh pill goes through: it widens for the progress text, then spins its icon until the refresh
@@ -55,6 +62,9 @@ enum RefreshPillPhase: Equatable {
 }
 
 struct RefreshPill: View {
+    /// Whether the refresh is under way at all, including loading the lists before there is a count to show.
+    /// The pill holds its "Updated" text and its width this whole time.
+    let isBusy: Bool
     let isRefreshing: Bool
     /// What the refresh is doing, such as "Refreshing My PRs 2/10…". Nil when it isn't refreshing.
     let progressText: String?
@@ -66,10 +76,17 @@ struct RefreshPill: View {
     @State private var phase: RefreshPillPhase = .idle
     /// `isRefreshing` as last seen. The phase steps run later and read this, since `isRefreshing` is a copy.
     @State private var refreshing = false
+    /// `isBusy` as last seen, for the same reason.
+    @State private var isBusyNow = false
     /// The progress text stays up after the refresh ends, while the icon finishes its turn.
     @State private var shownProgressText: String?
+    /// The "Updated" text from when the refresh started, kept until the pill narrows back. Otherwise the lists
+    /// finishing would flash "Updated just now" before the counts show.
+    @State private var heldUpdatedText: String?
     /// The label's width, animated so the pill resizes smoothly whenever the label changes.
     @State private var labelWidth: CGFloat?
+    /// The label's own width, which `labelWidth` goes back to once the pill stops holding its width.
+    @State private var measuredWidth: CGFloat = 0
     @State private var spinStart = Date()
     @State private var stopAtCycle: Double?
     @State private var nextStep: Task<Void, Never>?
@@ -77,7 +94,13 @@ struct RefreshPill: View {
 
     /// History has no count, so its pill keeps showing when it last updated while it spins.
     private var label: String {
-        phase.isExpanded ? (progressText ?? shownProgressText ?? updatedText) : updatedText
+        let updated = heldUpdatedText ?? updatedText
+        return phase.isExpanded ? (progressText ?? shownProgressText ?? updated) : updated
+    }
+
+    /// The pill only grows from when a refresh starts until it narrows back at the end.
+    private var holdsWidth: Bool {
+        heldUpdatedText != nil || phase.isExpanded
     }
 
     private func labelText(_ text: String) -> some View {
@@ -134,17 +157,26 @@ struct RefreshPill: View {
         .accessibilityLabel("Refresh")
         .accessibilityValue(label)
         .onPreferenceChange(RefreshPillLabelWidthKey.self) { width in
-            guard labelWidth != nil else {
-                labelWidth = width
-                return
-            }
-            withAnimation(.easeInOut(duration: RefreshAnimation.resizeDuration)) { labelWidth = width }
+            measuredWidth = width
+            resizeLabel()
         }
+        .onChange(of: holdsWidth) { _ in resizeLabel() }
         .onHover { isHovering = $0 }
         .onAppear {
+            isBusyNow = isBusy
+            if isBusy { heldUpdatedText = updatedText }
             guard isRefreshing else { return }
             refreshing = true
             refreshStarted()
+        }
+        .onChange(of: isBusy) { isBusy in
+            isBusyNow = isBusy
+            if isBusy {
+                if heldUpdatedText == nil { heldUpdatedText = updatedText }
+            } else if phase == .idle {
+                // A refresh with nothing to count, such as one that found no pull requests, never widened.
+                heldUpdatedText = nil
+            }
         }
         .onChange(of: isRefreshing) { isRefreshing in
             refreshing = isRefreshing
@@ -162,6 +194,7 @@ struct RefreshPill: View {
             nextStep = nil
             stopAtCycle = nil
             phase = .idle
+            heldUpdatedText = nil
         }
     }
 
@@ -202,6 +235,18 @@ struct RefreshPill: View {
         stopAtCycle = nil
         phase = .idle
         shownProgressText = nil
+        // Another refresh may already be loading its lists. It keeps the text it had, so nothing flashes.
+        if !isBusyNow { heldUpdatedText = nil }
+    }
+
+    private func resizeLabel() {
+        let width = RefreshAnimation.labelWidth(current: labelWidth, measured: measuredWidth, holdsWidth: holdsWidth)
+        guard width != labelWidth else { return }
+        guard labelWidth != nil else {
+            labelWidth = width
+            return
+        }
+        withAnimation(.easeInOut(duration: RefreshAnimation.resizeDuration)) { labelWidth = width }
     }
 
     /// Runs the next step after `delay`, replacing any step still waiting.

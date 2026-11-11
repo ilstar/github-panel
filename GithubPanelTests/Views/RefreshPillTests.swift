@@ -37,6 +37,13 @@ final class RefreshPillTests: XCTestCase {
         XCTAssertEqual(RefreshPillPhase.stopping.expanded(isRefreshing: false), .stopping)
     }
 
+    func testTheLabelOnlyGrowsWhileThePillHoldsItsWidth() {
+        XCTAssertEqual(RefreshAnimation.labelWidth(current: 120, measured: 90, holdsWidth: true), 120)
+        XCTAssertEqual(RefreshAnimation.labelWidth(current: 120, measured: 150, holdsWidth: true), 150)
+        XCTAssertEqual(RefreshAnimation.labelWidth(current: 150, measured: 90, holdsWidth: false), 90)
+        XCTAssertEqual(RefreshAnimation.labelWidth(current: nil, measured: 90, holdsWidth: true), 90)
+    }
+
     func testRefreshAnimationCompletesItsCurrentCycle() {
         let firstCycle = RefreshAnimation.stopPlan(elapsed: 0.4)
         XCTAssertEqual(firstCycle.cycle, 1)

@@ -1,4 +1,5 @@
 import XCTest
+import Combine
 @testable import GithubPanel
 
 @MainActor
@@ -202,10 +203,55 @@ final class PRMonitorPrefetchTests: XCTestCase {
         XCTAssertTrue(monitor.isLoading)
         XCTAssertNil(monitor.refreshProgressText)
         XCTAssertFalse(monitor.isSelectedTabRefreshing)
+        XCTAssertTrue(monitor.isSelectedTabBusy)
 
         await gate.open()
         await refresh.value
         await monitor.waitForPrefetch()
+        XCTAssertFalse(monitor.isSelectedTabBusy)
+    }
+
+    func testRefreshStaysBusyFromLoadingTheListsUntilTheCountsShow() async {
+        let api = prefetchingAPI(rows: [row(number: 1, status: .success)])
+        let requested = expectation(description: "Detail requested")
+        let gate = AsyncGate()
+        api.detailHandler = { reference in
+            requested.fulfill()
+            await gate.wait()
+            return detailContent(for: reference, title: "PR \(reference.number)")
+        }
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+        var busyChanges: [Bool] = []
+        let subscription = monitor.$isRefreshingLists.dropFirst().removeDuplicates().sink { busyChanges.append($0) }
+
+        await monitor.refreshNow()
+        await fulfillment(of: [requested], timeout: 5)
+
+        // The lists finished loading before the counts started, without the refresh going idle in between.
+        XCTAssertEqual(busyChanges, [true, false])
+        XCTAssertNotNil(monitor.refreshProgressText)
+        XCTAssertTrue(monitor.isSelectedTabBusy)
+        await gate.open()
+        await monitor.waitForPrefetch()
+        subscription.cancel()
+    }
+
+    func testATimerTickThatFindsTheListsFreshLeavesTheButtonStill() async {
+        let api = prefetchingAPI(rows: [row(number: 1, status: .success)])
+        let dateProvider = FakeDateProvider(now: Date(timeIntervalSince1970: 0))
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"), dateProvider: dateProvider)
+        await monitor.refreshNow()
+        await monitor.waitForPrefetch()
+        var busyChanges: [Bool] = []
+        let subscription = monitor.$isRefreshingLists.dropFirst().sink { busyChanges.append($0) }
+
+        dateProvider.now = Date(timeIntervalSince1970: 1)
+        await monitor.refreshScheduler.handleTimerTick()
+
+        XCTAssertEqual(api.fetchOpenPRTokens.count, 1)
+        XCTAssertFalse(busyChanges.contains(true))
+        XCTAssertFalse(monitor.isSelectedTabBusy)
+        subscription.cancel()
     }
 
     func testRefreshButtonShowsPreloadProgressUntilItFinishes() async {

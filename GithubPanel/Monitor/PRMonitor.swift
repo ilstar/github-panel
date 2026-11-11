@@ -22,6 +22,9 @@ final class PRMonitor: ObservableObject {
     @Published private(set) var isReviewRequestsLoading: Bool = false
     /// How far preloading the rows of My PRs and To Review has got. Nil when nothing is preloading.
     @Published private(set) var refreshProgress: RefreshProgress?
+    /// Set from when a refresh of My PRs and To Review starts loading a list until its rows are queued to preload,
+    /// so the refresh button holds still in between. A timer tick that finds the lists fresh never sets it.
+    @Published private(set) var isRefreshingLists: Bool = false
     @Published var hasToken: Bool = false
     @Published private(set) var lastError: String?
     @Published private(set) var lastHistoryError: String?
@@ -101,6 +104,10 @@ final class PRMonitor: ObservableObject {
     /// The lists as the store holds them, which the rows show.
     private var savedLists = LocalStore.SavedPullRequestLists()
     private var listObservation: AnyDatabaseCancellable?
+    /// `refreshLists` calls running, which can overlap, such as a timer tick during a manual refresh.
+    private var listRefreshesInFlight = 0 {
+        didSet { if listRefreshesInFlight == 0 { isRefreshingLists = false } }
+    }
     /// How many times My PRs or To Review loaded, so a timer tick that loaded neither preloads nothing.
     private var listLoadCount = 0
     /// The History page shown, or being loaded to replace it.
@@ -260,6 +267,9 @@ final class PRMonitor: ObservableObject {
         let session = credentialSession
         let loadCount = listLoadCount
         let engine = syncEngine
+        listRefreshesInFlight += 1
+        // Ends after the rows are queued to preload, so the refresh button sees no gap before the counts.
+        defer { listRefreshesInFlight -= 1 }
         await engine.sendPendingChanges()
         async let reviewRequests: Void? = try? engine.request(.reviewRequests, priority: priority, maxAge: maxAge,
                                                               joinsLoadInFlight: true)
@@ -283,6 +293,13 @@ final class PRMonitor: ObservableObject {
     var refreshProgressText: String? {
         guard selectedTab != .history else { return nil }
         return refreshProgress?.text(selectedTab: selectedTab)
+    }
+
+    /// Whether the selected tab is refreshing at all, from its lists starting to load until their rows have
+    /// preloaded. The refresh button holds its text and width this whole time.
+    var isSelectedTabBusy: Bool {
+        guard selectedTab != .history else { return isHistoryLoading }
+        return isRefreshingLists || isLoading || isReviewRequestsLoading || refreshProgressText != nil
     }
 
     /// Whether the refresh button runs its refresh animation: History while its page loads, and My PRs and To Review
@@ -468,9 +485,14 @@ final class PRMonitor: ObservableObject {
         let state = cache.state(of: .open)
         openPullRequestsSSOAuthorizationURL = cache.openSSOAuthorizationURL
         isLoading = state.isLoading
+        noteListLoading(state.isLoading)
         // Keep the last list on screen; the error shows above it until a refresh succeeds.
         lastError = state.lastError
         lastRefreshAt = state.fetchedAt
+    }
+
+    private func noteListLoading(_ isLoading: Bool) {
+        if isLoading && listRefreshesInFlight > 0 { isRefreshingLists = true }
     }
 
     /// Shows the History page asked for, as last loaded. A failed load empties it.
@@ -550,6 +572,7 @@ final class PRMonitor: ObservableObject {
     private func showReviewRequests() {
         let state = cache.state(of: .reviewRequests)
         isReviewRequestsLoading = state.isLoading
+        noteListLoading(state.isLoading)
         // Keep the last list on screen; the error shows above it until a refresh succeeds.
         lastReviewRequestsError = state.lastError
         lastReviewRequestsRefreshAt = state.fetchedAt
