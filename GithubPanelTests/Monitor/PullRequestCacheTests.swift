@@ -6,7 +6,7 @@ import GRDB
 final class PullRequestCacheTests: XCTestCase {
     // MARK: - One record per pull request
 
-    func testEvictingADetailKeepsItsRowInTheList() {
+    func testListedDetailsStayCachedOutsideTheLRULimit() {
         let cache = PullRequestCache(capacity: 1)
         let listed = row(number: 1, status: .success)
         cache.store(OpenPullRequests(login: "fred", rows: [listed]), fetchedAt: Date(timeIntervalSince1970: 0))
@@ -14,9 +14,31 @@ final class PullRequestCacheTests: XCTestCase {
 
         cache.store(detailContent(for: PullRequestReference(repoFullName: "acme/widgets", number: 2)))
 
-        XCTAssertNil(cache.entry(for: listed.reference))
+        XCTAssertNotNil(cache.entry(for: listed.reference))
         XCTAssertEqual(cache.open, [listed])
-        XCTAssertEqual(cache.detailCount, 1)
+        XCTAssertEqual(cache.detailCount, 2)
+    }
+
+    func testPreloadedDetailsOfBothListsSurviveBeyondCapacity() {
+        let cache = PullRequestCache(capacity: 1)
+        let mine = row(number: 1, status: .success)
+        let review = reviewRequestRow(number: 2)
+        cache.store(OpenPullRequests(login: "fred", rows: [mine]), fetchedAt: Date())
+        cache.store(ReviewRequests(fromMe: [review], fromMyTeams: []), fetchedAt: Date())
+        for reference in [mine.reference, review.reference] {
+            cache.store(detailContent(for: reference))
+            cache.store(.empty, for: reference)
+        }
+        cache.store(detailContent(for: reference(3)))
+        cache.store(detailContent(for: reference(4)))
+
+        XCTAssertNotNil(cache.entry(for: mine.reference)?.comments)
+        XCTAssertNotNil(cache.entry(for: review.reference)?.comments)
+        XCTAssertNil(cache.entry(for: reference(3)))
+        XCTAssertNotNil(cache.entry(for: reference(4)))
+
+        cache.removeLists()
+        XCTAssertEqual(cache.detailCount, 1, "Former list members return to the bounded LRU")
     }
 
     func testAPullRequestLeavingTheListsKeepsItsDetailUntilItIsEvicted() {

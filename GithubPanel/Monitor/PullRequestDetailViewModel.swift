@@ -156,8 +156,9 @@ final class PullRequestDetailViewModel: ObservableObject {
                   })
     }
 
-    /// How long a pull request loaded in the background still counts as fresh when its window opens.
-    static let openMaxAge: TimeInterval = 30
+    /// Opening uses cached resources regardless of age; the monitor refreshes them in the background.
+    /// Missing resources still load, and explicit reloads pass zero.
+    static let openMaxAge: TimeInterval = .infinity
 
     /// Reloads the pull request, skipping what loaded within `maxAge`. Reloads the user asks for pass zero.
     func load(maxAge: TimeInterval = 0) async {
