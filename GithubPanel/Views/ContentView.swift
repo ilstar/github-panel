@@ -785,11 +785,14 @@ struct ContentView: View {
         )
     }
 
+    /// Says what a refresh is doing while it runs, then when the list last updated.
     private var lastUpdatedView: some View {
-        Text("Updated \(lastUpdatedText)")
+        Text(monitor.refreshProgressText ?? "Updated \(lastUpdatedText)")
             .font(.caption)
+            .monospacedDigit()
+            .lineLimit(1)
             .foregroundStyle(.tertiary)
-            .frame(width: 110, alignment: .trailing)
+            .frame(minWidth: 110, alignment: .trailing)
     }
 
     private var lastUpdatedText: String {
@@ -809,7 +812,7 @@ struct ContentView: View {
     }
 
     private var refreshPill: some View {
-        RefreshPill(isLoading: monitor.isSelectedTabLoading,
+        RefreshPill(isLoading: monitor.isSelectedTabLoading || monitor.refreshProgressText != nil,
                     isEnabled: refreshIsEnabled,
                     lastUpdatedView: lastUpdatedView) {
             refreshSelectedTab()

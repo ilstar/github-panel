@@ -18,6 +18,10 @@ final class PRMonitor: ObservableObject {
     @Published private(set) var isLoading: Bool = false
     @Published private(set) var isHistoryLoading: Bool = false
     @Published private(set) var isReviewRequestsLoading: Bool = false
+    /// Set while My PRs and To Review refresh, before their rows preload.
+    @Published private(set) var isRefreshingLists: Bool = false
+    /// How far preloading the rows of My PRs and To Review has got. Nil when nothing is preloading.
+    @Published private(set) var refreshProgress: RefreshProgress?
     @Published var hasToken: Bool = false
     @Published private(set) var lastError: String?
     @Published private(set) var lastHistoryError: String?
@@ -94,6 +98,10 @@ final class PRMonitor: ObservableObject {
     private var didLoadSessionToken = false
     private var sessionToken: String?
     private var listSubscription: AnyCancellable?
+    /// List refreshes in flight, which can overlap, such as a timer tick during a manual refresh.
+    private var listRefreshesInFlight = 0 {
+        didSet { isRefreshingLists = listRefreshesInFlight > 0 }
+    }
     /// How many times My PRs or To Review loaded, so a timer tick that loaded neither preloads nothing.
     private var listLoadCount = 0
     /// The History page shown, or being loaded to replace it.
@@ -207,6 +215,7 @@ final class PRMonitor: ObservableObject {
         prefetchTask?.cancel()
         prefetchTask = nil
         pendingPrefetch = [:]
+        refreshProgress = nil
         lastReviewStatuses = [:]
         knownReviewRequestIDs = nil
         cache.removeDetails()
@@ -243,6 +252,8 @@ final class PRMonitor: ObservableObject {
         let session = credentialSession
         let loadCount = listLoadCount
         let engine = syncEngine
+        listRefreshesInFlight += 1
+        defer { listRefreshesInFlight -= 1 }
         await engine.sendPendingChanges()
         async let reviewRequests: Void? = try? engine.request(.reviewRequests, priority: priority, maxAge: maxAge,
                                                               joinsLoadInFlight: true)
@@ -258,6 +269,18 @@ final class PRMonitor: ObservableObject {
         case .reviews: return isReviewRequestsLoading
         case .history: return isHistoryLoading
         }
+    }
+
+    /// What the refresh button says while the selected tab refreshes, such as "Refreshing My PRs 2/10…".
+    /// Nil when it isn't refreshing, so the button shows when the list last updated.
+    var refreshProgressText: String? {
+        if selectedTab == .history {
+            return isHistoryLoading ? "Refreshing…" : nil
+        }
+        if let text = refreshProgress?.text(selectedTab: selectedTab) {
+            return text
+        }
+        return isRefreshingLists || isSelectedTabLoading ? "Refreshing…" : nil
     }
 
     func refreshSelectedTab() async {
@@ -326,13 +349,18 @@ final class PRMonitor: ObservableObject {
     /// The queue takes the two lists' rows in turn from the top, so the rows each tab selects first load first.
     private func prefetchDetails() {
         guard loadSessionToken() != nil else { return }
+        var progress = refreshProgress ?? RefreshProgress()
         for (position, row) in prRows.enumerated() {
             queuePrefetch(row.reference, updatedAt: row.updatedAt, position: position)
+            progress.add(row.reference, to: .myPullRequests)
         }
         for (position, row) in reviewRequests.rows.enumerated() {
             queuePrefetch(row.reference, updatedAt: row.updatedAt, position: position)
+            progress.add(row.reference, to: .reviewRequests)
         }
-        guard prefetchTask == nil, !pendingPrefetch.isEmpty else { return }
+        guard !pendingPrefetch.isEmpty else { return }
+        refreshProgress = progress
+        guard prefetchTask == nil else { return }
         let session = credentialSession
         prefetchTask = Task { @MainActor [weak self] in
             await self?.prefetch(session: session)
@@ -348,7 +376,10 @@ final class PRMonitor: ObservableObject {
     /// Asks the sync engine for each queued pull request in the background, one pull request at a time.
     private func prefetch(session: UUID) async {
         defer {
-            if session == credentialSession { prefetchTask = nil }
+            if session == credentialSession {
+                prefetchTask = nil
+                refreshProgress = nil
+            }
         }
         while let reference = PendingPrefetch.next(in: pendingPrefetch),
               let updatedAt = pendingPrefetch.removeValue(forKey: reference)?.updatedAt {
@@ -371,6 +402,7 @@ final class PRMonitor: ObservableObject {
                     return
                 }
             }
+            refreshProgress?.complete(reference)
         }
     }
 

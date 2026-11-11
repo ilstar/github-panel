@@ -185,6 +185,36 @@ final class PRMonitorPrefetchTests: XCTestCase {
         XCTAssertEqual(api.detailCalls.map(\.reference.number), [1, 2])
     }
 
+    func testRefreshButtonShowsPreloadProgressUntilItFinishes() async {
+        let api = prefetchingAPI(rows: [row(number: 1, status: .success), row(number: 2, status: .success)])
+        api.reviewRequests = ReviewRequests(fromMe: [reviewRequestRow(number: 8)], fromMyTeams: [])
+        let requested = expectation(description: "First detail request")
+        let gate = AsyncGate()
+        api.detailHandler = { reference in
+            if reference.number == 1 {
+                requested.fulfill()
+                await gate.wait()
+            }
+            return detailContent(for: reference, title: "PR \(reference.number)")
+        }
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+        XCTAssertNil(monitor.refreshProgressText)
+
+        await monitor.refreshNow()
+        await fulfillment(of: [requested], timeout: 5)
+
+        XCTAssertEqual(monitor.refreshProgressText, "Refreshing My PRs 1/2…")
+        monitor.selectedTab = .reviews
+        XCTAssertEqual(monitor.refreshProgressText, "Refreshing To Review 1/1…")
+
+        await gate.open()
+        await monitor.waitForPrefetch()
+
+        XCTAssertNil(monitor.refreshProgress)
+        XCTAssertNil(monitor.refreshProgressText)
+        XCTAssertFalse(monitor.isRefreshingLists)
+    }
+
     func testPrefetchPreservesExpandedDiscussionLimits() async {
         let api = prefetchingAPI(rows: [row(number: 1, status: .success)])
         let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
