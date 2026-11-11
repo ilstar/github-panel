@@ -277,18 +277,19 @@ final class PRMonitor: ObservableObject {
         }
     }
 
-    /// What the refresh button says while the selected tab refreshes, such as "Refreshing My PRs 2/10…".
-    /// Nil when it isn't refreshing, so the button shows when the list last updated. My PRs and To Review refresh
-    /// together, so either list loading counts for both tabs. A timer tick that finds the lists fresh loads nothing,
-    /// so it leaves this nil.
+    /// What the refresh button says while the pull requests of My PRs and To Review preload, such as
+    /// "Refreshing My PRs 2/10…". Nil before the lists have loaded and once preloading is done, so the button
+    /// shows when the list last updated. History has no count, so it is always nil there.
     var refreshProgressText: String? {
-        if selectedTab == .history {
-            return isHistoryLoading ? "Refreshing…" : nil
-        }
-        if let text = refreshProgress?.text(selectedTab: selectedTab) {
-            return text
-        }
-        return isLoading || isReviewRequestsLoading ? "Refreshing…" : nil
+        guard selectedTab != .history else { return nil }
+        return refreshProgress?.text(selectedTab: selectedTab)
+    }
+
+    /// Whether the refresh button runs its refresh animation: History while its page loads, and My PRs and To Review
+    /// while their pull requests preload, which is when there is a count to show. A timer tick that finds the lists
+    /// fresh loads nothing, so it leaves the button still.
+    var isSelectedTabRefreshing: Bool {
+        selectedTab == .history ? isHistoryLoading : refreshProgressText != nil
     }
 
     func refreshSelectedTab() async {

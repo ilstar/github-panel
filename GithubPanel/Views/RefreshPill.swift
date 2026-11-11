@@ -67,30 +67,48 @@ struct RefreshPill: View {
     /// `isRefreshing` as last seen. The phase steps run later and read this, since `isRefreshing` is a copy.
     @State private var refreshing = false
     /// The progress text stays up after the refresh ends, while the icon finishes its turn.
-    @State private var shownProgressText = Self.startingText
+    @State private var shownProgressText: String?
+    /// The label's width, animated so the pill resizes smoothly whenever the label changes.
+    @State private var labelWidth: CGFloat?
     @State private var spinStart = Date()
     @State private var stopAtCycle: Double?
     @State private var nextStep: Task<Void, Never>?
     @State private var isHovering = false
 
-    private static let startingText = "Refreshing…"
-
+    /// History has no count, so its pill keeps showing when it last updated while it spins.
     private var label: String {
-        phase.isExpanded ? (progressText ?? shownProgressText) : updatedText
+        phase.isExpanded ? (progressText ?? shownProgressText ?? updatedText) : updatedText
+    }
+
+    private func labelText(_ text: String) -> some View {
+        Text(text)
+            .font(.caption)
+            .monospacedDigit()
+            .lineLimit(1)
+            .fixedSize()
     }
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 8) {
-                Text(label)
-                    .font(.caption)
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .fixedSize()
-                    .foregroundStyle(.tertiary)
-                    // A new view for each text, so a change cross-fades while the pill resizes instead of clipping.
-                    .id(label)
-                    .transition(.opacity)
+                // The old and new text cross-fade on top of each other inside a frame that animates to the new
+                // text's width. Sizing to the texts themselves would snap when the old one is removed.
+                ZStack(alignment: .leading) {
+                    labelText(label)
+                        .id(label)
+                        .transition(.opacity)
+                }
+                .frame(width: labelWidth, alignment: .leading)
+                .clipped()
+                .foregroundStyle(.tertiary)
+                .background(alignment: .leading) {
+                    labelText(label)
+                        .hidden()
+                        .background(GeometryReader { proxy in
+                            Color.clear.preference(key: RefreshPillLabelWidthKey.self, value: proxy.size.width)
+                        })
+                }
+                .animation(.easeInOut(duration: RefreshAnimation.resizeDuration), value: label)
                 Group {
                     if phase.isSpinning {
                         TimelineView(.animation) { context in
@@ -115,8 +133,13 @@ struct RefreshPill: View {
         .help("Refresh")
         .accessibilityLabel("Refresh")
         .accessibilityValue(label)
-        // Progress counts change while the pill is wide. The "Updated" time ticking over doesn't animate.
-        .animation(.easeInOut(duration: 0.2), value: phase.isExpanded ? label : nil)
+        .onPreferenceChange(RefreshPillLabelWidthKey.self) { width in
+            guard labelWidth != nil else {
+                labelWidth = width
+                return
+            }
+            withAnimation(.easeInOut(duration: RefreshAnimation.resizeDuration)) { labelWidth = width }
+        }
         .onHover { isHovering = $0 }
         .onAppear {
             guard isRefreshing else { return }
@@ -146,8 +169,8 @@ struct RefreshPill: View {
     private func refreshStarted() {
         switch phase.refreshStarted() {
         case .expanding:
-            shownProgressText = progressText ?? Self.startingText
-            withAnimation(.easeInOut(duration: RefreshAnimation.resizeDuration)) { phase = .expanding }
+            shownProgressText = progressText
+            phase = .expanding
             run(after: RefreshAnimation.resizeDuration) {
                 if phase.expanded(isRefreshing: refreshing) == .spinning {
                     spinStart = Date()
@@ -177,7 +200,8 @@ struct RefreshPill: View {
 
     private func collapse() {
         stopAtCycle = nil
-        withAnimation(.easeInOut(duration: RefreshAnimation.resizeDuration)) { phase = .idle }
+        phase = .idle
+        shownProgressText = nil
     }
 
     /// Runs the next step after `delay`, replacing any step still waiting.
@@ -212,5 +236,12 @@ struct RefreshPill: View {
         Image(systemName: "arrow.clockwise")
             .font(.system(size: 13, weight: .semibold))
             .rotationEffect(.degrees(rotation))
+    }
+}
+
+private struct RefreshPillLabelWidthKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }

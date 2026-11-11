@@ -802,7 +802,7 @@ struct ContentView: View {
     }
 
     private var refreshPill: some View {
-        RefreshPill(isRefreshing: monitor.refreshProgressText != nil,
+        RefreshPill(isRefreshing: monitor.isSelectedTabRefreshing,
                     progressText: monitor.refreshProgressText,
                     updatedText: "Updated \(lastUpdatedText)",
                     isEnabled: refreshIsEnabled) {

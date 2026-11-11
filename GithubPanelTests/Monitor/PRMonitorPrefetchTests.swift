@@ -185,6 +185,29 @@ final class PRMonitorPrefetchTests: XCTestCase {
         XCTAssertEqual(api.detailCalls.map(\.reference.number), [1, 2])
     }
 
+    func testRefreshButtonStaysStillWhileTheListsLoad() async {
+        let api = prefetchingAPI(rows: [row(number: 1, status: .success)])
+        let requested = expectation(description: "Open list requested")
+        let gate = AsyncGate()
+        api.openHandler = { [api] _ in
+            requested.fulfill()
+            await gate.wait()
+            return OpenPullRequests(login: "fred", rows: api.rows)
+        }
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+
+        let refresh = Task { await monitor.refreshNow() }
+        await fulfillment(of: [requested], timeout: 5)
+
+        XCTAssertTrue(monitor.isLoading)
+        XCTAssertNil(monitor.refreshProgressText)
+        XCTAssertFalse(monitor.isSelectedTabRefreshing)
+
+        await gate.open()
+        await refresh.value
+        await monitor.waitForPrefetch()
+    }
+
     func testRefreshButtonShowsPreloadProgressUntilItFinishes() async {
         let api = prefetchingAPI(rows: [row(number: 1, status: .success), row(number: 2, status: .success)])
         api.reviewRequests = ReviewRequests(fromMe: [reviewRequestRow(number: 8)], fromMyTeams: [])
@@ -204,6 +227,7 @@ final class PRMonitorPrefetchTests: XCTestCase {
         await fulfillment(of: [requested], timeout: 5)
 
         XCTAssertEqual(monitor.refreshProgressText, "Refreshing My PRs 1/2…")
+        XCTAssertTrue(monitor.isSelectedTabRefreshing)
         monitor.selectedTab = .reviews
         XCTAssertEqual(monitor.refreshProgressText, "Refreshing To Review 1/1…")
 
@@ -212,6 +236,7 @@ final class PRMonitorPrefetchTests: XCTestCase {
 
         XCTAssertNil(monitor.refreshProgress)
         XCTAssertNil(monitor.refreshProgressText)
+        XCTAssertFalse(monitor.isSelectedTabRefreshing)
     }
 
     func testPrefetchPreservesExpandedDiscussionLimits() async {
