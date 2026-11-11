@@ -6,55 +6,35 @@ import GRDB
 final class PullRequestCacheTests: XCTestCase {
     // MARK: - One record per pull request
 
-    func testListedDetailsStayCachedOutsideTheLRULimit() {
-        let cache = PullRequestCache(capacity: 1)
-        let listed = row(number: 1, status: .success)
-        cache.store(OpenPullRequests(login: "fred", rows: [listed]), fetchedAt: Date(timeIntervalSince1970: 0))
-        cache.store(detailContent(for: listed.reference))
-
-        cache.store(detailContent(for: PullRequestReference(repoFullName: "acme/widgets", number: 2)))
-
-        XCTAssertNotNil(cache.entry(for: listed.reference))
-        XCTAssertEqual(cache.open, [listed])
-        XCTAssertEqual(cache.detailCount, 2)
-    }
-
-    func testPreloadedDetailsOfBothListsSurviveBeyondCapacity() {
-        let cache = PullRequestCache(capacity: 1)
-        let mine = row(number: 1, status: .success)
-        let review = reviewRequestRow(number: 2)
-        cache.store(OpenPullRequests(login: "fred", rows: [mine]), fetchedAt: Date())
-        cache.store(ReviewRequests(fromMe: [review], fromMyTeams: []), fetchedAt: Date())
-        for reference in [mine.reference, review.reference] {
-            cache.store(detailContent(for: reference))
-            cache.store(.empty, for: reference)
+    func testEveryFetchedDetailStaysInSQLiteBeyondTheFormerLimit() async {
+        let store = LocalStore.inMemory()
+        let access = PullRequestCache(store: store)
+        for number in 1...125 {
+            access.store(content(number: number))
+            access.store(.empty, for: reference(number))
+            access.store(.empty, for: reference(number), headSHA: "sha-\(number)")
         }
-        cache.store(detailContent(for: reference(3)))
-        cache.store(detailContent(for: reference(4)))
+        await access.saveNow()
 
-        XCTAssertNotNil(cache.entry(for: mine.reference)?.comments)
-        XCTAssertNotNil(cache.entry(for: review.reference)?.comments)
-        XCTAssertNil(cache.entry(for: reference(3)))
-        XCTAssertNotNil(cache.entry(for: reference(4)))
-
-        cache.removeLists()
-        XCTAssertEqual(cache.detailCount, 1, "Former list members return to the bounded LRU")
+        XCTAssertEqual(store.pullRequestDetailCount, 125)
+        let reopened = PullRequestCache(store: store)
+        XCTAssertNotNil(reopened.entry(for: reference(1))?.comments)
+        XCTAssertNotNil(reopened.entry(for: reference(125))?.checks)
+        XCTAssertNotNil(reopened.entry(for: reference(50)))
+        XCTAssertEqual(store.pullRequestDetailCount, 125)
     }
 
-    func testAPullRequestLeavingTheListsKeepsItsDetailUntilItIsEvicted() {
-        let cache = PullRequestCache(capacity: 1)
-        let listed = row(number: 1, status: .success)
-        cache.store(OpenPullRequests(login: "fred", rows: [listed]), fetchedAt: Date(timeIntervalSince1970: 0))
-        cache.store(detailContent(for: listed.reference))
+    func testReadsSQLiteInsteadOfKeepingASeparateDetailCopy() async {
+        let store = LocalStore.inMemory()
+        let first = PullRequestCache(store: store)
+        first.store(content(number: 1, title: "First"))
+        XCTAssertEqual(first.entry(for: reference(1))?.content.detail.title, "First")
+        let second = PullRequestCache(store: store)
+        second.store(content(number: 1, title: "Updated elsewhere"))
 
-        cache.store(OpenPullRequests(login: "fred", rows: []), fetchedAt: Date(timeIntervalSince1970: 1))
-
-        XCTAssertEqual(cache.open, [])
-        XCTAssertNotNil(cache.entry(for: listed.reference))
-
-        cache.store(detailContent(for: PullRequestReference(repoFullName: "acme/widgets", number: 2)))
-
-        XCTAssertNil(cache.records[listed.reference], "Nothing needs it anymore")
+        XCTAssertEqual(first.entry(for: reference(1))?.content.detail.title, "Updated elsewhere")
+        second.removeDetails()
+        XCTAssertNil(first.entry(for: reference(1)))
     }
 
     func testRemovingTheListsKeepsTheDetailsAndRemovingTheDetailsKeepsTheLists() {
@@ -148,20 +128,6 @@ final class PullRequestCacheTests: XCTestCase {
         XCTAssertNotNil(cache.entry(for: reference(1))?.comments)
     }
 
-    func testEvictsTheLeastRecentlyUsedEntry() {
-        let cache = PullRequestCache(capacity: 2)
-        cache.store(content(number: 1))
-        cache.store(content(number: 2))
-        _ = cache.entry(for: reference(1))
-
-        cache.store(content(number: 3))
-
-        XCTAssertNotNil(cache.entry(for: reference(1)))
-        XCTAssertNil(cache.entry(for: reference(2)))
-        XCTAssertNotNil(cache.entry(for: reference(3)))
-        XCTAssertEqual(cache.detailCount, 2)
-    }
-
     func testRemoveAllEmptiesTheCache() {
         let cache = PullRequestCache()
         cache.store(content(number: 1))
@@ -170,10 +136,6 @@ final class PullRequestCacheTests: XCTestCase {
 
         XCTAssertNil(cache.entry(for: reference(1)))
         XCTAssertEqual(cache.detailCount, 0)
-    }
-
-    func testKeepsAHundredEntriesByDefault() {
-        XCTAssertEqual(PullRequestCache().capacity, 100)
     }
 
     func testRestoresSavedEntriesFromTheStore() async {
@@ -209,22 +171,6 @@ final class PullRequestCacheTests: XCTestCase {
         XCTAssertFalse(restored.needsRefresh(reference(1), updatedAt: Date(timeIntervalSince1970: 100)))
     }
 
-    func testRestoreKeepsTheUseOrderAndCapacity() async {
-        let store = LocalStore.inMemory()
-        let saving = PullRequestCache(store: store)
-        saving.store(content(number: 1))
-        saving.store(content(number: 2))
-        saving.store(content(number: 3))
-        await saving.saveNow()
-
-        let restored = PullRequestCache(capacity: 2, store: store)
-        await restored.waitForRestore()
-
-        XCTAssertNil(restored.entry(for: reference(1)), "The least recently used entry does not fit")
-        XCTAssertNotNil(restored.entry(for: reference(2)))
-        XCTAssertNotNil(restored.entry(for: reference(3)))
-    }
-
     func testEntriesStoredBeforeTheRestoreFinishesWin() async {
         let store = LocalStore.inMemory()
         let saving = PullRequestCache(store: store)
@@ -240,7 +186,7 @@ final class PullRequestCacheTests: XCTestCase {
 
     func testSavesOnItsOwnAfterChanges() async throws {
         let store = LocalStore.inMemory()
-        let saving = PullRequestCache(store: store, saveDelay: 0.01)
+        let saving = PullRequestCache(store: store)
         saving.store(content(number: 1))
 
         for _ in 0..<200 where await store.pullRequestDetails().isEmpty {
@@ -250,32 +196,6 @@ final class PullRequestCacheTests: XCTestCase {
         let restored = PullRequestCache(store: store)
         await restored.waitForRestore()
         XCTAssertNotNil(restored.entry(for: reference(1)))
-    }
-
-    func testSavesUseOrderAndEvictions() async {
-        let store = LocalStore.inMemory()
-        let saving = PullRequestCache(capacity: 2, store: store)
-        saving.store(content(number: 1))
-        saving.store(content(number: 2))
-        await saving.saveNow()
-        _ = saving.entry(for: reference(1))
-        saving.store(content(number: 3))
-        await saving.saveNow()
-
-        let saved = await store.pullRequestDetails().map(\.entry.content.detail.reference.number)
-        XCTAssertEqual(saved, [1, 3])
-    }
-
-    func testAnEvictedEntryStoredAgainIsSaved() async {
-        let store = LocalStore.inMemory()
-        let saving = PullRequestCache(capacity: 1, store: store)
-        saving.store(content(number: 1))
-        saving.store(content(number: 2))
-        saving.store(content(number: 1))
-        await saving.saveNow()
-
-        let saved = await store.pullRequestDetails().map(\.entry.content.detail.reference.number)
-        XCTAssertEqual(saved, [1])
     }
 
     func testRemoveAllDeletesTheSavedEntries() async {
@@ -306,7 +226,7 @@ final class PullRequestCacheTests: XCTestCase {
         let cache = PullRequestCache(store: store)
         await cache.waitForRestore()
 
-        XCTAssertEqual(cache.detailCount, 1)
+        XCTAssertNil(cache.entry(for: reference(1)))
         XCTAssertNotNil(cache.entry(for: reference(2)))
     }
 

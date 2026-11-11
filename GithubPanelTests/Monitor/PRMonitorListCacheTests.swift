@@ -4,6 +4,33 @@ import GRDB
 
 @MainActor
 final class PRMonitorListCacheTests: XCTestCase {
+    func testUIKeepsOnlyTheCurrentDatabasePagesAndCanNavigateToOffPagePRs() {
+        let store = LocalStore.inMemory()
+        let access = PullRequestCache(store: store)
+        access.store(OpenPullRequests(login: "fred", rows: (1...125).map { row(number: $0, status: .success) }),
+                     fetchedAt: Date())
+        access.store(ReviewRequests(fromMe: (201...225).map { reviewRequestRow(number: $0) }, fromMyTeams: []),
+                     fetchedAt: Date())
+        let monitor = makeMonitor(store: store)
+        XCTAssertEqual(monitor.prRows.count, PRMonitor.openPageSize)
+        XCTAssertEqual(monitor.openTotalCount, 125)
+        XCTAssertEqual(monitor.reviewRequests.rows.map(\.number), Array(201...210))
+        XCTAssertEqual(monitor.reviewPage.totalCount, 25)
+
+        monitor.showOpenPage(3)
+        XCTAssertEqual(monitor.prRows.map(\.number), Array(101...125))
+        monitor.showReviewPage(2)
+        XCTAssertEqual(monitor.reviewRequests.rows.map(\.number), Array(211...220))
+
+        monitor.listWindowAppeared()
+        XCTAssertTrue(monitor.showPullRequest(row(number: 1, status: .success).reference))
+        XCTAssertEqual(monitor.openPage, 1)
+        XCTAssertTrue(monitor.showPullRequest(reviewRequestRow(number: 225).reference))
+        XCTAssertEqual(monitor.reviewPage.page, 3)
+        XCTAssertEqual(monitor.reviewRequests.rows.map(\.number), Array(221...225))
+        XCTAssertEqual(store.pullRequestIDs(in: .open).count, 125)
+    }
+
     func testMyPRsAndForLaterShowFromTheLastRunBeforeTheFirstRefresh() async {
         let api = FakeGitHubAPI()
         api.rows = [row(number: 1, status: .success, mergeMethods: RepositoryMergeMethods(allowed: [.squash], suggested: .squash)),

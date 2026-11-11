@@ -154,10 +154,10 @@ final class LocalStoreTests: XCTestCase {
             detail(for: listed.reference), detail(for: detailOnly),
         ]))
 
-        await store.savePullRequestDetails(LocalStore.PullRequestDetailChanges(removed: [listed.reference, detailOnly]))
+        await store.removeAllPullRequestDetails()
 
         XCTAssertEqual(store.pullRequestLists().records[listed.reference], PullRequestRecord(openRow: listed),
-                       "Evicting the detail keeps the list's row")
+                       "An explicit detail reset keeps the list's row")
         let details = await store.pullRequestDetails()
         XCTAssertTrue(details.isEmpty)
         try await store.database.read { db in
@@ -170,6 +170,53 @@ final class LocalStoreTests: XCTestCase {
         try await store.database.read { db in
             XCTAssertEqual(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM pull_request"), 0)
         }
+    }
+
+    func testListRefreshKeepsPreviouslyFetchedRowsAndDetailsInSQLite() async throws {
+        let store = LocalStore.inMemory()
+        let first = row(number: 1, status: .success)
+        store.savePullRequestList(list(savedAt: 1, members: [PullRequestListMember(reference: first.reference)]),
+                                  as: .open, records: [first.reference: PullRequestRecord(openRow: first)])
+        store.savePullRequestList(list(savedAt: 2, members: []), as: .open, records: [:])
+        XCTAssertEqual(store.pullRequestLists().open, [])
+        try await store.database.read { db in
+            XCTAssertEqual(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM pull_request"), 1)
+        }
+    }
+
+    @MainActor
+    func testDatabasePagesPreserveReviewGroupsAndExcludeHiddenRows() {
+        let store = LocalStore.inMemory()
+        let mine = (1...12).map { reviewRequestRow(number: $0) }
+        let teams = (13...25).map { reviewRequestRow(number: $0) }
+        let access = PullRequestCache(store: store)
+        access.store(ReviewRequests(fromMe: mine, fromMyTeams: teams), fetchedAt: Date())
+
+        let page = store.reviewRequestPage(2, excluding: [mine[0].id])
+        XCTAssertEqual(page.rows.map(\.number), Array(12...21))
+        XCTAssertEqual(page.fromMe.map(\.number), [12])
+        XCTAssertEqual(page.fromMyTeams.map(\.number), Array(13...21))
+        XCTAssertEqual(page.totalCount, 24)
+        XCTAssertEqual(page.total(in: .fromMe), 11)
+        XCTAssertEqual(page.total(in: .fromMyTeams), 13)
+        XCTAssertEqual(page.rangeText, "11-20 of 24")
+        XCTAssertEqual(store.reviewRequestPage(99, excluding: []).rows.map(\.number), Array(21...25))
+    }
+
+    @MainActor
+    func testDatabaseReadsOnlyTheRequestedHistoryPage() {
+        let store = LocalStore.inMemory()
+        let access = PullRequestCache(store: store)
+        for page in 1...3 {
+            access.store(PullRequestHistoryPage(rows: [historyRow(number: page)], page: page, perPage: 1, totalCount: 3),
+                         asPage: page, fetchedAt: Date())
+        }
+
+        let loaded = store.pullRequestLists(kinds: [.history(page: 2)])
+        XCTAssertEqual(Set(loaded.lists.keys), [.history(page: 2)])
+        XCTAssertEqual(Set(loaded.records.keys.map(\.number)), [2])
+        XCTAssertEqual(loaded.historyPage(2)?.rows.map(\.number), [2])
+        XCTAssertEqual(store.pullRequestLists().lists.count, 3, "Other pages remain stored")
     }
 
     func testRowsThatNoLongerDecodeAreLeftOut() async throws {

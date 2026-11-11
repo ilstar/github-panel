@@ -44,8 +44,6 @@ struct ContentView: View {
     /// The rows last seen on My PRs and To Review, to pick the row that takes a removed one's place.
     @State private var openRowIDs: [String] = []
     @State private var reviewRowIDs: [String] = []
-    /// The To Review page on screen, 1-based. `ReviewRequestsPage` clamps it when rows go away.
-    @State private var reviewPage = 1
     @State private var mergeInFlight: Set<String> = []
     @State private var pageScroller = PageScroller()
     @AppStorage(ListPaneLayout.widthDefaultsKey, store: AppDefaults.store) private var listPaneWidth: Double = ListPaneLayout.defaultWidth
@@ -316,9 +314,9 @@ struct ContentView: View {
         guard monitor.hasToken else { return nil }
         switch monitor.selectedTab {
         case .open:
-            return monitor.prRows.count
+            return monitor.openTotalCount
         case .reviews:
-            return monitor.reviewRequests.rows.count
+            return monitor.reviewPage.totalCount
         case .history:
             return nil
         }
@@ -361,51 +359,60 @@ struct ContentView: View {
 
     private var openPullRequestsList: some View {
         let sections = myPullRequests
-        return ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 6) {
-                    if monitor.prRows.isEmpty {
-                        emptyStateSpacer
-                    } else {
-                        if groupsByStatus {
-                            groupedPullRequests(sections)
+        return VStack(spacing: 6) {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 6) {
+                        if monitor.prRows.isEmpty {
+                            emptyStateSpacer
                         } else {
-                            ForEach(sections.listEntries) { entry in
-                                openPullRequestEntry(entry, isForLater: false, sections: sections)
+                            if groupsByStatus {
+                                groupedPullRequests(sections)
+                            } else {
+                                ForEach(sections.listEntries) { entry in
+                                    openPullRequestEntry(entry, isForLater: false, sections: sections)
+                                }
                             }
-                        }
-                        if !sections.forLater.isEmpty {
-                            sectionHeading(title: MyPullRequestSections.forLaterTitle,
-                                           count: sections.forLater.count,
-                                           color: .accentColor,
-                                           isExpanded: isForLaterExpanded) {
-                                isForLaterExpanded.toggle()
-                            }
-                            .padding(.top, sections.active.isEmpty ? 4 : 12)
-                            if isForLaterExpanded {
-                                ForEach(sections.forLaterEntries) { entry in
-                                    openPullRequestEntry(entry, isForLater: true, sections: sections)
+                            if !sections.forLater.isEmpty {
+                                sectionHeading(title: MyPullRequestSections.forLaterTitle,
+                                               count: sections.forLater.count,
+                                               color: .accentColor,
+                                               isExpanded: isForLaterExpanded) {
+                                    isForLaterExpanded.toggle()
+                                }
+                                .padding(.top, sections.active.isEmpty ? 4 : 12)
+                                if isForLaterExpanded {
+                                    ForEach(sections.forLaterEntries) { entry in
+                                        openPullRequestEntry(entry, isForLater: true, sections: sections)
+                                    }
                                 }
                             }
                         }
                     }
+                    .padding(.bottom, 8)
+                    .mouseWheelStep()
                 }
-                .padding(.bottom, 8)
-                .mouseWheelStep()
-            }
-            .scrollIndicators(.hidden)
-            .onAppear {
-                openRowIDs = visibleOpenRowIDs
-                if selectedPRID == nil {
-                    selectedPRID = visibleOpenRowIDs.first
+                .scrollIndicators(.hidden)
+                .onAppear {
+                    openRowIDs = visibleOpenRowIDs
+                    if selectedPRID == nil {
+                        selectedPRID = visibleOpenRowIDs.first
+                    }
+                }
+                .onChange(of: visibleOpenRowIDs) { newIDs in
+                    selectedPRID = ListNavigation.selection(after: selectedPRID, oldIDs: openRowIDs, newIDs: newIDs)
+                    openRowIDs = newIDs
+                }
+                .onChange(of: selectedPRID) { id in
+                    scrollToSelection(id, with: proxy)
                 }
             }
-            .onChange(of: visibleOpenRowIDs) { newIDs in
-                selectedPRID = ListNavigation.selection(after: selectedPRID, oldIDs: openRowIDs, newIDs: newIDs)
-                openRowIDs = newIDs
-            }
-            .onChange(of: selectedPRID) { id in
-                scrollToSelection(id, with: proxy)
+            if monitor.openTotalCount > PRMonitor.openPageSize {
+                pagination(rangeText: monitor.openPageRangeText,
+                           canGoToPreviousPage: monitor.openPage > 1,
+                           canGoToNextPage: monitor.openPage * PRMonitor.openPageSize < monitor.openTotalCount,
+                           previous: { monitor.showOpenPage(monitor.openPage - 1) },
+                           next: { monitor.showOpenPage(monitor.openPage + 1) })
             }
         }
     }
@@ -571,10 +578,7 @@ struct ContentView: View {
             if selectedReviewID == nil {
                 selectedReviewID = monitor.reviewRequests.rows.first?.id
             }
-            if let selectedReviewID,
-               let page = ReviewRequestsPage.page(containing: selectedReviewID, in: monitor.reviewRequests) {
-                reviewPage = page
-            }
+            if let selectedReviewID { monitor.showReviewPage(containing: selectedReviewID) }
         }
         .onChange(of: monitor.reviewRequests.rows.map { $0.id }) { newIDs in
             selectedReviewID = ListNavigation.selection(after: selectedReviewID, oldIDs: reviewRowIDs, newIDs: newIDs)
@@ -590,7 +594,7 @@ struct ContentView: View {
     }
 
     private var reviewRequestsPage: ReviewRequestsPage {
-        ReviewRequestsPage(requests: monitor.reviewRequests, page: reviewPage)
+        monitor.reviewPage
     }
 
     private var reviewRequestsList: some View {
@@ -599,7 +603,7 @@ struct ContentView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 2) {
-                        ForEach(ReviewRequestGroup.allCases.filter { page.showsGroup($0, in: monitor.reviewRequests) }) { group in
+                        ForEach(ReviewRequestGroup.allCases.filter { page.showsGroup($0) }) { group in
                             reviewRequestGroup(group, on: page)
                         }
                     }
@@ -609,9 +613,8 @@ struct ContentView: View {
                 .scrollIndicators(.hidden)
                 .onChange(of: selectedReviewID) { id in
                     // Moving the selection past either end of a page, or to a notified request, turns to its page.
-                    if let id, let selectedPage = ReviewRequestsPage.page(containing: id, in: monitor.reviewRequests),
-                       selectedPage != reviewRequestsPage.page {
-                        reviewPage = selectedPage
+                    if let id, !monitor.reviewRequests.rows.contains(where: { $0.id == id }) {
+                        monitor.showReviewPage(containing: id)
                         // The row is drawn once the new page is.
                         DispatchQueue.main.async { scrollToSelection(id, with: proxy) }
                     } else {
@@ -632,14 +635,14 @@ struct ContentView: View {
 
     /// Turns to a To Review page and selects its first row.
     private func showReviewPage(_ number: Int) {
-        reviewPage = number
-        selectedReviewID = ReviewRequestsPage(requests: monitor.reviewRequests, page: number).rows.first?.id
+        monitor.showReviewPage(number)
+        selectedReviewID = monitor.reviewRequests.rows.first?.id
     }
 
     @ViewBuilder
     private func reviewRequestGroup(_ group: ReviewRequestGroup, on page: ReviewRequestsPage) -> some View {
         let rows = page.rows(in: group)
-        let total = monitor.reviewRequests.rows(in: group).count
+        let total = page.total(in: group)
         // A small accent heading over each group, like a sidebar section heading.
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text(group.title)
@@ -651,7 +654,7 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 12)
-        .padding(.top, group == ReviewRequestGroup.allCases.first(where: { page.showsGroup($0, in: monitor.reviewRequests) }) ? 4 : 16)
+        .padding(.top, group == ReviewRequestGroup.allCases.first(where: { page.showsGroup($0) }) ? 4 : 16)
         .padding(.bottom, 2)
 
         if rows.isEmpty {
@@ -935,7 +938,7 @@ struct ContentView: View {
         case .open:
             return visibleOpenRowIDs
         case .reviews:
-            return ReviewRequestGroup.allCases.flatMap { monitor.reviewRequests.rows(in: $0) }.map(\.id)
+            return monitor.reviewRequestIDs
         case .history:
             return monitor.historyRows.map(\.id)
         }

@@ -51,7 +51,7 @@ final class PendingChangeSendingTests: XCTestCase {
         api.detailHandler = { reference in detailContent(for: reference, title: title) }
         api.editHandler = { _, newTitle, _ in title = newTitle ?? title }
         let store = LocalStore.inMemory()
-        let cache = PullRequestCache(store: store, saveDelay: 60)
+        let cache = PullRequestCache(store: store)
         let engine = makeEngine(api: api, cache: cache, store: store)
         try await engine.request(.detail(reference(1)))
         await cache.saveNow()
@@ -269,7 +269,7 @@ final class PendingChangeSendingTests: XCTestCase {
             return 7
         }
         let store = LocalStore.inMemory()
-        let cache = PullRequestCache(store: store, saveDelay: 60)
+        let cache = PullRequestCache(store: store)
         let engine = makeEngine(api: api, cache: cache, store: store)
         try await engine.request(.detail(reference(1)))
         try await engine.request(.comments(reference(1), PullRequestCommentLimits()))
