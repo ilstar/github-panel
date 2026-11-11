@@ -20,8 +20,6 @@ final class PRMonitor: ObservableObject {
     @Published private(set) var isLoading: Bool = false
     @Published private(set) var isHistoryLoading: Bool = false
     @Published private(set) var isReviewRequestsLoading: Bool = false
-    /// Set while My PRs and To Review refresh, before their rows preload.
-    @Published private(set) var isRefreshingLists: Bool = false
     /// How far preloading the rows of My PRs and To Review has got. Nil when nothing is preloading.
     @Published private(set) var refreshProgress: RefreshProgress?
     @Published var hasToken: Bool = false
@@ -100,10 +98,6 @@ final class PRMonitor: ObservableObject {
     private var didLoadSessionToken = false
     private var sessionToken: String?
     private var listSubscription: AnyCancellable?
-    /// List refreshes in flight, which can overlap, such as a timer tick during a manual refresh.
-    private var listRefreshesInFlight = 0 {
-        didSet { isRefreshingLists = listRefreshesInFlight > 0 }
-    }
     /// The lists as the store holds them, which the rows show.
     private var savedLists = LocalStore.SavedPullRequestLists()
     private var listObservation: AnyDatabaseCancellable?
@@ -187,8 +181,14 @@ final class PRMonitor: ObservableObject {
         guard let lastRefreshAt else {
             return "Never"
         }
-        // The refresh time can land a moment after `now`, which would read "in 0 sec."
-        return relativeFormatter.localizedString(for: min(lastRefreshAt, now), relativeTo: now)
+        return Self.refreshText(for: lastRefreshAt, relativeTo: now, formatter: relativeFormatter)
+    }
+
+    /// When a list last refreshed, such as "1 min. ago". Under a second reads "just now", since the formatter
+    /// writes "in 0 sec." for no time at all, and the refresh can land a moment after `now`.
+    static func refreshText(for date: Date, relativeTo now: Date, formatter: RelativeDateTimeFormatter) -> String {
+        guard now.timeIntervalSince(date) >= 1 else { return "just now" }
+        return formatter.localizedString(for: date, relativeTo: now)
     }
 
     func saveToken(_ token: String) {
@@ -260,8 +260,6 @@ final class PRMonitor: ObservableObject {
         let session = credentialSession
         let loadCount = listLoadCount
         let engine = syncEngine
-        listRefreshesInFlight += 1
-        defer { listRefreshesInFlight -= 1 }
         await engine.sendPendingChanges()
         async let reviewRequests: Void? = try? engine.request(.reviewRequests, priority: priority, maxAge: maxAge,
                                                               joinsLoadInFlight: true)
@@ -280,7 +278,9 @@ final class PRMonitor: ObservableObject {
     }
 
     /// What the refresh button says while the selected tab refreshes, such as "Refreshing My PRs 2/10…".
-    /// Nil when it isn't refreshing, so the button shows when the list last updated.
+    /// Nil when it isn't refreshing, so the button shows when the list last updated. My PRs and To Review refresh
+    /// together, so either list loading counts for both tabs. A timer tick that finds the lists fresh loads nothing,
+    /// so it leaves this nil.
     var refreshProgressText: String? {
         if selectedTab == .history {
             return isHistoryLoading ? "Refreshing…" : nil
@@ -288,7 +288,7 @@ final class PRMonitor: ObservableObject {
         if let text = refreshProgress?.text(selectedTab: selectedTab) {
             return text
         }
-        return isRefreshingLists || isSelectedTabLoading ? "Refreshing…" : nil
+        return isLoading || isReviewRequestsLoading ? "Refreshing…" : nil
     }
 
     func refreshSelectedTab() async {

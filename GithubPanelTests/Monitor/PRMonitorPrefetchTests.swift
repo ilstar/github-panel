@@ -212,7 +212,6 @@ final class PRMonitorPrefetchTests: XCTestCase {
 
         XCTAssertNil(monitor.refreshProgress)
         XCTAssertNil(monitor.refreshProgressText)
-        XCTAssertFalse(monitor.isRefreshingLists)
     }
 
     func testPrefetchPreservesExpandedDiscussionLimits() async {

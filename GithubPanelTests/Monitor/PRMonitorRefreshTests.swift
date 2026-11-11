@@ -10,8 +10,11 @@ final class PRMonitorRefreshTests: XCTestCase {
         await monitor.refreshNow()
         XCTAssertEqual(monitor.lastRefreshAt, refreshedAt)
 
-        XCTAssertEqual(monitor.lastRefreshText(relativeTo: refreshedAt.addingTimeInterval(-0.5)),
-                       monitor.lastRefreshText(relativeTo: refreshedAt))
+        XCTAssertEqual(monitor.lastRefreshText(relativeTo: refreshedAt.addingTimeInterval(-0.5)), "just now")
+        XCTAssertEqual(monitor.lastRefreshText(relativeTo: refreshedAt), "just now")
+        XCTAssertEqual(monitor.lastRefreshText(relativeTo: refreshedAt.addingTimeInterval(0.9)), "just now")
+        XCTAssertFalse(monitor.lastRefreshText(relativeTo: refreshedAt.addingTimeInterval(5)).hasPrefix("in "))
+        XCTAssertNotEqual(monitor.lastRefreshText(relativeTo: refreshedAt.addingTimeInterval(5)), "just now")
     }
 
     func testTokenIsReadOnceAcrossMonitorOperationsUntilCredentialChanges() async {
