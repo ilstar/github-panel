@@ -187,7 +187,8 @@ final class PRMonitor: ObservableObject {
         guard let lastRefreshAt else {
             return "Never"
         }
-        return relativeFormatter.localizedString(for: lastRefreshAt, relativeTo: now)
+        // The refresh time can land a moment after `now`, which would read "in 0 sec."
+        return relativeFormatter.localizedString(for: min(lastRefreshAt, now), relativeTo: now)
     }
 
     func saveToken(_ token: String) {

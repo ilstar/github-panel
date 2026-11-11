@@ -785,14 +785,19 @@ struct ContentView: View {
         )
     }
 
-    /// Says what a refresh is doing while it runs, then when the list last updated.
+    /// Says what a refresh is doing while it runs, then when the list last updated. The pill hugs the text, so
+    /// it widens while a refresh runs and narrows back after.
     private var lastUpdatedView: some View {
-        Text(monitor.refreshProgressText ?? "Updated \(lastUpdatedText)")
+        let text = monitor.refreshProgressText ?? "Updated \(lastUpdatedText)"
+        return Text(text)
             .font(.caption)
             .monospacedDigit()
             .lineLimit(1)
+            .fixedSize()
             .foregroundStyle(.tertiary)
-            .frame(minWidth: 110, alignment: .trailing)
+            // A new view for each text, so a change cross-fades while the pill resizes instead of clipping.
+            .id(text)
+            .transition(.opacity)
     }
 
     private var lastUpdatedText: String {
@@ -808,7 +813,8 @@ struct ContentView: View {
         guard let lastRefreshAt else {
             return "Never"
         }
-        return relativeFormatter.localizedString(for: lastRefreshAt, relativeTo: now)
+        // The refresh time can land a moment after `now`, which would read "in 0 sec."
+        return relativeFormatter.localizedString(for: min(lastRefreshAt, now), relativeTo: now)
     }
 
     private var refreshPill: some View {
@@ -817,6 +823,8 @@ struct ContentView: View {
                     lastUpdatedView: lastUpdatedView) {
             refreshSelectedTab()
         }
+        // Animates only refresh progress, not the "Updated" time ticking over.
+        .animation(.easeInOut(duration: 0.25), value: monitor.refreshProgressText)
     }
 
     private var refreshIsEnabled: Bool {
