@@ -206,40 +206,69 @@ extension LocalStore {
         var lists: [PullRequestListKind: SavedPullRequestList] = [:]
         /// The pull requests the lists hold.
         var records: [PullRequestReference: PullRequestRecord] = [:]
+
+        var open: [PullRequestRow]? {
+            PullRequestListRows.open(lists[.open]?.members, records: records)
+        }
+
+        var reviewRequests: ReviewRequests? {
+            PullRequestListRows.reviewRequests(lists[.reviewRequests]?.members, info: lists[.reviewRequests]?.info,
+                                               records: records)
+        }
+
+        func historyPage(_ page: Int) -> PullRequestHistoryPage? {
+            PullRequestListRows.historyPage(page, members: lists[.history(page: page)]?.members,
+                                            info: lists[.history(page: page)]?.info, records: records)
+        }
     }
 
     /// The saved lists and their pull requests, read on the calling thread so they show as soon as the app starts.
-    /// Lists and rows that no longer decode, such as after an update changed their shape, are left out.
+    /// Lists and rows that no longer decode, such as after an update changed their shape, are left out. Writes
+    /// queued before the call land first, since the database runs reads and writes in order.
     func pullRequestLists() -> SavedPullRequestLists {
-        (try? database.read { db in
-            let decoder = JSONDecoder()
-            var saved = SavedPullRequestLists()
-            var members: [PullRequestListKind: [PullRequestListMember]] = [:]
-            for row in try Row.fetchAll(db, sql: """
-                SELECT kind, reviewGroup, repoFullName, number FROM pull_request_list_member ORDER BY kind, position
-                """) {
-                guard let kind = PullRequestListKind(key: row["kind"] as String) else { continue }
-                let reference = PullRequestReference(repoFullName: row["repoFullName"], number: row["number"])
-                let group = (row["reviewGroup"] as String?).flatMap(ReviewRequestGroup.init(key:))
-                members[kind, default: []].append(PullRequestListMember(reference: reference, reviewGroup: group))
-            }
-            for row in try Row.fetchAll(db, sql: "SELECT kind, savedAt, info FROM pull_request_list") {
-                guard let kind = PullRequestListKind(key: row["kind"] as String), let data: Data = row["info"],
-                      let info = try? decoder.decode(PullRequestListInfo.self, from: data) else { continue }
-                saved.lists[kind] = SavedPullRequestList(savedAt: Date(timeIntervalSince1970: row["savedAt"]),
-                                                         info: info, members: members[kind] ?? [])
-            }
-            for row in try Row.fetchAll(db, sql: """
-                SELECT repoFullName, number, headSHA, checkState, statusObservedAt, openRow, reviewRequestRow, historyRow
-                FROM pull_request
-                WHERE EXISTS (SELECT 1 FROM pull_request_list_member m
-                              WHERE m.repoFullName = pull_request.repoFullName AND m.number = pull_request.number)
-                """) {
-                let reference = PullRequestReference(repoFullName: row["repoFullName"], number: row["number"])
-                saved.records[reference] = Self.record(from: row, decoder: decoder)
-            }
-            return saved
-        }) ?? SavedPullRequestLists()
+        (try? database.read(Self.pullRequestLists(in:))) ?? SavedPullRequestLists()
+    }
+
+    /// Calls `onChange` on the main queue after each write that changes the saved lists or their rows, whichever
+    /// code made it. Observing stops when the returned value is cancelled or released.
+    func observePullRequestListChanges(onChange: @escaping @MainActor () -> Void) -> AnyDatabaseCancellable {
+        let rows = SQLRequest<Row>(sql: """
+            SELECT headSHA, checkState, statusObservedAt, openRow, reviewRequestRow, historyRow FROM pull_request
+            """)
+        return DatabaseRegionObservation(tracking: Table("pull_request_list"), Table("pull_request_list_member"), rows)
+            .start(in: database, onError: { _ in }, onChange: { _ in
+                DispatchQueue.main.async { MainActor.assumeIsolated { onChange() } }
+            })
+    }
+
+    private static func pullRequestLists(in db: Database) throws -> SavedPullRequestLists {
+        let decoder = JSONDecoder()
+        var saved = SavedPullRequestLists()
+        var members: [PullRequestListKind: [PullRequestListMember]] = [:]
+        for row in try Row.fetchAll(db, sql: """
+            SELECT kind, reviewGroup, repoFullName, number FROM pull_request_list_member ORDER BY kind, position
+            """) {
+            guard let kind = PullRequestListKind(key: row["kind"] as String) else { continue }
+            let reference = PullRequestReference(repoFullName: row["repoFullName"], number: row["number"])
+            let group = (row["reviewGroup"] as String?).flatMap(ReviewRequestGroup.init(key:))
+            members[kind, default: []].append(PullRequestListMember(reference: reference, reviewGroup: group))
+        }
+        for row in try Row.fetchAll(db, sql: "SELECT kind, savedAt, info FROM pull_request_list") {
+            guard let kind = PullRequestListKind(key: row["kind"] as String), let data: Data = row["info"],
+                  let info = try? decoder.decode(PullRequestListInfo.self, from: data) else { continue }
+            saved.lists[kind] = SavedPullRequestList(savedAt: Date(timeIntervalSince1970: row["savedAt"]),
+                                                     info: info, members: members[kind] ?? [])
+        }
+        for row in try Row.fetchAll(db, sql: """
+            SELECT repoFullName, number, headSHA, checkState, statusObservedAt, openRow, reviewRequestRow, historyRow
+            FROM pull_request
+            WHERE EXISTS (SELECT 1 FROM pull_request_list_member m
+                          WHERE m.repoFullName = pull_request.repoFullName AND m.number = pull_request.number)
+            """) {
+            let reference = PullRequestReference(repoFullName: row["repoFullName"], number: row["number"])
+            saved.records[reference] = Self.record(from: row, decoder: decoder)
+        }
+        return saved
     }
 
     private static func record(from row: Row, decoder: JSONDecoder) -> PullRequestRecord {

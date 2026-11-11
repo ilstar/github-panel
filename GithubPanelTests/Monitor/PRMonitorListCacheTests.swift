@@ -200,4 +200,62 @@ final class PRMonitorListCacheTests: XCTestCase {
         XCTAssertNil(defaults.stringValues["GithubPanel.cache.myPullRequests"])
         XCTAssertNil(defaults.stringValues["GithubPanel.cache.reviewRequests"])
     }
+
+    // MARK: Rows come from the store
+
+    func testMyPRsShowAStatusSavedToTheStoreByAnyCode() async {
+        let api = FakeGitHubAPI()
+        let saved = row(number: 1, status: .pending)
+        api.rows = [saved]
+        let store = LocalStore.inMemory()
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"), store: store)
+        await monitor.refreshNow()
+        XCTAssertEqual(monitor.prRows.map(\.status), [.pending])
+
+        // Written straight to the store, so the cache sends no list change; the rows still show it.
+        let shown = expectation(description: "The new status shows")
+        let cancellable = monitor.$prRows.sink { rows in
+            if rows.map(\.status) == [.success] { shown.fulfill() }
+        }
+        store.savePullRequestStatus(PullRequestStatus(headSHA: saved.headSHA, checkState: .success,
+                                                      observedAt: Date(timeIntervalSince1970: 10_000)),
+                                    for: saved.reference)
+
+        await fulfillment(of: [shown], timeout: 2)
+        _ = cancellable
+    }
+
+    func testToReviewShowsAStatusSavedToTheStoreByAnyCode() async {
+        let api = FakeGitHubAPI()
+        var requested = reviewRequestRow(number: 1)
+        requested.headSHA = "sha-1"
+        requested.checkState = .pending
+        api.reviewRequests = ReviewRequests(fromMe: [requested], fromMyTeams: [])
+        let store = LocalStore.inMemory()
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"), store: store)
+        await monitor.refreshNow()
+        XCTAssertEqual(monitor.reviewRequests.fromMe.map(\.checkState), [.pending])
+
+        let shown = expectation(description: "The new status shows")
+        let cancellable = monitor.$reviewRequests.sink { requests in
+            if requests.fromMe.map(\.checkState) == [.failure] { shown.fulfill() }
+        }
+        store.savePullRequestStatus(PullRequestStatus(headSHA: "sha-1", checkState: .failure,
+                                                      observedAt: Date(timeIntervalSince1970: 10_000)),
+                                    for: requested.reference)
+
+        await fulfillment(of: [shown], timeout: 2)
+        _ = cancellable
+    }
+
+    func testRowsMatchWhatARestartShowsAfterChecksLoad() async {
+        let api = FakeGitHubAPI()
+        api.rows = [row(number: 1, status: .pending), row(number: 2, status: .success)]
+        let store = LocalStore.inMemory()
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"), store: store)
+        await monitor.refreshNow()
+        await monitor.waitForPrefetch()
+
+        XCTAssertEqual(monitor.prRows, makeMonitor(store: store).prRows)
+    }
 }

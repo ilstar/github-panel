@@ -84,24 +84,18 @@ final class PullRequestCache {
 
     // MARK: - Lists
 
+    /// The lists as this cache holds them. The lists on screen show the saved ones instead; see `PRMonitor`.
     var open: [PullRequestRow]? {
-        members[.open]?.compactMap { records[$0.reference]?.shownOpenRow }
+        PullRequestListRows.open(members[.open], records: records)
     }
 
     var reviewRequests: ReviewRequests? {
-        guard let members = members[.reviewRequests] else { return nil }
-        func rows(in group: ReviewRequestGroup) -> [ReviewRequestRow] {
-            members.filter { $0.reviewGroup == group }.compactMap { records[$0.reference]?.shownReviewRequestRow }
-        }
-        return ReviewRequests(fromMe: rows(in: .fromMe), fromMyTeams: rows(in: .fromMyTeams),
-                              ssoAuthorizationURL: infos[.reviewRequests]?.ssoAuthorizationURL)
+        PullRequestListRows.reviewRequests(members[.reviewRequests], info: infos[.reviewRequests], records: records)
     }
 
     func historyPage(_ page: Int) -> PullRequestHistoryPage? {
-        guard let members = members[.history(page: page)], let info = infos[.history(page: page)],
-              let perPage = info.perPage, let totalCount = info.totalCount else { return nil }
-        return PullRequestHistoryPage(rows: members.compactMap { records[$0.reference]?.historyRow },
-                                      page: info.page ?? page, perPage: perPage, totalCount: totalCount)
+        PullRequestListRows.historyPage(page, members: members[.history(page: page)],
+                                        info: infos[.history(page: page)], records: records)
     }
 
     func state(of kind: PullRequestListKind) -> ListState {
