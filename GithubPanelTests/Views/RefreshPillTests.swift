@@ -2,10 +2,46 @@ import XCTest
 @testable import GithubPanel
 
 final class RefreshPillTests: XCTestCase {
-    func testRefreshTimelineOnlyUpdatesWhileAnimating() {
-        XCTAssertFalse(RefreshAnimation.shouldUpdateTimeline(isLoading: false, isSettling: false))
-        XCTAssertTrue(RefreshAnimation.shouldUpdateTimeline(isLoading: true, isSettling: false))
-        XCTAssertTrue(RefreshAnimation.shouldUpdateTimeline(isLoading: false, isSettling: true))
+    func testARefreshWidensThePillBeforeTheIconSpins() {
+        let phase = RefreshPillPhase.idle.refreshStarted()
+        XCTAssertEqual(phase, .expanding)
+        XCTAssertTrue(phase.isExpanded)
+        XCTAssertFalse(phase.isSpinning)
+
+        XCTAssertEqual(phase.expanded(isRefreshing: true), .spinning)
+        XCTAssertTrue(RefreshPillPhase.spinning.isSpinning)
+    }
+
+    func testTheIconFinishesItsTurnBeforeThePillNarrows() {
+        let stopping = RefreshPillPhase.spinning.refreshEnded()
+        XCTAssertEqual(stopping, .stopping)
+        XCTAssertTrue(stopping.isSpinning)
+        XCTAssertTrue(stopping.isExpanded)
+        XCTAssertFalse(RefreshPillPhase.idle.isExpanded)
+        XCTAssertFalse(RefreshPillPhase.idle.isSpinning)
+    }
+
+    func testARefreshThatEndsWhileWideningNarrowsWithoutSpinning() {
+        XCTAssertEqual(RefreshPillPhase.expanding.refreshEnded(), .expanding)
+        XCTAssertEqual(RefreshPillPhase.expanding.expanded(isRefreshing: false), .idle)
+    }
+
+    func testARefreshStartingWhileTheIconStopsKeepsItSpinning() {
+        XCTAssertEqual(RefreshPillPhase.stopping.refreshStarted(), .spinning)
+        XCTAssertEqual(RefreshPillPhase.spinning.refreshStarted(), .spinning)
+        XCTAssertEqual(RefreshPillPhase.expanding.refreshStarted(), .expanding)
+    }
+
+    func testOnlyAWideningPillMovesOnWhenItIsWide() {
+        XCTAssertEqual(RefreshPillPhase.idle.expanded(isRefreshing: true), .idle)
+        XCTAssertEqual(RefreshPillPhase.stopping.expanded(isRefreshing: false), .stopping)
+    }
+
+    func testTheLabelOnlyGrowsWhileThePillHoldsItsWidth() {
+        XCTAssertEqual(RefreshAnimation.labelWidth(current: 120, measured: 90, holdsWidth: true), 120)
+        XCTAssertEqual(RefreshAnimation.labelWidth(current: 120, measured: 150, holdsWidth: true), 150)
+        XCTAssertEqual(RefreshAnimation.labelWidth(current: 150, measured: 90, holdsWidth: false), 90)
+        XCTAssertEqual(RefreshAnimation.labelWidth(current: nil, measured: 90, holdsWidth: true), 90)
     }
 
     func testRefreshAnimationCompletesItsCurrentCycle() {

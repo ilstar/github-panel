@@ -1,4 +1,5 @@
 import XCTest
+import Combine
 @testable import GithubPanel
 
 @MainActor
@@ -183,6 +184,105 @@ final class PRMonitorPrefetchTests: XCTestCase {
         await gate.open()
         await monitor.waitForPrefetch()
         XCTAssertEqual(api.detailCalls.map(\.reference.number), [1, 2])
+    }
+
+    func testRefreshButtonStaysStillWhileTheListsLoad() async {
+        let api = prefetchingAPI(rows: [row(number: 1, status: .success)])
+        let requested = expectation(description: "Open list requested")
+        let gate = AsyncGate()
+        api.openHandler = { [api] _ in
+            requested.fulfill()
+            await gate.wait()
+            return OpenPullRequests(login: "fred", rows: api.rows)
+        }
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+
+        let refresh = Task { await monitor.refreshNow() }
+        await fulfillment(of: [requested], timeout: 5)
+
+        XCTAssertTrue(monitor.isLoading)
+        XCTAssertNil(monitor.refreshProgressText)
+        XCTAssertFalse(monitor.isSelectedTabRefreshing)
+        XCTAssertTrue(monitor.isSelectedTabBusy)
+
+        await gate.open()
+        await refresh.value
+        await monitor.waitForPrefetch()
+        XCTAssertFalse(monitor.isSelectedTabBusy)
+    }
+
+    func testRefreshStaysBusyFromLoadingTheListsUntilTheCountsShow() async {
+        let api = prefetchingAPI(rows: [row(number: 1, status: .success)])
+        let requested = expectation(description: "Detail requested")
+        let gate = AsyncGate()
+        api.detailHandler = { reference in
+            requested.fulfill()
+            await gate.wait()
+            return detailContent(for: reference, title: "PR \(reference.number)")
+        }
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+        var busyChanges: [Bool] = []
+        let subscription = monitor.$isRefreshingLists.dropFirst().removeDuplicates().sink { busyChanges.append($0) }
+
+        await monitor.refreshNow()
+        await fulfillment(of: [requested], timeout: 5)
+
+        // The lists finished loading before the counts started, without the refresh going idle in between.
+        XCTAssertEqual(busyChanges, [true, false])
+        XCTAssertNotNil(monitor.refreshProgressText)
+        XCTAssertTrue(monitor.isSelectedTabBusy)
+        await gate.open()
+        await monitor.waitForPrefetch()
+        subscription.cancel()
+    }
+
+    func testATimerTickThatFindsTheListsFreshLeavesTheButtonStill() async {
+        let api = prefetchingAPI(rows: [row(number: 1, status: .success)])
+        let dateProvider = FakeDateProvider(now: Date(timeIntervalSince1970: 0))
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"), dateProvider: dateProvider)
+        await monitor.refreshNow()
+        await monitor.waitForPrefetch()
+        var busyChanges: [Bool] = []
+        let subscription = monitor.$isRefreshingLists.dropFirst().sink { busyChanges.append($0) }
+
+        dateProvider.now = Date(timeIntervalSince1970: 1)
+        await monitor.refreshScheduler.handleTimerTick()
+
+        XCTAssertEqual(api.fetchOpenPRTokens.count, 1)
+        XCTAssertFalse(busyChanges.contains(true))
+        XCTAssertFalse(monitor.isSelectedTabBusy)
+        subscription.cancel()
+    }
+
+    func testRefreshButtonShowsPreloadProgressUntilItFinishes() async {
+        let api = prefetchingAPI(rows: [row(number: 1, status: .success), row(number: 2, status: .success)])
+        api.reviewRequests = ReviewRequests(fromMe: [reviewRequestRow(number: 8)], fromMyTeams: [])
+        let requested = expectation(description: "First detail request")
+        let gate = AsyncGate()
+        api.detailHandler = { reference in
+            if reference.number == 1 {
+                requested.fulfill()
+                await gate.wait()
+            }
+            return detailContent(for: reference, title: "PR \(reference.number)")
+        }
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+        XCTAssertNil(monitor.refreshProgressText)
+
+        await monitor.refreshNow()
+        await fulfillment(of: [requested], timeout: 5)
+
+        XCTAssertEqual(monitor.refreshProgressText, "Refreshing My PRs 1/2…")
+        XCTAssertTrue(monitor.isSelectedTabRefreshing)
+        monitor.selectedTab = .reviews
+        XCTAssertEqual(monitor.refreshProgressText, "Refreshing To Review 1/1…")
+
+        await gate.open()
+        await monitor.waitForPrefetch()
+
+        XCTAssertNil(monitor.refreshProgress)
+        XCTAssertNil(monitor.refreshProgressText)
+        XCTAssertFalse(monitor.isSelectedTabRefreshing)
     }
 
     func testPrefetchPreservesExpandedDiscussionLimits() async {

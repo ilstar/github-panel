@@ -3,6 +3,20 @@ import XCTest
 
 @MainActor
 final class PRMonitorRefreshTests: XCTestCase {
+    func testLastRefreshTextNeverSaysTheRefreshIsInTheFuture() async {
+        let refreshedAt = Date(timeIntervalSince1970: 100)
+        let monitor = makeMonitor(tokenStore: FakeTokenStore(token: "token"),
+                                  dateProvider: FakeDateProvider(now: refreshedAt))
+        await monitor.refreshNow()
+        XCTAssertEqual(monitor.lastRefreshAt, refreshedAt)
+
+        XCTAssertEqual(monitor.lastRefreshText(relativeTo: refreshedAt.addingTimeInterval(-0.5)), "just now")
+        XCTAssertEqual(monitor.lastRefreshText(relativeTo: refreshedAt), "just now")
+        XCTAssertEqual(monitor.lastRefreshText(relativeTo: refreshedAt.addingTimeInterval(0.9)), "just now")
+        XCTAssertFalse(monitor.lastRefreshText(relativeTo: refreshedAt.addingTimeInterval(5)).hasPrefix("in "))
+        XCTAssertNotEqual(monitor.lastRefreshText(relativeTo: refreshedAt.addingTimeInterval(5)), "just now")
+    }
+
     func testTokenIsReadOnceAcrossMonitorOperationsUntilCredentialChanges() async {
         let api = FakeGitHubAPI()
         let tokenStore = FakeTokenStore(token: "first")

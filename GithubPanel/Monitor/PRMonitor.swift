@@ -20,6 +20,11 @@ final class PRMonitor: ObservableObject {
     @Published private(set) var isLoading: Bool = false
     @Published private(set) var isHistoryLoading: Bool = false
     @Published private(set) var isReviewRequestsLoading: Bool = false
+    /// How far preloading the rows of My PRs and To Review has got. Nil when nothing is preloading.
+    @Published private(set) var refreshProgress: RefreshProgress?
+    /// Set from when a refresh of My PRs and To Review starts loading a list until its rows are queued to preload,
+    /// so the refresh button holds still in between. A timer tick that finds the lists fresh never sets it.
+    @Published private(set) var isRefreshingLists: Bool = false
     @Published var hasToken: Bool = false
     @Published private(set) var lastError: String?
     @Published private(set) var lastHistoryError: String?
@@ -99,6 +104,10 @@ final class PRMonitor: ObservableObject {
     /// The lists as the store holds them, which the rows show.
     private var savedLists = LocalStore.SavedPullRequestLists()
     private var listObservation: AnyDatabaseCancellable?
+    /// `refreshLists` calls running, which can overlap, such as a timer tick during a manual refresh.
+    private var listRefreshesInFlight = 0 {
+        didSet { if listRefreshesInFlight == 0 { isRefreshingLists = false } }
+    }
     /// How many times My PRs or To Review loaded, so a timer tick that loaded neither preloads nothing.
     private var listLoadCount = 0
     /// The History page shown, or being loaded to replace it.
@@ -179,7 +188,14 @@ final class PRMonitor: ObservableObject {
         guard let lastRefreshAt else {
             return "Never"
         }
-        return relativeFormatter.localizedString(for: lastRefreshAt, relativeTo: now)
+        return Self.refreshText(for: lastRefreshAt, relativeTo: now, formatter: relativeFormatter)
+    }
+
+    /// When a list last refreshed, such as "1 min. ago". Under a second reads "just now", since the formatter
+    /// writes "in 0 sec." for no time at all, and the refresh can land a moment after `now`.
+    static func refreshText(for date: Date, relativeTo now: Date, formatter: RelativeDateTimeFormatter) -> String {
+        guard now.timeIntervalSince(date) >= 1 else { return "just now" }
+        return formatter.localizedString(for: date, relativeTo: now)
     }
 
     func saveToken(_ token: String) {
@@ -214,6 +230,7 @@ final class PRMonitor: ObservableObject {
         prefetchTask?.cancel()
         prefetchTask = nil
         pendingPrefetch = [:]
+        refreshProgress = nil
         lastReviewStatuses = [:]
         knownReviewRequestIDs = nil
         cache.removeDetails()
@@ -250,6 +267,9 @@ final class PRMonitor: ObservableObject {
         let session = credentialSession
         let loadCount = listLoadCount
         let engine = syncEngine
+        listRefreshesInFlight += 1
+        // Ends after the rows are queued to preload, so the refresh button sees no gap before the counts.
+        defer { listRefreshesInFlight -= 1 }
         await engine.sendPendingChanges()
         async let reviewRequests: Void? = try? engine.request(.reviewRequests, priority: priority, maxAge: maxAge,
                                                               joinsLoadInFlight: true)
@@ -265,6 +285,28 @@ final class PRMonitor: ObservableObject {
         case .reviews: return isReviewRequestsLoading
         case .history: return isHistoryLoading
         }
+    }
+
+    /// What the refresh button says while the pull requests of My PRs and To Review preload, such as
+    /// "Refreshing My PRs 2/10…". Nil before the lists have loaded and once preloading is done, so the button
+    /// shows when the list last updated. History has no count, so it is always nil there.
+    var refreshProgressText: String? {
+        guard selectedTab != .history else { return nil }
+        return refreshProgress?.text(selectedTab: selectedTab)
+    }
+
+    /// Whether the selected tab is refreshing at all, from its lists starting to load until their rows have
+    /// preloaded. The refresh button holds its text and width this whole time.
+    var isSelectedTabBusy: Bool {
+        guard selectedTab != .history else { return isHistoryLoading }
+        return isRefreshingLists || isLoading || isReviewRequestsLoading || refreshProgressText != nil
+    }
+
+    /// Whether the refresh button runs its refresh animation: History while its page loads, and My PRs and To Review
+    /// while their pull requests preload, which is when there is a count to show. A timer tick that finds the lists
+    /// fresh loads nothing, so it leaves the button still.
+    var isSelectedTabRefreshing: Bool {
+        selectedTab == .history ? isHistoryLoading : refreshProgressText != nil
     }
 
     func refreshSelectedTab() async {
@@ -333,13 +375,18 @@ final class PRMonitor: ObservableObject {
     /// The queue takes the two lists' rows in turn from the top, so the rows each tab selects first load first.
     private func prefetchDetails() {
         guard loadSessionToken() != nil else { return }
+        var progress = refreshProgress ?? RefreshProgress()
         for (position, row) in prRows.enumerated() {
             queuePrefetch(row.reference, updatedAt: row.updatedAt, position: position)
+            progress.add(row.reference, to: .myPullRequests)
         }
         for (position, row) in reviewRequests.rows.enumerated() {
             queuePrefetch(row.reference, updatedAt: row.updatedAt, position: position)
+            progress.add(row.reference, to: .reviewRequests)
         }
-        guard prefetchTask == nil, !pendingPrefetch.isEmpty else { return }
+        guard !pendingPrefetch.isEmpty else { return }
+        refreshProgress = progress
+        guard prefetchTask == nil else { return }
         let session = credentialSession
         prefetchTask = Task { @MainActor [weak self] in
             await self?.prefetch(session: session)
@@ -355,7 +402,10 @@ final class PRMonitor: ObservableObject {
     /// Asks the sync engine for each queued pull request in the background, one pull request at a time.
     private func prefetch(session: UUID) async {
         defer {
-            if session == credentialSession { prefetchTask = nil }
+            if session == credentialSession {
+                prefetchTask = nil
+                refreshProgress = nil
+            }
         }
         while let reference = PendingPrefetch.next(in: pendingPrefetch),
               let updatedAt = pendingPrefetch.removeValue(forKey: reference)?.updatedAt {
@@ -378,6 +428,7 @@ final class PRMonitor: ObservableObject {
                     return
                 }
             }
+            refreshProgress?.complete(reference)
         }
     }
 
@@ -434,9 +485,14 @@ final class PRMonitor: ObservableObject {
         let state = cache.state(of: .open)
         openPullRequestsSSOAuthorizationURL = cache.openSSOAuthorizationURL
         isLoading = state.isLoading
+        noteListLoading(state.isLoading)
         // Keep the last list on screen; the error shows above it until a refresh succeeds.
         lastError = state.lastError
         lastRefreshAt = state.fetchedAt
+    }
+
+    private func noteListLoading(_ isLoading: Bool) {
+        if isLoading && listRefreshesInFlight > 0 { isRefreshingLists = true }
     }
 
     /// Shows the History page asked for, as last loaded. A failed load empties it.
@@ -516,6 +572,7 @@ final class PRMonitor: ObservableObject {
     private func showReviewRequests() {
         let state = cache.state(of: .reviewRequests)
         isReviewRequestsLoading = state.isLoading
+        noteListLoading(state.isLoading)
         // Keep the last list on screen; the error shows above it until a refresh succeeds.
         lastReviewRequestsError = state.lastError
         lastReviewRequestsRefreshAt = state.fetchedAt

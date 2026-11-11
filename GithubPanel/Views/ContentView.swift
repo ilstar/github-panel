@@ -785,13 +785,6 @@ struct ContentView: View {
         )
     }
 
-    private var lastUpdatedView: some View {
-        Text("Updated \(lastUpdatedText)")
-            .font(.caption)
-            .foregroundStyle(.tertiary)
-            .frame(width: 110, alignment: .trailing)
-    }
-
     private var lastUpdatedText: String {
         let lastRefreshAt: Date?
         switch monitor.selectedTab {
@@ -805,13 +798,15 @@ struct ContentView: View {
         guard let lastRefreshAt else {
             return "Never"
         }
-        return relativeFormatter.localizedString(for: lastRefreshAt, relativeTo: now)
+        return PRMonitor.refreshText(for: lastRefreshAt, relativeTo: now, formatter: relativeFormatter)
     }
 
     private var refreshPill: some View {
-        RefreshPill(isLoading: monitor.isSelectedTabLoading,
-                    isEnabled: refreshIsEnabled,
-                    lastUpdatedView: lastUpdatedView) {
+        RefreshPill(isBusy: monitor.isSelectedTabBusy,
+                    isRefreshing: monitor.isSelectedTabRefreshing,
+                    progressText: monitor.refreshProgressText,
+                    updatedText: "Updated \(lastUpdatedText)",
+                    isEnabled: refreshIsEnabled) {
             refreshSelectedTab()
         }
     }
