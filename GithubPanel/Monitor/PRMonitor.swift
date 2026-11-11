@@ -1,6 +1,8 @@
 import Foundation
 import Combine
-/// Shows the lists the sync engine loads into `cache`, and keeps the settings, notifications, check hooks,
+import GRDB
+/// Shows the lists the sync engine loads into `cache`, reading their rows back from the store so they always match
+/// what a restart would show, and keeps the settings, notifications, check hooks,
 /// For Later and hidden review requests. It asks the engine for everything it shows rather than fetching itself.
 @MainActor
 final class PRMonitor: ObservableObject {
@@ -102,6 +104,9 @@ final class PRMonitor: ObservableObject {
     private var listRefreshesInFlight = 0 {
         didSet { isRefreshingLists = listRefreshesInFlight > 0 }
     }
+    /// The lists as the store holds them, which the rows show.
+    private var savedLists = LocalStore.SavedPullRequestLists()
+    private var listObservation: AnyDatabaseCancellable?
     /// How many times My PRs or To Review loaded, so a timer tick that loaded neither preloads nothing.
     private var listLoadCount = 0
     /// The History page shown, or being loaded to replace it.
@@ -164,9 +169,11 @@ final class PRMonitor: ObservableObject {
             defaults.removeObject(forKey: DefaultsKeys.legacyCachedReviewRequests)
         }
         // The lists saved by the last run show until the first refresh replaces them. They post no notifications.
+        // From then on, every write to the saved lists shows, whichever code made it.
+        showSavedLists()
+        listObservation = self.store.observePullRequestListChanges { [weak self] in self?.showSavedLists() }
         showOpenPullRequests()
         showReviewRequests()
-        showHistory()
         listSubscription = cache.listUpdates.sink { [weak self] change in self?.listChanged(change) }
     }
 
@@ -206,7 +213,7 @@ final class PRMonitor: ObservableObject {
         setHistoryRows([])
         showOpenPullRequests()
         showReviewRequests()
-        showHistory()
+        showSavedLists()
     }
 
     private func invalidateLogin() {
@@ -438,13 +445,25 @@ final class PRMonitor: ObservableObject {
             showReviewRequests()
         case .loaded(.history(let page)), .changed(.history(let page)):
             guard page == requestedHistoryPage else { return }
-            showHistory()
         }
+        // Read back what the cache just saved rather than showing its own copy, so the rows match the store. Reads
+        // wait for the writes queued before them, so this shows the change right away.
+        showSavedLists()
     }
 
+    /// Shows the rows of the lists as the store holds them now. Always reading the latest, rather than a value the
+    /// observation fetched earlier, means the rows never go back to an older state.
+    private func showSavedLists() {
+        let lists = store.pullRequestLists()
+        savedLists = lists
+        setPRRows(lists.open ?? [])
+        showReviewRequestRows()
+        showHistory()
+    }
+
+    /// Shows My PRs' loading state, error and refresh time. Its rows come from `showSavedLists`.
     private func showOpenPullRequests() {
         let state = cache.state(of: .open)
-        setPRRows(cache.open ?? [])
         openPullRequestsSSOAuthorizationURL = cache.openSSOAuthorizationURL
         isLoading = state.isLoading
         // Keep the last list on screen; the error shows above it until a refresh succeeds.
@@ -454,7 +473,7 @@ final class PRMonitor: ObservableObject {
 
     /// Shows the History page asked for, as last loaded. A failed load empties it.
     private func showHistory() {
-        let page = cache.historyPage(requestedHistoryPage)
+        let page = savedLists.historyPage(requestedHistoryPage)
         let state = cache.state(of: .history(page: requestedHistoryPage))
         isHistoryLoading = state.isLoading
         lastHistoryError = state.lastError
@@ -525,16 +544,20 @@ final class PRMonitor: ObservableObject {
         setReviewRequests(reviewRequests.removing { $0.id == row.id })
     }
 
-    /// Shows the loaded review requests that are not hidden. Forgets hidden requests that changed
-    /// or are no longer waiting on me, so they show again if they come back.
+    /// Shows To Review's loading state, error and refresh time. Its rows come from `showSavedLists`.
     private func showReviewRequests() {
         let state = cache.state(of: .reviewRequests)
         isReviewRequestsLoading = state.isLoading
         // Keep the last list on screen; the error shows above it until a refresh succeeds.
         lastReviewRequestsError = state.lastError
         lastReviewRequestsRefreshAt = state.fetchedAt
+    }
+
+    /// Shows the saved review requests that are not hidden. Forgets hidden requests that changed
+    /// or are no longer waiting on me, so they show again if they come back.
+    private func showReviewRequestRows() {
         // Before any list loads there is nothing to tell which hidden requests are gone.
-        guard let fetchedReviewRequests = cache.reviewRequests else { return setReviewRequests(.empty) }
+        guard let fetchedReviewRequests = savedLists.reviewRequests else { return setReviewRequests(.empty) }
         let rows = Dictionary(fetchedReviewRequests.rows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let stillHidden = hiddenReviewRequests.filter { id, hidden in rows[id].map(hidden.hides) ?? false }
         if stillHidden != hiddenReviewRequests {

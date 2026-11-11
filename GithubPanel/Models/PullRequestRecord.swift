@@ -74,6 +74,32 @@ struct PullRequestListMember: Equatable {
     var reviewGroup: ReviewRequestGroup?
 }
 
+/// The rows each list shows, from its members and their records. The cache and the store's saved lists both build
+/// their rows here, so the lists on screen match what a restart would show.
+enum PullRequestListRows {
+    static func open(_ members: [PullRequestListMember]?,
+                     records: [PullRequestReference: PullRequestRecord]) -> [PullRequestRow]? {
+        members?.compactMap { records[$0.reference]?.shownOpenRow }
+    }
+
+    static func reviewRequests(_ members: [PullRequestListMember]?, info: PullRequestListInfo?,
+                               records: [PullRequestReference: PullRequestRecord]) -> ReviewRequests? {
+        guard let members else { return nil }
+        func rows(in group: ReviewRequestGroup) -> [ReviewRequestRow] {
+            members.filter { $0.reviewGroup == group }.compactMap { records[$0.reference]?.shownReviewRequestRow }
+        }
+        return ReviewRequests(fromMe: rows(in: .fromMe), fromMyTeams: rows(in: .fromMyTeams),
+                              ssoAuthorizationURL: info?.ssoAuthorizationURL)
+    }
+
+    static func historyPage(_ page: Int, members: [PullRequestListMember]?, info: PullRequestListInfo?,
+                            records: [PullRequestReference: PullRequestRecord]) -> PullRequestHistoryPage? {
+        guard let members, let info, let perPage = info.perPage, let totalCount = info.totalCount else { return nil }
+        return PullRequestHistoryPage(rows: members.compactMap { records[$0.reference]?.historyRow },
+                                      page: info.page ?? page, perPage: perPage, totalCount: totalCount)
+    }
+}
+
 /// What a list holds besides its pull requests.
 struct PullRequestListInfo: Equatable, Codable {
     var ssoAuthorizationURL: URL?
