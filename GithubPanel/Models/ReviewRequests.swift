@@ -134,6 +134,8 @@ struct ReviewRequestsPage: Equatable {
     let page: Int
     let pageCount: Int
     let totalCount: Int
+    let fromMeTotal: Int
+    let fromMyTeamsTotal: Int
     let fromMe: [ReviewRequestRow]
     let fromMyTeams: [ReviewRequestRow]
     private let start: Int
@@ -141,6 +143,8 @@ struct ReviewRequestsPage: Equatable {
     /// `page` is clamped, so a page past the end shows the last one after rows go away.
     init(requests: ReviewRequests, page: Int, size: Int = ReviewRequestsPage.defaultSize) {
         let size = max(size, 1)
+        fromMeTotal = requests.fromMe.count
+        fromMyTeamsTotal = requests.fromMyTeams.count
         totalCount = requests.rows.count
         pageCount = max(1, (totalCount + size - 1) / size)
         self.page = min(max(page, 1), pageCount)
@@ -149,6 +153,28 @@ struct ReviewRequestsPage: Equatable {
         let fromMeCount = requests.fromMe.count
         fromMe = Array(requests.fromMe[min(start, fromMeCount)..<min(end, fromMeCount)])
         fromMyTeams = Array(requests.fromMyTeams[max(start - fromMeCount, 0)..<max(end - fromMeCount, 0)])
+    }
+
+    /// Rows already paged by SQLite; only these rows are retained by the UI.
+    init(loaded: ReviewRequests, page: Int, fromMeTotal: Int, fromMyTeamsTotal: Int) {
+        self.fromMeTotal = fromMeTotal
+        self.fromMyTeamsTotal = fromMyTeamsTotal
+        totalCount = fromMeTotal + fromMyTeamsTotal
+        pageCount = max(1, (totalCount + Self.defaultSize - 1) / Self.defaultSize)
+        self.page = min(max(page, 1), pageCount)
+        start = (self.page - 1) * Self.defaultSize
+        fromMe = loaded.fromMe
+        fromMyTeams = loaded.fromMyTeams
+    }
+
+    func total(in group: ReviewRequestGroup) -> Int {
+        group == .fromMe ? fromMeTotal : fromMyTeamsTotal
+    }
+
+    func showsGroup(_ group: ReviewRequestGroup) -> Bool {
+        if !rows(in: group).isEmpty { return true }
+        guard total(in: group) == 0 else { return false }
+        return group == .fromMe ? page == 1 : page == pageCount
     }
 
     /// The page that shows the request with `id`, or nil when it is not in `requests`.

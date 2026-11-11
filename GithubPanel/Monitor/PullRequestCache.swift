@@ -1,163 +1,101 @@
 import Foundation
 import Combine
 
-/// Everything loaded so far about pull requests, one record per pull request, as the `pull_request` table saves it:
-/// the row each list returned, the newest status any load saw, and the detail once it loads. The sync engine fills it,
-/// `PRMonitor` shows the lists, and the detail windows show the details.
-///
-/// Every list holding a pull request shows the same status, so a detail or checks load newer than the list updates
-/// its row. The details keep the most recently used ones. It also holds the changes the user made that GitHub hasn't
-/// confirmed, which show on top of the details.
-///
-/// With a store, records, lists and changes are saved there and restored when the app starts again. Lists restore
-/// right away, and when they last loaded comes from `sync_state`. Details restore in the background.
+/// Reads and writes PRs in SQLite and publishes changes to the UI. This facade holds no PR rows or details:
+/// the list view owns its visible page, and each open detail view owns the content it displays.
+/// Pending edits stay overlaid until GitHub confirms them. Reads wait for earlier queued writes, so a newly
+/// preloaded PR is available immediately without a separate memory cache or a network request.
 @MainActor
 final class PullRequestCache {
     struct ListState: Equatable {
-        /// When GitHub last returned the list.
         var fetchedAt: Date?
         var lastError: String?
         var isLoading = false
     }
 
     enum ListChange: Equatable {
-        /// GitHub returned the list.
         case loaded(PullRequestListKind)
-        /// Its rows changed some other way, or it started or stopped loading, or failed.
         case changed(PullRequestListKind)
     }
 
-    /// A list's rows or state changed.
     let listUpdates = PassthroughSubject<ListChange, Never>()
-    /// The shown detail, with its pending changes applied, each time it or its changes change.
     let detailUpdates = PassthroughSubject<(PullRequestReference, PullRequestDetailEntry), Never>()
-
-    /// How many details outside My PRs and To Review are kept.
-    let capacity: Int
-    /// The token's login, from My PRs or the engine's lookup, so the viewer's unsent comments show as theirs. Not saved.
     var viewerLogin: String?
-    /// Set when the last My PRs load left some out because the token isn't SSO-authorized. Not saved.
     private(set) var openSSOAuthorizationURL: URL?
-    /// The pull requests a list holds or whose detail is kept.
-    private(set) var records: [PullRequestReference: PullRequestRecord] = [:]
-
-    // MARK: Lists
-
-    /// Each loaded list, in order.
-    private var members: [PullRequestListKind: [PullRequestListMember]] = [:]
-    private var infos: [PullRequestListKind: PullRequestListInfo] = [:]
+    var reviewRequestsSSOAuthorizationURL: URL? { store.pullRequestListInfo(.reviewRequests)?.ssoAuthorizationURL }
     private var listStates: [PullRequestListKind: ListState] = [:]
-    /// The loads running for each list. A list is loading while it has any.
     private var loads: [PullRequestListKind: Set<UUID>] = [:]
-
-    // MARK: Details
-
-    /// Pull requests with a detail, from least to most recently used.
-    private var order: [PullRequestReference] = []
-    /// When each detail was last used, saved with it so the order survives a restart.
-    private var lastUsedAt: [PullRequestReference: Date] = [:]
-    private var lastUseTime = Date.distantPast
-    /// Changes GitHub hasn't confirmed, oldest first.
     private var pending: [PendingChange] = []
     private var lastChangeTime = Date.distantPast
-
-    private let store: LocalStore?
-    private let saveDelay: TimeInterval
-    private var saveTask: Task<Void, Never>?
+    private let store: LocalStore
     private var loadTask: Task<Void, Never>?
-    /// The last detail write sent to the store. Each write waits for the one before it, so they land in order.
     private var writeTask: Task<Void, Never>?
-    /// Details stored, used, or evicted since the last save.
-    private var changed: Set<PullRequestReference> = []
-    private var used: Set<PullRequestReference> = []
-    private var removed: Set<PullRequestReference> = []
-    /// Bumped by `removeDetails`, so a load or save started before it does not bring the old details back.
     private var generation = 0
 
-    init(capacity: Int = 100, store: LocalStore? = nil, saveDelay: TimeInterval = 1) {
-        self.capacity = capacity
+    init(store: LocalStore = .inMemory()) {
         self.store = store
-        self.saveDelay = saveDelay
-        restoreListsFromStore()
-        restoreDetailsFromStore()
+        openSSOAuthorizationURL = store.pullRequestListInfo(.open)?.ssoAuthorizationURL
+        restorePendingChanges()
     }
 
     // MARK: - Lists
 
-    /// The lists as this cache holds them. The lists on screen show the saved ones instead; see `PRMonitor`.
-    var open: [PullRequestRow]? {
-        PullRequestListRows.open(members[.open], records: records)
-    }
-
-    var reviewRequests: ReviewRequests? {
-        PullRequestListRows.reviewRequests(members[.reviewRequests], info: infos[.reviewRequests], records: records)
-    }
+    var open: [PullRequestRow]? { store.pullRequestLists(kinds: [.open]).open }
+    var reviewRequests: ReviewRequests? { store.pullRequestLists(kinds: [.reviewRequests]).reviewRequests }
 
     func historyPage(_ page: Int) -> PullRequestHistoryPage? {
-        PullRequestListRows.historyPage(page, members: members[.history(page: page)],
-                                        info: infos[.history(page: page)], records: records)
+        store.pullRequestLists(kinds: [.history(page: page)]).historyPage(page)
     }
 
     func state(of kind: PullRequestListKind) -> ListState {
         var state = listStates[kind] ?? ListState()
+        if state.fetchedAt == nil, holds(kind) {
+            state.fetchedAt = store.syncStateNow(for: kind.key)?.fetchedAt
+                ?? store.pullRequestListSavedAt(kind)
+        }
         state.isLoading = !(loads[kind] ?? []).isEmpty
         return state
     }
 
-    /// Whether the list has loaded, so a fresh `sync_state` still counts.
-    func holds(_ kind: PullRequestListKind) -> Bool {
-        members[kind] != nil
-    }
+    func holds(_ kind: PullRequestListKind) -> Bool { store.holdsPullRequestList(kind) }
 
-    /// Saves My PRs. `observedAt` is when the request was sent, which orders it against other loads' statuses.
     func store(_ result: OpenPullRequests, fetchedAt: Date, observedAt: Date? = nil) {
         viewerLogin = result.login
         openSSOAuthorizationURL = result.ssoAuthorizationURL
-        let observedAt = observedAt ?? fetchedAt
+        let records = Dictionary(result.rows.map { row in
+            (row.reference, PullRequestRecord(openRow: row, status: row.status(observedAt: observedAt ?? fetchedAt)))
+        }, uniquingKeysWith: { first, _ in first })
         saveList(.open, members: result.rows.map { PullRequestListMember(reference: $0.reference) },
-                 info: PullRequestListInfo(ssoAuthorizationURL: result.ssoAuthorizationURL), fetchedAt: fetchedAt) {
-            for row in result.rows {
-                self.records[row.reference, default: PullRequestRecord()].openRow = row
-                self.records[row.reference]?.observe(row.status(observedAt: observedAt))
-            }
-        }
+                 info: PullRequestListInfo(ssoAuthorizationURL: result.ssoAuthorizationURL),
+                 fetchedAt: fetchedAt, records: records)
     }
 
     func store(_ requests: ReviewRequests, fetchedAt: Date, observedAt: Date? = nil) {
-        let observedAt = observedAt ?? fetchedAt
         let members = ReviewRequestGroup.allCases.flatMap { group in
             requests.rows(in: group).map { PullRequestListMember(reference: $0.reference, reviewGroup: group) }
         }
+        let records = Dictionary(requests.rows.map { row in
+            (row.reference, PullRequestRecord(reviewRequestRow: row, status: row.status(observedAt: observedAt ?? fetchedAt)))
+        }, uniquingKeysWith: { first, _ in first })
         saveList(.reviewRequests, members: members,
-                 info: PullRequestListInfo(ssoAuthorizationURL: requests.ssoAuthorizationURL), fetchedAt: fetchedAt) {
-            for row in requests.rows {
-                self.records[row.reference, default: PullRequestRecord()].reviewRequestRow = row
-                if let status = row.status(observedAt: observedAt) { self.records[row.reference]?.observe(status) }
-            }
-        }
+                 info: PullRequestListInfo(ssoAuthorizationURL: requests.ssoAuthorizationURL),
+                 fetchedAt: fetchedAt, records: records)
     }
 
     func store(_ page: PullRequestHistoryPage, asPage number: Int, fetchedAt: Date) {
+        let records = Dictionary(page.rows.map { ($0.reference, PullRequestRecord(historyRow: $0)) },
+                                 uniquingKeysWith: { first, _ in first })
         saveList(.history(page: number), members: page.rows.map { PullRequestListMember(reference: $0.reference) },
                  info: PullRequestListInfo(page: page.page, perPage: page.perPage, totalCount: page.totalCount),
-                 fetchedAt: fetchedAt) {
-            for row in page.rows {
-                self.records[row.reference, default: PullRequestRecord()].historyRow = row
-            }
-        }
+                 fetchedAt: fetchedAt, records: records)
     }
 
-    /// Takes a merged pull request off My PRs until the next load.
     func removeOpenPullRequest(id: String) {
-        guard let rows = members[.open],
-              let member = rows.first(where: { records[$0.reference]?.openRow?.id == id }) else { return }
-        members[.open] = rows.filter { $0 != member }
-        dropRecordIfUnused(member.reference)
-        if let fetchedAt = listStates[.open]?.fetchedAt { saveListToStore(.open, savedAt: fetchedAt) }
+        guard let row = open?.first(where: { $0.id == id }) else { return }
+        store.removeOpenPullRequest(row.reference)
         listUpdates.send(.changed(.open))
     }
 
-    /// Shows an error above the list until it loads again, such as a failed load or a failed merge from a row.
     func showError(_ message: String, on kind: PullRequestListKind) {
         listStates[kind, default: ListState()].lastError = message
         listUpdates.send(.changed(kind))
@@ -174,172 +112,81 @@ final class PullRequestCache {
         listUpdates.send(.changed(kind))
     }
 
-    /// Forgets the running loads, such as when the token changes. Their results are dropped.
     func stopAllLoading() {
         let kinds = loads.filter { !$0.value.isEmpty }.keys
         loads = [:]
         for kind in kinds { listUpdates.send(.changed(kind)) }
     }
 
-    /// Empties the lists and deletes the saved ones, such as when the token is removed. Details stay until
-    /// `removeDetails`.
     func removeLists() {
         viewerLogin = nil
         openSSOAuthorizationURL = nil
-        members = [:]
-        infos = [:]
         listStates = [:]
         loads = [:]
-        for reference in Array(records.keys) {
-            records[reference]?.openRow = nil
-            records[reference]?.reviewRequestRow = nil
-            records[reference]?.historyRow = nil
-            records[reference]?.status = nil
-            dropRecordIfUnused(reference)
-        }
-        evictIfNeeded()
-        store?.removePullRequestLists()
+        store.removePullRequestLists()
     }
 
-    /// Replaces a list, updating its pull requests' records with `update`, and drops records nothing needs anymore.
     private func saveList(_ kind: PullRequestListKind, members: [PullRequestListMember], info: PullRequestListInfo,
-                          fetchedAt: Date, update: () -> Void) {
-        update()
-        let previous = self.members[kind] ?? []
-        self.members[kind] = members
-        infos[kind] = info
-        evictIfNeeded()
-        for member in previous { dropRecordIfUnused(member.reference) }
+                          fetchedAt: Date, records: [PullRequestReference: PullRequestRecord]) {
+        store.savePullRequestList(.init(savedAt: fetchedAt, info: info, members: members), as: kind, records: records)
         listStates[kind, default: ListState()].fetchedAt = fetchedAt
         listStates[kind]?.lastError = nil
-        saveListToStore(kind, savedAt: fetchedAt)
         listUpdates.send(.loaded(kind))
-        // Another list showing the same pull requests shows their new status too.
-        let references = Set(members.map(\.reference))
-        sendListChanges(for: references, except: kind)
-    }
-
-    private func saveListToStore(_ kind: PullRequestListKind, savedAt: Date) {
-        guard let store, let members = members[kind], let info = infos[kind] else { return }
-        let held = Dictionary(members.compactMap { member in records[member.reference].map { (member.reference, $0) } },
-                              uniquingKeysWith: { first, _ in first })
-        store.savePullRequestList(LocalStore.SavedPullRequestList(savedAt: savedAt, info: info, members: members),
-                                  as: kind, records: held)
-    }
-
-    private func sendListChanges(for references: Set<PullRequestReference>, except excluded: PullRequestListKind? = nil) {
-        for (kind, members) in members where kind != excluded
-            && members.contains(where: { references.contains($0.reference) }) {
-            listUpdates.send(.changed(kind))
+        for other in store.listKinds(overlapping: kind) {
+            listUpdates.send(.changed(other))
         }
     }
 
-    private func isListed(_ reference: PullRequestReference) -> Bool {
-        members.values.contains { $0.contains { $0.reference == reference } }
-    }
-
-    /// Drops a record that no list holds and that has no detail.
-    private func dropRecordIfUnused(_ reference: PullRequestReference) {
-        guard let record = records[reference], record.detail == nil, !isListed(reference) else { return }
-        records[reference] = nil
-    }
-
-    /// Notes the head commit and checks a detail or checks load sent at `sentAt` saw. Every list holding the pull
-    /// request shows it if it's newer than what they last loaded.
     private func observe(_ status: PullRequestStatus, for reference: PullRequestReference) {
-        guard var record = records[reference] else { return }
-        let before = record.status
-        record.observe(status)
-        records[reference] = record
-        guard record.status != before, let status = record.status else { return }
-        store?.savePullRequestStatus(status, for: reference)
-        sendListChanges(for: [reference])
-    }
-
-    private func restoreListsFromStore() {
-        guard let store else { return }
-        let saved = store.pullRequestLists()
-        records = saved.records
-        for (kind, list) in saved.lists {
-            members[kind] = list.members
-            infos[kind] = list.info
-            listStates[kind] = ListState(fetchedAt: savedFetchedAt(for: kind, savedAt: list.savedAt))
-        }
-    }
-
-    /// When the saved list last loaded, from `sync_state`. A token change clears that, so it falls back to when
-    /// the list was saved.
-    private func savedFetchedAt(for kind: PullRequestListKind, savedAt: Date) -> Date {
-        store?.syncStateNow(for: kind.key)?.fetchedAt ?? savedAt
+        store.savePullRequestStatus(status, for: reference)
+        for kind in store.listKinds(containing: reference) { listUpdates.send(.changed(kind)) }
     }
 
     // MARK: - Details
 
-    /// How many details are kept, including the preloaded lists.
-    var detailCount: Int { order.count }
+    var detailCount: Int { store.pullRequestDetailCount }
 
-    /// The pull request's detail as GitHub last returned it.
     func entry(for reference: PullRequestReference) -> PullRequestDetailEntry? {
-        guard let entry = records[reference]?.detail else { return nil }
-        touch(reference)
-        return entry
+        store.pullRequestDetail(reference)
     }
 
-    /// The pull request's detail as the detail view shows it: as GitHub last returned it, with its pending and
-    /// failed changes applied in order.
     func shownEntry(for reference: PullRequestReference) -> PullRequestDetailEntry? {
         entry(for: reference).map { PendingChange.apply(pendingChanges(for: reference), to: $0) }
     }
 
-    /// Stores a pull request's detail and files, keeping any comments already cached for it. With `sentAt`, when the
-    /// request that loaded it was sent, the lists show its head commit too if it's newer than theirs.
     func store(_ content: PullRequestDetailContent, sentAt: Date? = nil) {
         let reference = content.detail.reference
-        var entry = records[reference]?.detail ?? PullRequestDetailEntry(content: content)
+        var entry = entry(for: reference) ?? PullRequestDetailEntry(content: content)
         if entry.content.detail.headSHA != content.detail.headSHA {
             entry.checks = nil
             entry.filesSinceLastReview = nil
         }
-        if entry.content.detail.lastReviewedSHA != content.detail.lastReviewedSHA {
-            entry.filesSinceLastReview = nil
-        }
+        if entry.content.detail.lastReviewedSHA != content.detail.lastReviewedSHA { entry.filesSinceLastReview = nil }
         entry.content = content
-        records[reference, default: PullRequestRecord()].detail = entry
-        touch(reference)
-        evictIfNeeded()
-        publish(reference)
-        if let sentAt, records[reference] != nil {
-            // A new head shows in the lists right away, with its checks pending until they load.
-            observe(PullRequestStatus(headSHA: content.detail.headSHA, checkState: nil, observedAt: sentAt),
-                    for: reference)
+        save(entry, for: reference)
+        if let sentAt {
+            observe(PullRequestStatus(headSHA: content.detail.headSHA, checkState: nil, observedAt: sentAt), for: reference)
         }
     }
 
-    /// Stores a pull request's comments. Ignored until its detail is cached, since comments alone cannot be shown.
-    /// Returns whether they were stored, as do the other stores below.
     @discardableResult
     func store(_ comments: PullRequestComments, for reference: PullRequestReference,
                limits: PullRequestCommentLimits = PullRequestCommentLimits()) -> Bool {
-        guard records[reference]?.detail != nil else { return false }
-        records[reference]?.detail?.comments = comments
-        records[reference]?.detail?.commentLimits = limits
-        touch(reference)
-        publish(reference)
+        guard var entry = entry(for: reference) else { return false }
+        entry.comments = comments
+        entry.commentLimits = limits
+        save(entry, for: reference)
         return true
     }
 
-    /// Stores the checks on `headSHA`, ignored unless it's still the detail's head. With `sentAt`, the lists show
-    /// what they add up to if it's newer than theirs.
     @discardableResult
     func store(_ checks: PullRequestChecks, for reference: PullRequestReference, headSHA: String,
                sentAt: Date? = nil) -> Bool {
-        guard records[reference]?.detail?.content.detail.headSHA == headSHA else { return false }
-        records[reference]?.detail?.checks = checks
-        touch(reference)
-        publish(reference)
+        guard var entry = entry(for: reference), entry.content.detail.headSHA == headSHA else { return false }
+        entry.checks = checks
+        save(entry, for: reference)
         if let sentAt {
-            observe(PullRequestStatus(headSHA: headSHA, checkState: checks.checkState, observedAt: sentAt),
-                    for: reference)
+            observe(PullRequestStatus(headSHA: headSHA, checkState: checks.checkState, observedAt: sentAt), for: reference)
         }
         return true
     }
@@ -347,47 +194,31 @@ final class PullRequestCache {
     @discardableResult
     func storeChanges(_ files: [PullRequestFile], for reference: PullRequestReference,
                       baseSHA: String, headSHA: String) -> Bool {
-        guard let detail = records[reference]?.detail?.content.detail,
-              detail.lastReviewedSHA == baseSHA, detail.headSHA == headSHA else { return false }
-        records[reference]?.detail?.filesSinceLastReview = files
-        touch(reference)
-        publish(reference)
+        guard var entry = entry(for: reference), entry.content.detail.lastReviewedSHA == baseSHA,
+              entry.content.detail.headSHA == headSHA else { return false }
+        entry.filesSinceLastReview = files
+        save(entry, for: reference)
         return true
     }
 
-    /// Whether the cached detail is missing, incomplete, or older than the list's `updatedAt`.
     func needsRefresh(_ reference: PullRequestReference, updatedAt: Date) -> Bool {
-        guard let entry = records[reference]?.detail,
-              entry.comments != nil,
-              entry.checks != nil,
+        guard let entry = entry(for: reference), entry.comments != nil, entry.checks != nil,
               let cachedAt = entry.content.detail.updatedAt else { return true }
         return updatedAt > cachedAt
     }
 
-    /// Empties the details and deletes the saved ones, such as when the account changes. Lists stay until
-    /// `removeLists`. Pending changes go too: they were made as the old account, so they aren't sent with a new token.
+    private func save(_ entry: PullRequestDetailEntry, for reference: PullRequestReference) {
+        writeTask = store.enqueuePullRequestDetails(.init(saved: [.init(entry: entry, lastUsedAt: Date())]))
+        // Publish the value already in hand. Only open views subscribe; the facade retains no copy.
+        detailUpdates.send((reference, PendingChange.apply(pendingChanges(for: reference), to: entry)))
+    }
+
     func removeDetails() {
-        for reference in order {
-            records[reference]?.detail = nil
-            dropRecordIfUnused(reference)
-        }
-        order = []
-        lastUsedAt = [:]
-        changed = []
-        used = []
-        removed = []
         pending = []
         generation += 1
         loadTask?.cancel()
         loadTask = nil
-        saveTask?.cancel()
-        saveTask = nil
-        if let store {
-            enqueueWrite {
-                await store.removeAllPullRequestDetails()
-                await store.removeAllPendingChanges()
-            }
-        }
+        writeTask = store.enqueueRemoveDetailsAndChanges()
     }
 
     // MARK: - Pending changes
@@ -522,15 +353,10 @@ final class PullRequestCache {
         guard let index = pending.firstIndex(where: { $0.id == id }) else { return }
         let change = pending.remove(at: index)
         let reference = change.reference
-        if applyingToEntry, let entry = records[reference]?.detail {
-            records[reference]?.detail = PendingChange.apply(change, to: entry)
-            changed.insert(reference)
-            removed.remove(reference)
-        }
+        let entry = entry(for: reference).map { applyingToEntry ? PendingChange.apply(change, to: $0) : $0 }
+        let saved = entry.map { [LocalStore.SavedPullRequestDetail(entry: $0, lastUsedAt: Date())] } ?? []
+        writeTask = store.enqueuePullRequestDetails(.init(saved: saved, confirmed: [id]))
         publishShown(reference)
-        saveTask?.cancel()
-        saveTask = nil
-        writeSnapshot(confirming: [id])
     }
 
     private func update(_ id: UUID, _ change: (inout PendingChange) -> Void) {
@@ -542,142 +368,29 @@ final class PullRequestCache {
 
     /// Changes are saved right away rather than after the save delay, so they survive the app quitting.
     private func savePending(_ changes: [PendingChange], removing removed: [UUID] = []) {
-        guard let store else { return }
-        enqueueWrite { await store.savePendingChanges(changes, removing: removed) }
+        writeTask = store.enqueuePendingChanges(changes, removing: removed)
     }
 
     private func publishShown(_ reference: PullRequestReference) {
-        guard let entry = records[reference]?.detail else { return }
+        guard let entry = entry(for: reference) else { return }
         detailUpdates.send((reference, PendingChange.apply(pendingChanges(for: reference), to: entry)))
     }
 
-    // MARK: - Saving details
+    /// Waits for pending changes from the last session; PR details are read individually on demand.
+    func waitForRestore() async { await loadTask?.value }
 
-    /// Waits for the saved details to load. Used by tests.
-    func waitForRestore() async {
-        await loadTask?.value
-    }
+    /// Writes are queued immediately. Tests can wait for the most recent write to complete.
+    func saveNow() async { await writeTask?.value }
 
-    /// Writes the details to the store now rather than after the save delay. Used by tests.
-    func saveNow() async {
-        saveTask?.cancel()
-        saveTask = nil
-        await writeSnapshot()?.value
-    }
-
-    /// Loads the saved details and changes off the main thread. Details stored meanwhile are newer, so they win.
-    private func restoreDetailsFromStore() {
-        guard let store else { return }
+    private func restorePendingChanges() {
         let generation = generation
-        loadTask = Task { [weak self] in
+        loadTask = Task { [weak self, store] in
             let changes = await store.pendingChanges()
-            let saved = await store.pullRequestDetails()
             guard let self, !Task.isCancelled, generation == self.generation else { return }
-            self.restore(changes)
-            self.restore(saved)
+            let ids = Set(self.pending.map(\.id))
+            self.pending = changes.filter { !ids.contains($0.id) } + self.pending
+            self.lastChangeTime = max(self.lastChangeTime, changes.last?.createdAt ?? .distantPast)
+            for reference in Set(changes.map(\.reference)) { self.publishShown(reference) }
         }
-    }
-
-    private func restore(_ changes: [PendingChange]) {
-        let ids = Set(pending.map(\.id))
-        // Changes saved by the last run were made before any this run.
-        pending = changes.filter { !ids.contains($0.id) } + pending
-        lastChangeTime = max(lastChangeTime, changes.last?.createdAt ?? .distantPast)
-        for reference in Set(changes.map(\.reference)) {
-            publishShown(reference)
-        }
-    }
-
-    private func restore(_ saved: [LocalStore.SavedPullRequestDetail]) {
-        let restored = saved.filter { records[$0.entry.content.detail.reference]?.detail == nil }
-        guard !restored.isEmpty else { return }
-        for saved in restored {
-            let reference = saved.entry.content.detail.reference
-            records[reference, default: PullRequestRecord()].detail = saved.entry
-            lastUsedAt[reference] = saved.lastUsedAt
-        }
-        // Saved details were used before anything this run, so they go first in the order.
-        order = restored.map(\.entry.content.detail.reference) + order
-        evictIfNeeded()
-        for saved in restored {
-            publish(saved.entry.content.detail.reference, save: false)
-        }
-    }
-
-    private func publish(_ reference: PullRequestReference, save: Bool = true) {
-        publishShown(reference)
-        if save {
-            changed.insert(reference)
-            removed.remove(reference)
-            scheduleSave()
-        }
-    }
-
-    /// Saves once after a burst of changes, such as a background refresh storing many pull requests.
-    private func scheduleSave() {
-        guard store != nil, saveTask == nil else { return }
-        let delay = saveDelay
-        saveTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-            guard !Task.isCancelled, let self else { return }
-            self.saveTask = nil
-            await self.writeSnapshot()?.value
-        }
-    }
-
-    /// Queues a write of what changed since the last one, deleting the `confirmed` pending changes with it.
-    @discardableResult
-    private func writeSnapshot(confirming confirmed: [UUID] = []) -> Task<Void, Never>? {
-        guard let store else { return nil }
-        var changes = LocalStore.PullRequestDetailChanges(removed: Array(removed), confirmed: confirmed)
-        for reference in changed {
-            guard let entry = records[reference]?.detail, let lastUsedAt = lastUsedAt[reference] else { continue }
-            changes.saved.append(LocalStore.SavedPullRequestDetail(entry: entry, lastUsedAt: lastUsedAt))
-        }
-        for reference in used.subtracting(changed) {
-            changes.used[reference] = lastUsedAt[reference]
-        }
-        changed = []
-        used = []
-        removed = []
-        return enqueueWrite { await store.savePullRequestDetails(changes) }
-    }
-
-    @discardableResult
-    private func enqueueWrite(_ write: @escaping () async -> Void) -> Task<Void, Never> {
-        let previous = writeTask
-        let task = Task {
-            await previous?.value
-            await write()
-        }
-        writeTask = task
-        return task
-    }
-
-    private func touch(_ reference: PullRequestReference) {
-        order.removeAll { $0 == reference }
-        order.append(reference)
-        // Always later than the last use, so details used in the same instant still restore in order.
-        lastUseTime = max(Date(), lastUseTime.addingTimeInterval(0.000_001))
-        lastUsedAt[reference] = lastUseTime
-        used.insert(reference)
-    }
-
-    private func evictIfNeeded() {
-        // Completed preloads must survive while their rows are selectable, even for lists larger than capacity.
-        let preloaded = Set((members[.open] ?? []).map(\.reference)
-            + (members[.reviewRequests] ?? []).map(\.reference))
-        var candidates = order.filter { !preloaded.contains($0) }
-        while candidates.count > capacity {
-            let reference = candidates.removeFirst()
-            order.removeAll { $0 == reference }
-            records[reference]?.detail = nil
-            dropRecordIfUnused(reference)
-            lastUsedAt.removeValue(forKey: reference)
-            changed.remove(reference)
-            used.remove(reference)
-            if store != nil { removed.insert(reference) }
-        }
-        if !removed.isEmpty { scheduleSave() }
     }
 }

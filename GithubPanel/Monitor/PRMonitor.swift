@@ -7,6 +7,10 @@ import GRDB
 @MainActor
 final class PRMonitor: ObservableObject {
     @Published private(set) var prRows: [PullRequestRow] = []
+    static let openPageSize = 50
+    @Published private(set) var openPage = 1
+    @Published private(set) var openTotalCount = 0
+    @Published private(set) var reviewPage = ReviewRequestsPage(requests: .empty, page: 1)
     /// My PRs parked under For Later, keyed by pull request ID. Also saved to defaults.
     @Published private(set) var forLaterIDs: Set<String> = []
     @Published private(set) var historyRows: [PullRequestHistoryRow] = []
@@ -101,8 +105,6 @@ final class PRMonitor: ObservableObject {
     private var didLoadSessionToken = false
     private var sessionToken: String?
     private var listSubscription: AnyCancellable?
-    /// The lists as the store holds them, which the rows show.
-    private var savedLists = LocalStore.SavedPullRequestLists()
     private var listObservation: AnyDatabaseCancellable?
     /// `refreshLists` calls running, which can overlap, such as a timer tick during a manual refresh.
     private var listRefreshesInFlight = 0 {
@@ -376,11 +378,11 @@ final class PRMonitor: ObservableObject {
     private func prefetchDetails() {
         guard loadSessionToken() != nil else { return }
         var progress = refreshProgress ?? RefreshProgress()
-        for (position, row) in prRows.enumerated() {
+        for (position, row) in (cache.open ?? []).enumerated() {
             queuePrefetch(row.reference, updatedAt: row.updatedAt, position: position)
             progress.add(row.reference, to: .myPullRequests)
         }
-        for (position, row) in reviewRequests.rows.enumerated() {
+        for (position, row) in (cache.reviewRequests ?? .empty).rows.enumerated() {
             queuePrefetch(row.reference, updatedAt: row.updatedAt, position: position)
             progress.add(row.reference, to: .reviewRequests)
         }
@@ -473,9 +475,10 @@ final class PRMonitor: ObservableObject {
     /// Shows the rows of the lists as the store holds them now. Always reading the latest, rather than a value the
     /// observation fetched earlier, means the rows never go back to an older state.
     private func showSavedLists() {
-        let lists = store.pullRequestLists()
-        savedLists = lists
-        setPRRows(lists.open ?? [])
+        let page = store.openPullRequestPage(openPage, size: Self.openPageSize)
+        if openPage != page.page { openPage = page.page }
+        if openTotalCount != page.total { openTotalCount = page.total }
+        setPRRows(page.rows)
         showReviewRequestRows()
         showHistory()
     }
@@ -497,7 +500,7 @@ final class PRMonitor: ObservableObject {
 
     /// Shows the History page asked for, as last loaded. A failed load empties it.
     private func showHistory() {
-        let page = savedLists.historyPage(requestedHistoryPage)
+        let page = store.pullRequestLists(kinds: [.history(page: requestedHistoryPage)]).historyPage(requestedHistoryPage)
         let state = cache.state(of: .history(page: requestedHistoryPage))
         isHistoryLoading = state.isLoading
         lastHistoryError = state.lastError
@@ -565,7 +568,7 @@ final class PRMonitor: ObservableObject {
     func hideReviewRequest(_ row: ReviewRequestRow) {
         hiddenReviewRequests[row.id] = HiddenReviewRequest(row)
         saveHiddenReviewRequests()
-        setReviewRequests(reviewRequests.removing { $0.id == row.id })
+        showReviewRequestRows()
     }
 
     /// Shows To Review's loading state, error and refresh time. Its rows come from `showSavedLists`.
@@ -578,18 +581,50 @@ final class PRMonitor: ObservableObject {
         lastReviewRequestsRefreshAt = state.fetchedAt
     }
 
-    /// Shows the saved review requests that are not hidden. Forgets hidden requests that changed
-    /// or are no longer waiting on me, so they show again if they come back.
-    private func showReviewRequestRows() {
-        // Before any list loads there is nothing to tell which hidden requests are gone.
-        guard let fetchedReviewRequests = savedLists.reviewRequests else { return setReviewRequests(.empty) }
-        let rows = Dictionary(fetchedReviewRequests.rows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let stillHidden = hiddenReviewRequests.filter { id, hidden in rows[id].map(hidden.hides) ?? false }
+    /// Reconciles hidden requests individually, then loads only the page being displayed.
+    private func showReviewRequestRows(page requestedPage: Int? = nil) {
+        guard cache.holds(.reviewRequests) else {
+            setReviewRequests(.empty)
+            reviewPage = ReviewRequestsPage(requests: .empty, page: 1)
+            return
+        }
+        let stillHidden = hiddenReviewRequests.filter { id, hidden in
+            guard let separator = id.lastIndex(of: "#"), let number = Int(id[id.index(after: separator)...]) else { return false }
+            let reference = PullRequestReference(repoFullName: String(id[..<separator]), number: number)
+            return store.reviewRequest(reference).map(hidden.hides) ?? false
+        }
         if stillHidden != hiddenReviewRequests {
             hiddenReviewRequests = stillHidden
             saveHiddenReviewRequests()
         }
-        setReviewRequests(fetchedReviewRequests.removing { stillHidden[$0.id] != nil })
+        let page = store.reviewRequestPage(requestedPage ?? reviewPage.page, excluding: Set(stillHidden.keys))
+        if page != reviewPage { reviewPage = page }
+        setReviewRequests(ReviewRequests(fromMe: page.fromMe, fromMyTeams: page.fromMyTeams,
+                                        ssoAuthorizationURL: cache.reviewRequestsSSOAuthorizationURL))
+    }
+
+    func showOpenPage(_ page: Int) {
+        openPage = page
+        showSavedLists()
+    }
+
+    var openPageRangeText: String {
+        guard openTotalCount > 0 else { return "No pull requests" }
+        let start = (openPage - 1) * Self.openPageSize + 1
+        return "\(start)-\(start + prRows.count - 1) of \(openTotalCount)"
+    }
+
+    func showReviewPage(_ number: Int) {
+        showReviewRequestRows(page: number)
+    }
+
+    var reviewRequestIDs: [String] {
+        store.pullRequestIDs(in: .reviewRequests, excluding: Set(hiddenReviewRequests.keys))
+    }
+
+    func showReviewPage(containing id: String) {
+        guard let index = reviewRequestIDs.firstIndex(of: id) else { return }
+        showReviewPage(index / ReviewRequestsPage.defaultSize + 1)
     }
 
     private func saveHiddenReviewRequests() {
@@ -808,9 +843,14 @@ extension PRMonitor {
     func showPullRequest(_ reference: PullRequestReference) -> Bool {
         guard listWindowCount > 0 else { return false }
         let tab: PullRequestTab?
-        if prRows.contains(where: { $0.reference == reference }) {
+        let lists = store.listKinds(containing: reference)
+        if lists.contains(.open) {
+            if let index = store.pullRequestIDs(in: .open).firstIndex(of: reference.id) {
+                showOpenPage(index / Self.openPageSize + 1)
+            }
             tab = .open
-        } else if reviewRequests.rows.contains(where: { $0.reference == reference }) {
+        } else if lists.contains(.reviewRequests), !hiddenReviewRequests.keys.contains(reference.id) {
+            showReviewPage(containing: reference.id)
             tab = .reviews
         } else {
             tab = nil

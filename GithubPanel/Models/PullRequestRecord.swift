@@ -31,15 +31,12 @@ struct PullRequestDetailEntry: Equatable, Codable {
     var filesSinceLastReview: [PullRequestFile]?
 }
 
-/// Everything loaded about one pull request: the row each list's query returned, its status, and its detail.
-/// Saved as one `pull_request` row.
+/// The list columns of a SQLite PR row. Detail blobs are read separately for open detail views.
 struct PullRequestRecord: Equatable {
     var openRow: PullRequestRow?
     var reviewRequestRow: ReviewRequestRow?
     var historyRow: PullRequestHistoryRow?
     var status: PullRequestStatus?
-    /// Nil until the detail loads, and again once it's evicted.
-    var detail: PullRequestDetailEntry?
 
     mutating func observe(_ status: PullRequestStatus) {
         self.status = self.status.map { $0.merging(status) } ?? status

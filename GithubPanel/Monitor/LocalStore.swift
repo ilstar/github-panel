@@ -7,6 +7,13 @@ import GRDB
 final class LocalStore: Sendable {
     let database: DatabaseQueue
 
+    /// Enqueues immediately so subsequent reads see the write. Encoding and disk I/O run on the database queue.
+    private func enqueueWrite(_ updates: @escaping @Sendable (Database) throws -> Void) -> Task<Void, Never> {
+        let (stream, continuation) = AsyncStream<Void>.makeStream()
+        database.asyncWrite(updates, completion: { _, _ in continuation.finish() })
+        return Task { for await _ in stream {} }
+    }
+
     /// Opens `database` and brings its tables up to date.
     init(database: DatabaseQueue) throws {
         try Self.migrator.migrate(database)
@@ -121,7 +128,7 @@ final class LocalStore: Sendable {
                 t.column("openRow", .blob)
                 t.column("reviewRequestRow", .blob)
                 t.column("historyRow", .blob)
-                // The detail: null until it loads, and again once it's evicted.
+                // The detail: null until it loads. Kept until an explicit account reset.
                 t.column("content", .blob)
                 t.column("comments", .blob)
                 t.column("commentLimits", .blob)
@@ -225,8 +232,125 @@ extension LocalStore {
     /// The saved lists and their pull requests, read on the calling thread so they show as soon as the app starts.
     /// Lists and rows that no longer decode, such as after an update changed their shape, are left out. Writes
     /// queued before the call land first, since the database runs reads and writes in order.
-    func pullRequestLists() -> SavedPullRequestLists {
-        (try? database.read(Self.pullRequestLists(in:))) ?? SavedPullRequestLists()
+    func pullRequestLists(kinds: Set<PullRequestListKind>? = nil) -> SavedPullRequestLists {
+        (try? database.read { try Self.pullRequestLists(in: $0, kinds: kinds) }) ?? SavedPullRequestLists()
+    }
+
+    /// Reads one list page. Details are never selected, and old History pages stay solely in SQLite.
+    func openPullRequestPage(_ page: Int, size: Int) -> (rows: [PullRequestRow], page: Int, total: Int) {
+        let size = max(1, size)
+        return (try? database.read { db in
+            let total = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM pull_request_list_member WHERE kind = ?",
+                                         arguments: [PullRequestListKind.open.key]) ?? 0
+            let page = min(max(1, page), max(1, (total + size - 1) / size))
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT p.repoFullName, p.number, p.openRow, p.reviewRequestRow, p.historyRow,
+                       p.headSHA, p.checkState, p.statusObservedAt
+                FROM pull_request_list_member m JOIN pull_request p USING (repoFullName, number)
+                WHERE m.kind = ? ORDER BY m.position LIMIT ? OFFSET ?
+                """, arguments: [PullRequestListKind.open.key, size, (page - 1) * size])
+            return (rows.compactMap { Self.record(from: $0, decoder: JSONDecoder()).shownOpenRow }, page, total)
+        }) ?? ([], 1, 0)
+    }
+
+    func reviewRequestPage(_ requestedPage: Int, excluding hidden: Set<String>) -> ReviewRequestsPage {
+        (try? database.read { db in
+            let hiddenIDs = Array(hidden)
+            let placeholders = hiddenIDs.map { _ in "?" }.joined(separator: ",")
+            let filter = hidden.isEmpty ? "" : " AND (m.repoFullName || '#' || m.number) NOT IN (\(placeholders))"
+            let arguments = StatementArguments([PullRequestListKind.reviewRequests.key] + hiddenIDs)
+            let counts = try Row.fetchAll(db, sql: """
+                SELECT m.reviewGroup, COUNT(*) AS count FROM pull_request_list_member m
+                WHERE m.kind = ?\(filter) GROUP BY m.reviewGroup
+                """, arguments: arguments)
+            let fromMe = counts.first { ($0["reviewGroup"] as String?) == ReviewRequestGroup.fromMe.key }?["count"] as Int? ?? 0
+            let fromTeams = counts.first { ($0["reviewGroup"] as String?) == ReviewRequestGroup.fromMyTeams.key }?["count"] as Int? ?? 0
+            let size = ReviewRequestsPage.defaultSize
+            let page = min(max(1, requestedPage), max(1, (fromMe + fromTeams + size - 1) / size))
+            var pageArguments = arguments
+            pageArguments += StatementArguments([size, (page - 1) * size])
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT p.repoFullName, p.number, p.openRow, p.reviewRequestRow, p.historyRow,
+                       p.headSHA, p.checkState, p.statusObservedAt, m.reviewGroup
+                FROM pull_request_list_member m JOIN pull_request p USING (repoFullName, number)
+                WHERE m.kind = ?\(filter) ORDER BY m.position LIMIT ? OFFSET ?
+                """, arguments: pageArguments)
+            func group(_ group: ReviewRequestGroup) -> [ReviewRequestRow] {
+                rows.filter { ($0["reviewGroup"] as String?) == group.key }
+                    .compactMap { Self.record(from: $0, decoder: JSONDecoder()).shownReviewRequestRow }
+            }
+            return ReviewRequestsPage(loaded: ReviewRequests(fromMe: group(.fromMe), fromMyTeams: group(.fromMyTeams)),
+                                      page: page, fromMeTotal: fromMe, fromMyTeamsTotal: fromTeams)
+        }) ?? ReviewRequestsPage(requests: .empty, page: 1)
+    }
+
+    /// Lightweight IDs support keyboard and notification navigation without keeping off-page PR rows in memory.
+    func pullRequestIDs(in kind: PullRequestListKind, excluding hidden: Set<String> = []) -> [String] {
+        (try? database.read { db in
+            try String.fetchAll(db, sql: """
+                SELECT repoFullName || '#' || number FROM pull_request_list_member WHERE kind = ? ORDER BY position
+                """, arguments: [kind.key]).filter { !hidden.contains($0) }
+        }) ?? []
+    }
+
+    func reviewRequest(_ reference: PullRequestReference) -> ReviewRequestRow? {
+        try? database.read { db in
+            guard let row = try Row.fetchOne(db, sql: """
+                SELECT p.repoFullName, p.number, p.openRow, p.reviewRequestRow, p.historyRow,
+                       p.headSHA, p.checkState, p.statusObservedAt
+                FROM pull_request p JOIN pull_request_list_member m USING (repoFullName, number)
+                WHERE m.kind = ? AND p.repoFullName = ? AND p.number = ?
+                """, arguments: [PullRequestListKind.reviewRequests.key, reference.repoFullName, reference.number]) else { return nil }
+            return Self.record(from: row, decoder: JSONDecoder()).shownReviewRequestRow
+        }
+    }
+
+    func pullRequestListSavedAt(_ kind: PullRequestListKind) -> Date? {
+        try? database.read { db in
+            try Double.fetchOne(db, sql: "SELECT savedAt FROM pull_request_list WHERE kind = ?",
+                                arguments: [kind.key]).map(Date.init(timeIntervalSince1970:))
+        }
+    }
+
+    func pullRequestListInfo(_ kind: PullRequestListKind) -> PullRequestListInfo? {
+        try? database.read { db in
+            guard let data = try Data.fetchOne(db, sql: "SELECT info FROM pull_request_list WHERE kind = ?",
+                                               arguments: [kind.key]) else { return nil }
+            return try JSONDecoder().decode(PullRequestListInfo.self, from: data)
+        }
+    }
+
+    func holdsPullRequestList(_ kind: PullRequestListKind) -> Bool {
+        (try? database.read { db in
+            try Bool.fetchOne(db, sql: "SELECT EXISTS(SELECT 1 FROM pull_request_list WHERE kind = ?)",
+                              arguments: [kind.key]) ?? false
+        }) ?? false
+    }
+
+    func listKinds(overlapping kind: PullRequestListKind) -> [PullRequestListKind] {
+        (try? database.read { db in
+            try String.fetchAll(db, sql: """
+                SELECT DISTINCT other.kind FROM pull_request_list_member m
+                JOIN pull_request_list_member other USING (repoFullName, number)
+                WHERE m.kind = ? AND other.kind != ?
+                """, arguments: [kind.key, kind.key]).compactMap(PullRequestListKind.init(key:))
+        }) ?? []
+    }
+
+    func listKinds(containing reference: PullRequestReference) -> [PullRequestListKind] {
+        (try? database.read { db in
+            try String.fetchAll(db, sql: """
+                SELECT DISTINCT kind FROM pull_request_list_member WHERE repoFullName = ? AND number = ?
+                """, arguments: [reference.repoFullName, reference.number]).compactMap(PullRequestListKind.init(key:))
+        }) ?? []
+    }
+
+    func removeOpenPullRequest(_ reference: PullRequestReference) {
+        database.asyncWrite({ db in
+            try db.execute(sql: """
+                DELETE FROM pull_request_list_member WHERE kind = ? AND repoFullName = ? AND number = ?
+                """, arguments: [PullRequestListKind.open.key, reference.repoFullName, reference.number])
+        }, completion: { _, _ in })
     }
 
     /// Calls `onChange` on the main queue after each write that changes the saved lists or their rows, whichever
@@ -241,19 +365,24 @@ extension LocalStore {
             })
     }
 
-    private static func pullRequestLists(in db: Database) throws -> SavedPullRequestLists {
+    private static func pullRequestLists(in db: Database, kinds: Set<PullRequestListKind>?) throws -> SavedPullRequestLists {
+        let keys = kinds?.map(\.key) ?? []
+        let placeholders = keys.map { _ in "?" }.joined(separator: ",")
+        let filter = kinds == nil ? "" : " WHERE kind IN (\(placeholders))"
+        let memberFilter = kinds == nil ? "" : " AND m.kind IN (\(placeholders))"
+        let arguments = StatementArguments(keys)
         let decoder = JSONDecoder()
         var saved = SavedPullRequestLists()
         var members: [PullRequestListKind: [PullRequestListMember]] = [:]
         for row in try Row.fetchAll(db, sql: """
-            SELECT kind, reviewGroup, repoFullName, number FROM pull_request_list_member ORDER BY kind, position
-            """) {
+            SELECT kind, reviewGroup, repoFullName, number FROM pull_request_list_member\(filter) ORDER BY kind, position
+            """, arguments: arguments) {
             guard let kind = PullRequestListKind(key: row["kind"] as String) else { continue }
             let reference = PullRequestReference(repoFullName: row["repoFullName"], number: row["number"])
             let group = (row["reviewGroup"] as String?).flatMap(ReviewRequestGroup.init(key:))
             members[kind, default: []].append(PullRequestListMember(reference: reference, reviewGroup: group))
         }
-        for row in try Row.fetchAll(db, sql: "SELECT kind, savedAt, info FROM pull_request_list") {
+        for row in try Row.fetchAll(db, sql: "SELECT kind, savedAt, info FROM pull_request_list\(filter)", arguments: arguments) {
             guard let kind = PullRequestListKind(key: row["kind"] as String), let data: Data = row["info"],
                   let info = try? decoder.decode(PullRequestListInfo.self, from: data) else { continue }
             saved.lists[kind] = SavedPullRequestList(savedAt: Date(timeIntervalSince1970: row["savedAt"]),
@@ -263,8 +392,8 @@ extension LocalStore {
             SELECT repoFullName, number, headSHA, checkState, statusObservedAt, openRow, reviewRequestRow, historyRow
             FROM pull_request
             WHERE EXISTS (SELECT 1 FROM pull_request_list_member m
-                          WHERE m.repoFullName = pull_request.repoFullName AND m.number = pull_request.number)
-            """) {
+                          WHERE m.repoFullName = pull_request.repoFullName AND m.number = pull_request.number\(memberFilter))
+            """, arguments: arguments) {
             let reference = PullRequestReference(repoFullName: row["repoFullName"], number: row["number"])
             saved.records[reference] = Self.record(from: row, decoder: decoder)
         }
@@ -286,8 +415,8 @@ extension LocalStore {
         return record
     }
 
-    /// Saves a list, and the rows and status of the pull requests it holds, in one transaction off the calling thread.
-    /// Pull requests no list holds and no detail needs are deleted with it. Reads made afterwards wait for it.
+    /// Saves list membership and fetched rows in one transaction off the calling thread. Previously fetched PRs
+    /// remain in SQLite after leaving a list. Reads made afterwards wait for this write.
     func savePullRequestList(_ list: SavedPullRequestList, as kind: PullRequestListKind,
                              records: [PullRequestReference: PullRequestRecord]) {
         let encoder = JSONEncoder()
@@ -305,9 +434,9 @@ extension LocalStore {
                     INSERT INTO pull_request (repoFullName, number, openRow, reviewRequestRow, historyRow)
                     VALUES (?, ?, ?, ?, ?)
                     ON CONFLICT(repoFullName, number) DO UPDATE SET
-                        openRow = excluded.openRow,
-                        reviewRequestRow = excluded.reviewRequestRow,
-                        historyRow = excluded.historyRow
+                        openRow = COALESCE(excluded.openRow, openRow),
+                        reviewRequestRow = COALESCE(excluded.reviewRequestRow, reviewRequestRow),
+                        historyRow = COALESCE(excluded.historyRow, historyRow)
                     """, arguments: [reference.repoFullName, reference.number, row.open, row.reviewRequest, row.history])
                 try Self.saveStatus(row.status, for: reference, in: db)
             }
@@ -323,7 +452,6 @@ extension LocalStore {
                     """, arguments: [kind.key, position, member.reviewGroup?.key,
                                      member.reference.repoFullName, member.reference.number])
             }
-            try Self.deleteUnusedPullRequests(in: db)
         }, completion: { _, _ in })
     }
 
@@ -338,10 +466,20 @@ extension LocalStore {
 
     private static func saveStatus(_ status: PullRequestStatus?, for reference: PullRequestReference,
                                    in db: Database) throws {
+        guard let incoming = status else { return }
+        let current = try Row.fetchOne(db, sql: """
+            SELECT headSHA, checkState, statusObservedAt FROM pull_request WHERE repoFullName = ? AND number = ?
+            """, arguments: [reference.repoFullName, reference.number])
+        var status = incoming
+        if let current, let head: String = current["headSHA"], let observedAt: Double = current["statusObservedAt"] {
+            status = PullRequestStatus(headSHA: head,
+                checkState: (current["checkState"] as String?).flatMap(CheckState.init),
+                observedAt: Date(timeIntervalSince1970: observedAt)).merging(incoming)
+        }
         try db.execute(sql: """
             UPDATE pull_request SET headSHA = ?, checkState = ?, statusObservedAt = ?
             WHERE repoFullName = ? AND number = ?
-            """, arguments: [status?.headSHA, status?.checkState?.rawValue, status?.observedAt.timeIntervalSince1970,
+            """, arguments: [status.headSHA, status.checkState?.rawValue, status.observedAt.timeIntervalSince1970,
                              reference.repoFullName, reference.number])
     }
 
@@ -376,17 +514,39 @@ extension LocalStore {
         var lastUsedAt: Date
     }
 
-    /// What changed in the details cache since it last saved.
+    /// Details to persist, optionally confirming pending edits in the same transaction.
     struct PullRequestDetailChanges {
         var saved: [SavedPullRequestDetail] = []
-        /// Entries only used, not changed, since the last save.
-        var used: [PullRequestReference: Date] = [:]
-        var removed: [PullRequestReference] = []
         /// Pending changes GitHub confirmed, deleted in the same transaction that saves what it returned.
         var confirmed: [UUID] = []
     }
 
-    /// The saved details, least recently used first. Rows that no longer decode are left out.
+    /// Reads only the selected PR, without restoring other details into UI memory.
+    func pullRequestDetail(_ reference: PullRequestReference) -> PullRequestDetailEntry? {
+        try? database.read { db in
+            guard let row = try Row.fetchOne(db, sql: """
+                SELECT content, comments, commentLimits, checks, filesSinceLastReview FROM pull_request
+                WHERE repoFullName = ? AND number = ? AND content IS NOT NULL
+                """, arguments: [reference.repoFullName, reference.number]) else { return nil }
+            return try Self.detailEntry(from: row)
+        }
+    }
+
+    var pullRequestDetailCount: Int {
+        (try? database.read { db in
+            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM pull_request WHERE content IS NOT NULL") ?? 0
+        }) ?? 0
+    }
+
+    func enqueueRemoveDetailsAndChanges() -> Task<Void, Never> {
+        enqueueWrite { db in
+            try db.execute(sql: Self.clearDetailSQL)
+            try db.execute(sql: "DELETE FROM pending_change")
+            try Self.deleteUnusedPullRequests(in: db)
+        }
+    }
+
+    /// All saved details, for inspection and tests. The UI reads individual PRs instead.
     func pullRequestDetails() async -> [SavedPullRequestDetail] {
         let rows = (try? await database.read { db in
             try Row.fetchAll(db, sql: "SELECT * FROM pull_request WHERE content IS NOT NULL ORDER BY detailUsedAt")
@@ -418,8 +578,12 @@ extension LocalStore {
     /// Writes the changes in one transaction, off the calling thread. Only the detail columns change, so the lists'
     /// rows and status for the same pull request stay.
     func savePullRequestDetails(_ changes: PullRequestDetailChanges) async {
-        let encoder = JSONEncoder()
-        _ = try? await database.write { db in
+        await enqueuePullRequestDetails(changes).value
+    }
+
+    func enqueuePullRequestDetails(_ changes: PullRequestDetailChanges) -> Task<Void, Never> {
+        enqueueWrite { db in
+            let encoder = JSONEncoder()
             for saved in changes.saved {
                 let entry = saved.entry
                 let reference = entry.content.detail.reference
@@ -444,16 +608,6 @@ extension LocalStore {
                         saved.lastUsedAt.timeIntervalSince1970,
                     ])
             }
-            for (reference, lastUsedAt) in changes.used {
-                try db.execute(sql: """
-                    UPDATE pull_request SET detailUsedAt = ? WHERE repoFullName = ? AND number = ? AND content IS NOT NULL
-                    """, arguments: [lastUsedAt.timeIntervalSince1970, reference.repoFullName, reference.number])
-            }
-            for reference in changes.removed {
-                try db.execute(sql: "\(Self.clearDetailSQL) WHERE repoFullName = ? AND number = ?",
-                               arguments: [reference.repoFullName, reference.number])
-            }
-            if !changes.removed.isEmpty { try Self.deleteUnusedPullRequests(in: db) }
             for id in changes.confirmed {
                 try db.execute(sql: "DELETE FROM pending_change WHERE id = ?", arguments: [id.uuidString])
             }
@@ -517,8 +671,12 @@ extension LocalStore {
 
     /// Inserts or replaces each change, and deletes the ones in `removed`, in one transaction.
     func savePendingChanges(_ changes: [PendingChange], removing removed: [UUID] = []) async {
-        let encoder = JSONEncoder()
-        _ = try? await database.write { db in
+        await enqueuePendingChanges(changes, removing: removed).value
+    }
+
+    func enqueuePendingChanges(_ changes: [PendingChange], removing removed: [UUID] = []) -> Task<Void, Never> {
+        enqueueWrite { db in
+            let encoder = JSONEncoder()
             for id in removed {
                 try db.execute(sql: "DELETE FROM pending_change WHERE id = ?", arguments: [id.uuidString])
             }
