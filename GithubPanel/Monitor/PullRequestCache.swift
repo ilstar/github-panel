@@ -32,7 +32,7 @@ final class PullRequestCache {
     /// The shown detail, with its pending changes applied, each time it or its changes change.
     let detailUpdates = PassthroughSubject<(PullRequestReference, PullRequestDetailEntry), Never>()
 
-    /// How many details are kept.
+    /// How many details outside My PRs and To Review are kept.
     let capacity: Int
     /// The token's login, from My PRs or the engine's lookup, so the viewer's unsent comments show as theirs. Not saved.
     var viewerLogin: String?
@@ -197,6 +197,7 @@ final class PullRequestCache {
             records[reference]?.status = nil
             dropRecordIfUnused(reference)
         }
+        evictIfNeeded()
         store?.removePullRequestLists()
     }
 
@@ -207,6 +208,7 @@ final class PullRequestCache {
         let previous = self.members[kind] ?? []
         self.members[kind] = members
         infos[kind] = info
+        evictIfNeeded()
         for member in previous { dropRecordIfUnused(member.reference) }
         listStates[kind, default: ListState()].fetchedAt = fetchedAt
         listStates[kind]?.lastError = nil
@@ -273,7 +275,7 @@ final class PullRequestCache {
 
     // MARK: - Details
 
-    /// How many details are kept.
+    /// How many details are kept, including the preloaded lists.
     var detailCount: Int { order.count }
 
     /// The pull request's detail as GitHub last returned it.
@@ -662,8 +664,13 @@ final class PullRequestCache {
     }
 
     private func evictIfNeeded() {
-        while order.count > capacity {
-            let reference = order.removeFirst()
+        // Completed preloads must survive while their rows are selectable, even for lists larger than capacity.
+        let preloaded = Set((members[.open] ?? []).map(\.reference)
+            + (members[.reviewRequests] ?? []).map(\.reference))
+        var candidates = order.filter { !preloaded.contains($0) }
+        while candidates.count > capacity {
+            let reference = candidates.removeFirst()
+            order.removeAll { $0 == reference }
             records[reference]?.detail = nil
             dropRecordIfUnused(reference)
             lastUsedAt.removeValue(forKey: reference)
@@ -671,5 +678,6 @@ final class PullRequestCache {
             used.remove(reference)
             if store != nil { removed.insert(reference) }
         }
+        if !removed.isEmpty { scheduleSave() }
     }
 }

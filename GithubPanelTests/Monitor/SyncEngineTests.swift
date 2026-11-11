@@ -26,6 +26,31 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(state, LocalStore.SyncState(fetchedAt: clock.now, lastAttemptAt: clock.now, lastError: nil))
     }
 
+    func testOpeningAnOlderPreloadUsesCacheAndManualRefreshStillFetches() async throws {
+        let api = loadingAPI()
+        let cache = PullRequestCache()
+        let engine = makeEngine(api: api, cache: cache)
+        clock.now = Date(timeIntervalSince1970: 100)
+        let resources: [SyncEngine.Resource] = [.detail(reference(1)),
+            .comments(reference(1), PullRequestCommentLimits()), .checks(reference(1))]
+        for resource in resources { try await engine.request(resource, priority: .background) }
+        clock.now = Date(timeIntervalSince1970: 400)
+
+        let viewModel = PullRequestDetailViewModel(reference: reference(1), engine: engine)
+        XCTAssertNotNil(viewModel.content)
+        XCTAssertNotNil(viewModel.comments)
+        XCTAssertNotNil(viewModel.checks)
+        await viewModel.load(maxAge: PullRequestDetailViewModel.openMaxAge)
+        XCTAssertEqual(api.detailCalls.count, 1)
+        XCTAssertEqual(api.commentsCalls.count, 1)
+        XCTAssertEqual(api.checksCalls.count, 1)
+
+        await viewModel.load()
+        XCTAssertEqual(api.detailCalls.count, 2)
+        XCTAssertEqual(api.commentsCalls.count, 2)
+        XCTAssertEqual(api.checksCalls.count, 2)
+    }
+
     func testRequestWithoutATokenFails() async {
         let api = loadingAPI()
         token = nil
