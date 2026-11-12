@@ -21,6 +21,7 @@ Keep logs and notes in the session scratchpad, not the repo. `$S` below stands f
 
 ```bash
 git status --short                      # must be clean
+git switch main
 git pull --ff-only origin main
 git fetch -q --tags origin
 LAST_TAG=$(gh release list --limit 1 --json tagName -q '.[0].tagName')
