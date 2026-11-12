@@ -39,6 +39,7 @@ struct ContentView: View {
     @State private var isSaving = false
     @State private var now = Date()
     @State private var selectedPRID: String?
+    @State private var selectionDiagnosticWindowID = UUID()
     @State private var selectedReviewID: String?
     @State private var selectedHistoryID: String?
     /// The rows last seen on My PRs and To Review, to pick the row that takes a removed one's place.
@@ -91,10 +92,12 @@ struct ContentView: View {
         .background(KeyCommandMonitor(handler: handleKeyCommand))
         .focusedSceneValue(\.pullRequestList, listActions)
         .onAppear {
+            traceOpenSelection("window-appear")
             monitor.listWindowAppeared()
             monitor.start()
         }
         .onDisappear {
+            traceOpenSelection("window-disappear")
             monitor.listWindowDisappeared()
         }
         .onChange(of: monitor.pullRequestToShow) { request in
@@ -396,16 +399,19 @@ struct ContentView: View {
                 .onAppear {
                     openRowIDs = visibleOpenRowIDs
                     if selectedPRID == nil {
-                        selectedPRID = visibleOpenRowIDs.first
+                        selectOpenPR(visibleOpenRowIDs.first, source: "initial")
                     }
                 }
                 .onChange(of: visibleOpenRowIDs) { newIDs in
-                    selectedPRID = ListNavigation.selection(after: selectedPRID, oldIDs: openRowIDs, newIDs: newIDs)
+                    selectOpenPR(ListNavigation.selection(after: selectedPRID, oldIDs: openRowIDs, newIDs: newIDs),
+                                 source: "list-change")
                     openRowIDs = newIDs
                 }
                 .onChange(of: selectedPRID) { id in
+                    traceOpenSelection("selection-observed")
                     scrollToSelection(id, with: proxy)
                 }
+                .onChange(of: groupsByStatus) { _ in traceOpenSelection("grouping-change") }
             }
             if monitor.openTotalCount > PRMonitor.openPageSize {
                 pagination(rangeText: monitor.openPageRangeText,
@@ -473,11 +479,12 @@ struct ContentView: View {
             botReviewer: BotReviewer.normalized(botReviewerLogin),
             isSelected: selectedPRID == pr.id,
             relativeFormatter: relativeFormatter,
-            now: now
+            now: now,
+            selectionDiagnosticWindowID: selectionDiagnosticWindowID
         )
         .id(pr.id)
         .onTapGesture {
-            selectedPRID = pr.id
+            selectOpenPR(pr.id, source: "click")
             didClickRow(pr.htmlURL)
         }
         .contextMenu {
@@ -944,10 +951,27 @@ struct ContentView: View {
         }
     }
 
+    private func traceOpenSelection(_ event: String) {
+        guard PRSelectionDiagnostics.shared.isEnabled else { return }
+        PRSelectionDiagnostics.shared.selection(event, window: selectionDiagnosticWindowID,
+                                                 selectedID: selectedPRID, visibleIDs: visibleOpenRowIDs,
+                                                 grouped: groupsByStatus)
+    }
+
+    private func selectOpenPR(_ id: String?, source: String) {
+        if PRSelectionDiagnostics.shared.isEnabled {
+            PRSelectionDiagnostics.shared.selection("select-\(source)", window: selectionDiagnosticWindowID,
+                                                     selectedID: id, previousID: selectedPRID,
+                                                     visibleIDs: visibleOpenRowIDs, grouped: groupsByStatus)
+        }
+        selectedPRID = id
+    }
+
     private func moveSelection(delta: Int) {
         switch monitor.selectedTab {
         case .open:
-            selectedPRID = ListNavigation.neighbor(of: selectedPRID, in: visibleRowIDs, offset: delta)
+            selectOpenPR(ListNavigation.neighbor(of: selectedPRID, in: visibleRowIDs, offset: delta),
+                         source: delta > 0 ? "keyboard-next" : "keyboard-previous")
         case .reviews:
             selectedReviewID = ListNavigation.neighbor(of: selectedReviewID, in: visibleRowIDs, offset: delta)
         case .history:
@@ -1018,7 +1042,7 @@ struct ContentView: View {
             } else if let group = myPullRequests.group(containing: request.reference.id) {
                 collapsedGroups.remove(group)
             }
-            selectedPRID = request.reference.id
+            selectOpenPR(request.reference.id, source: "show-request")
         case .reviews:
             selectedReviewID = request.reference.id
         case .history, nil:
