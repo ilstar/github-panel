@@ -365,6 +365,60 @@ final class PRMonitorPrefetchTests: XCTestCase {
         XCTAssertEqual(monitor.cache.detailCount, 0)
     }
 
+    func testRefreshPreloadsOnlyTheCurrentPagesOfBothLists() async {
+        let api = prefetchingAPI(rows: (1...55).map { row(number: $0, status: .success) })
+        api.reviewRequests = ReviewRequests(fromMe: (101...108).map { reviewRequestRow(number: $0) },
+                                           fromMyTeams: (109...115).map { reviewRequestRow(number: $0) })
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+
+        await monitor.refreshNow()
+        await monitor.waitForPrefetch()
+
+        let expected = Set(Array(1...50) + Array(101...110))
+        XCTAssertEqual(Set(api.detailCalls.map(\.reference.number)), expected)
+        XCTAssertEqual(Set(api.commentsCalls.map(\.reference.number)), expected)
+        XCTAssertEqual(Set(api.checksCalls.map(\.reference.number)), expected)
+        XCTAssertEqual(monitor.openTotalCount, 55)
+        XCTAssertEqual(monitor.reviewPage.totalCount, 15)
+
+        monitor.showOpenPage(2)
+        monitor.showReviewPage(2)
+        await monitor.waitForPrefetch()
+        let pageTwo = Set(Array(51...55) + Array(111...115))
+        XCTAssertTrue(pageTwo.isSubset(of: Set(api.detailCalls.map(\.reference.number))))
+
+        let checksBeforeRefresh = api.checksCalls.count
+        await monitor.refreshNow()
+        await monitor.waitForPrefetch()
+        XCTAssertEqual(Set(api.checksCalls.dropFirst(checksBeforeRefresh).map(\.reference.number)), pageTwo)
+    }
+
+    func testChangingPagesDropsRowsStillWaitingToPreload() async {
+        let api = prefetchingAPI(rows: (1...55).map { row(number: $0, status: .success) })
+        let requested = expectation(description: "First row started")
+        let gate = AsyncGate()
+        api.detailHandler = { reference in
+            if reference.number == 1 {
+                requested.fulfill()
+                await gate.wait()
+            }
+            return detailContent(for: reference)
+        }
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+        await monitor.refreshNow()
+        await fulfillment(of: [requested], timeout: 5)
+
+        monitor.showOpenPage(2)
+        XCTAssertEqual(monitor.refreshProgress?.count(of: .myPullRequests).total, 5)
+        await gate.open()
+        await monitor.waitForPrefetch()
+
+        XCTAssertEqual(Set(api.detailCalls.map(\.reference.number)), Set([1] + Array(51...55)))
+        XCTAssertEqual(Set(api.commentsCalls.map(\.reference.number)), Set([1] + Array(51...55)))
+        XCTAssertEqual(Set(api.checksCalls.map(\.reference.number)), Set([1] + Array(51...55)))
+        XCTAssertNil(monitor.refreshProgress)
+    }
+
     private func prefetchingAPI(rows: [PullRequestRow]) -> FakeGitHubAPI {
         let api = FakeGitHubAPI()
         api.rows = rows

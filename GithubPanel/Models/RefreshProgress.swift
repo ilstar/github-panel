@@ -30,6 +30,12 @@ struct RefreshProgress: Equatable {
         completed.remove(reference)
     }
 
+    /// Drop rows that left the displayed pages while preloading was in flight.
+    mutating func retain(_ references: Set<PullRequestReference>) {
+        lists = lists.filter { references.contains($0.key) }
+        completed.formIntersection(references)
+    }
+
     mutating func complete(_ reference: PullRequestReference) {
         guard lists[reference] != nil else { return }
         completed.insert(reference)
