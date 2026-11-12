@@ -16,6 +16,12 @@ struct PullRequestComment: Identifiable, Equatable, Codable {
     var pendingChangeID: UUID?
     /// A submitted review's verdict, for a review in the Activity list. Nil for a comment.
     var reviewState: PullRequestReviewer.State?
+    var authorName: String?
+
+    var authorDisplayName: String {
+        let trimmed = authorName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? (authorLogin.isEmpty ? "You" : authorLogin) : trimmed
+    }
 }
 
 /// Which side of the diff a review comment sits on: `left` is the old file, `right` is the new file.

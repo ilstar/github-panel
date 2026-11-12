@@ -26,6 +26,12 @@ struct PullRequestReviewer: Identifiable, Equatable, Codable {
     var onBehalfOf: [String] = []
     /// For a re-requested reviewer, the verdict of their earlier review.
     var previousState: State?
+    var fullName: String?
+
+    var displayName: String {
+        let trimmed = fullName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return kind == .user && !trimmed.isEmpty ? trimmed : name
+    }
 
     var id: String { Self.id(name: name, kind: kind) }
 
@@ -41,15 +47,15 @@ struct PullRequestReviewer: Identifiable, Equatable, Codable {
         let teams = onBehalfOf.isEmpty ? "" : " on behalf of \(onBehalfOf.joined(separator: ", "))"
         switch state {
         case .pending:
-            var text = "Awaiting requested review from \(name)"
+            var text = "Awaiting requested review from \(displayName)"
             if let previousState, let verb = previousState.pastTense {
-                text += ". \(name) previously \(verb)"
+                text += ". \(displayName) previously \(verb)"
             }
             return text
-        case .approved: return "\(name) approved these changes\(teams)"
-        case .changesRequested: return "\(name) requested changes\(teams)"
-        case .commented: return "\(name) left review comments\(teams)"
-        case .dismissed: return "\(name)'s review was dismissed"
+        case .approved: return "\(displayName) approved these changes\(teams)"
+        case .changesRequested: return "\(displayName) requested changes\(teams)"
+        case .commented: return "\(displayName) left review comments\(teams)"
+        case .dismissed: return "\(displayName)'s review was dismissed"
         }
     }
 }
@@ -73,6 +79,7 @@ struct PullRequestReviewers: Equatable, Codable {
         /// GitHub's review state: APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED or PENDING.
         let state: String
         var onBehalfOf: [String] = []
+        var fullName: String?
     }
 
     /// An open request for a review.
@@ -80,6 +87,7 @@ struct PullRequestReviewers: Equatable, Codable {
         let name: String
         let kind: PullRequestReviewer.Kind
         var asCodeOwner = false
+        var fullName: String?
     }
 
     var decision: ReviewDecision?
@@ -111,11 +119,12 @@ struct PullRequestReviewers: Equatable, Codable {
                                                  kind: request.kind,
                                                  state: .pending,
                                                  isCodeOwner: request.asCodeOwner,
-                                                 previousState: request.kind == .user ? latest[key].flatMap { Self.state($0.state) } : nil))
+                                                 previousState: request.kind == .user ? latest[key].flatMap { Self.state($0.state) } : nil,
+                                                 fullName: request.fullName ?? latest[key]?.fullName))
         }
         for review in latest.values where !requestedUsers.contains(review.author.lowercased()) {
             guard let state = Self.state(review.state) else { continue }
-            reviewers.append(PullRequestReviewer(name: review.author, kind: .user, state: state, onBehalfOf: review.onBehalfOf))
+            reviewers.append(PullRequestReviewer(name: review.author, kind: .user, state: state, onBehalfOf: review.onBehalfOf, fullName: review.fullName))
         }
         self.init(decision: decision,
                   reviewers: reviewers.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending })
@@ -146,11 +155,11 @@ struct PullRequestReviewers: Equatable, Codable {
             let previousState = existing?.state == .pending ? existing?.previousState : existing?.state
             reviewers.append(PullRequestReviewer(name: existing?.name ?? name, kind: kind, state: .pending,
                                                  isCodeOwner: existing?.isCodeOwner ?? false,
-                                                 previousState: previousState))
+                                                 previousState: previousState, fullName: existing?.fullName))
         } else if let existing, existing.state != .pending {
             reviewers.append(existing)
         } else if let existing, let previousState = existing.previousState {
-            reviewers.append(PullRequestReviewer(name: existing.name, kind: kind, state: previousState))
+            reviewers.append(PullRequestReviewer(name: existing.name, kind: kind, state: previousState, fullName: existing.fullName))
         }
         return PullRequestReviewers(decision: decision,
                                     reviewers: reviewers.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending })
@@ -166,7 +175,7 @@ struct PullRequestReviewers: Equatable, Codable {
         }
         var reviewers = reviewers.filter { $0.id != id }
         reviewers.append(PullRequestReviewer(name: existing?.name ?? login, kind: .user, state: state,
-                                             isCodeOwner: existing?.isCodeOwner ?? false))
+                                             isCodeOwner: existing?.isCodeOwner ?? false, fullName: existing?.fullName))
         return PullRequestReviewers(decision: decision,
                                     reviewers: reviewers.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending })
     }

@@ -5,6 +5,39 @@ final class PullRequestReviewersTests: XCTestCase {
     private typealias Review = PullRequestReviewers.Review
     private typealias Request = PullRequestReviewers.Request
 
+    func testDisplayNamesPreserveIdentityAndSurviveReviewChanges() throws {
+        let reviewers = PullRequestReviewers(decision: nil,
+            reviews: [Review(author: "hubot", state: "APPROVED", fullName: "Hubot Person")],
+            requests: [Request(name: "HUBOT", kind: .user)], authorLogin: "octocat")
+        let reviewer = try XCTUnwrap(reviewers.reviewers.first)
+        XCTAssertEqual(reviewer.displayName, "Hubot Person")
+        XCTAssertEqual(reviewer.name, "HUBOT")
+        XCTAssertEqual(reviewer.id, "user:hubot")
+        XCTAssertTrue(reviewer.helpText.contains("Hubot Person"))
+        let removed = reviewers.settingRequest(name: "hubot", kind: .user, requested: false)
+        XCTAssertEqual(removed.reviewers.first?.displayName, "Hubot Person")
+        XCTAssertEqual(removed.settingRequest(name: "hubot", kind: .user, requested: true)
+            .reviewers.first?.displayName, "Hubot Person")
+        XCTAssertEqual(reviewers.settingReview(by: "hubot", state: .approved)
+            .reviewers.first?.displayName, "Hubot Person")
+        let data = try JSONEncoder().encode(reviewers)
+        XCTAssertEqual(try JSONDecoder().decode(PullRequestReviewers.self, from: data), reviewers)
+    }
+
+    func testReviewerDisplayNameFallsBackToLoginAndKeepsTeamSlug() throws {
+        for name: String? in [nil, "", " \n "] {
+            let reviewer = PullRequestReviewer(name: "hubot", kind: .user, state: .pending, fullName: name)
+            XCTAssertEqual(reviewer.displayName, "hubot")
+        }
+        XCTAssertEqual(PullRequestReviewer(name: "hubot", kind: .user, state: .pending,
+                                          fullName: " Hubot Person ").displayName, "Hubot Person")
+        XCTAssertEqual(PullRequestReviewer(name: "acme/team", kind: .team, state: .pending,
+                                          fullName: "Team").displayName, "acme/team")
+        let old = PullRequestReviewer(name: "hubot", kind: .user, state: .pending)
+        XCTAssertEqual(try JSONDecoder().decode(PullRequestReviewer.self,
+            from: JSONEncoder().encode(old)).displayName, "hubot")
+    }
+
     func testListsRequestedAndReviewedUsersAndTeamsByName() {
         let reviewers = PullRequestReviewers(decision: .reviewRequired,
                                              reviews: [Review(author: "zed", state: "APPROVED"),

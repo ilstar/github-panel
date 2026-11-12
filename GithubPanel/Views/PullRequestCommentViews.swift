@@ -63,7 +63,7 @@ struct PullRequestCommentView: View {
 
     /// The viewer's unsent comment has no login until My PRs first loads.
     static func authorName(_ comment: PullRequestComment) -> String {
-        comment.authorLogin.isEmpty ? "You" : comment.authorLogin
+        comment.authorDisplayName
     }
 
     /// A review's verdict, worded like GitHub's timeline.
