@@ -4,6 +4,73 @@ import SwiftUI
 @testable import GithubPanel
 
 final class ThemeTests: XCTestCase {
+    @MainActor
+    func testSelectedCardIsDistinctFromNormalAndHoveredCards() throws {
+        for scheme in [ColorScheme.light, .dark] {
+            func pixel(selected: Bool, hovered: Bool) throws -> NSColor {
+                let view = Color.clear.frame(width: 180, height: 32)
+                    .listRowBackground(isSelected: selected, isHovering: hovered, isCard: true)
+                    .background(Theme.windowBackground)
+                    .accentColor(.blue)
+                    .environment(\.colorScheme, scheme)
+                let renderer = ImageRenderer(content: view)
+                let bitmap = NSBitmapImageRep(cgImage: try XCTUnwrap(renderer.cgImage))
+                return try XCTUnwrap(bitmap.colorAt(x: bitmap.pixelsWide / 2,
+                                                    y: bitmap.pixelsHigh / 2)?.usingColorSpace(.sRGB))
+            }
+
+            let selected = try pixel(selected: true, hovered: false)
+            for hovered in [false, true] {
+                let unselected = try pixel(selected: false, hovered: hovered)
+                let difference = max(abs(selected.redComponent - unselected.redComponent),
+                                     abs(selected.greenComponent - unselected.greenComponent),
+                                     abs(selected.blueComponent - unselected.blueComponent))
+                XCTAssertGreaterThan(difference, 0.08, "\(scheme), hovered: \(hovered)")
+            }
+        }
+    }
+
+    @MainActor
+    func testCardHighlightMovesToTheNewSelection() throws {
+        var selection: Binding<Int>?
+        let host = NSHostingView(rootView: SelectionRows { selection = $0 })
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 240, height: 120),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = host
+        window.orderFront(nil)
+        defer {
+            window.orderOut(nil)
+            window.contentView = nil
+        }
+
+        func rowColors() throws -> [CGFloat] {
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.3))
+            host.layoutSubtreeIfNeeded()
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            return try [0.25, 0.75].flatMap { fraction -> [CGFloat] in
+                let color = try XCTUnwrap(bitmap.colorAt(x: bitmap.pixelsWide / 2,
+                                                         y: Int(CGFloat(bitmap.pixelsHigh) * fraction)))
+                let rgb = try XCTUnwrap(color.usingColorSpace(.sRGB))
+                return [rgb.redComponent, rgb.greenComponent, rgb.blueComponent]
+            }
+        }
+
+        let first = try rowColors()
+        XCTAssertGreaterThan((0..<3).map { abs(first[$0] - first[$0 + 3]) }.max() ?? 0, 0.08)
+        try XCTUnwrap(selection).wrappedValue = 1
+        let second = try rowColors()
+        for channel in 0..<3 {
+            XCTAssertEqual(first[channel], second[channel + 3], accuracy: 0.02)
+            XCTAssertEqual(first[channel + 3], second[channel], accuracy: 0.02)
+        }
+        try XCTUnwrap(selection).wrappedValue = 0
+        let third = try rowColors()
+        for channel in first.indices {
+            XCTAssertEqual(first[channel], third[channel], accuracy: 0.02)
+        }
+    }
+
     func testAdaptiveColorFollowsTheAppearance() throws {
         let color = NSColor(Color(light: .white, dark: .black))
 
@@ -54,16 +121,6 @@ final class ThemeTests: XCTestCase {
         let color = NSColor(Theme.rowSelection)
         XCTAssertGreaterThan(try resolvedWhite(color, in: .aqua), 0.95)
         XCTAssertGreaterThan(try resolvedWhite(color, in: .darkAqua), 0.95)
-    }
-
-    func testSelectedRowStandsOutFromCardRows() throws {
-        // The selected chip must be clearly more opaque than an unselected card, even one under the pointer.
-        for name in [NSAppearance.Name.aqua, .darkAqua] {
-            let selected = try resolvedAlpha(NSColor(Theme.rowSelection), in: name)
-            let hoveredCard = try resolvedAlpha(NSColor(Theme.rowCardHover), in: name)
-            XCTAssertGreaterThanOrEqual(selected - hoveredCard, 0.08, name.rawValue)
-        }
-        XCTAssertEqual(try resolvedAlpha(NSColor(Theme.rowSelection), in: .aqua), 1, accuracy: 0.001)
     }
 
     func testWindowAndSidebarAreOpaqueSoTheDesktopNeverShowsThrough() throws {
@@ -121,5 +178,26 @@ final class ThemeTests: XCTestCase {
             white = color.usingColorSpace(.genericGray)?.whiteComponent ?? -1
         }
         return white
+    }
+}
+
+private struct SelectionRows: View {
+    @State private var selectedID = 0
+    let exposeSelection: (Binding<Int>) -> Void
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                ForEach(0..<2) { id in
+                    Color.clear.frame(height: 32)
+                        .listRowBackground(isSelected: selectedID == id, isHovering: false, isCard: true)
+                }
+            }
+        }
+        .padding(10)
+        .background(Color.gray)
+        .accentColor(.blue)
+        .environment(\.colorScheme, .light)
+        .onAppear { exposeSelection($selectedID) }
     }
 }

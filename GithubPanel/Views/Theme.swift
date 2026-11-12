@@ -19,8 +19,9 @@ enum Theme {
                                dark: NSColor(white: 1, alpha: 0.045))
     static let rowCardHover = Color(light: NSColor(white: 1, alpha: 0.62),
                                     dark: NSColor(white: 1, alpha: 0.08))
-    /// The selected row: a raised, opaque white chip rather than an accent tint, so it stands well
-    /// clear of the translucent card rows around it.
+    /// Card rows already have a white fill, so selection needs a distinct tint as well as elevation.
+    static let rowCardSelection = Color.accentColor.opacity(0.16)
+    /// Selection for rows without a card fill: a raised white chip.
     static let rowSelection = Color(light: NSColor(white: 1, alpha: 1),
                                     dark: NSColor(white: 1, alpha: 0.16))
     /// Capsule controls that sit on the sidebar or a card, such as the tab switcher and refresh button.
@@ -130,7 +131,9 @@ struct ListRowBackground: ViewModifier {
             .background(
                 shape
                     .fill(fill)
-                    .overlay(shape.strokeBorder(Theme.hairline, lineWidth: 0.5).opacity(isSelected || isCard ? 0.7 : 0))
+                    .overlay(shape.strokeBorder(isSelected && isCard ? Color.accentColor.opacity(0.5) : Theme.hairline,
+                                                lineWidth: isSelected && isCard ? 1 : 0.5)
+                        .opacity(isSelected || isCard ? 0.7 : 0))
                     .shadow(color: .black.opacity(isSelected ? 0.14 : 0), radius: 6, y: 2)
             )
             .contentShape(shape)
@@ -139,7 +142,7 @@ struct ListRowBackground: ViewModifier {
     }
 
     private var fill: Color {
-        if isSelected { return Theme.rowSelection }
+        if isSelected { return isCard ? Theme.rowCardSelection : Theme.rowSelection }
         if isCard { return isHovering ? Theme.rowCardHover : Theme.rowCard }
         return isHovering ? Theme.rowHover : Color.clear
     }
