@@ -270,6 +270,7 @@ final class PRMonitor: ObservableObject {
         let loadCount = listLoadCount
         let engine = syncEngine
         listRefreshesInFlight += 1
+        if priority == .userVisible { isRefreshingLists = true }
         // Ends after the rows are queued to preload, so the refresh button sees no gap before the counts.
         defer { listRefreshesInFlight -= 1 }
         await engine.sendPendingChanges()
@@ -289,11 +290,11 @@ final class PRMonitor: ObservableObject {
         }
     }
 
-    /// What the refresh button says while the pull requests of My PRs and To Review preload, such as
-    /// "Refreshing My PRs 2/10…". Nil before the lists have loaded and once preloading is done, so the button
-    /// shows when the list last updated. History has no count, so it is always nil there.
+    /// Shows list fetching first, then preload counts such as "Refreshing My PRs 2/10…".
+    /// Nil once the refresh is done. History keeps showing when its page last updated.
     var refreshProgressText: String? {
         guard selectedTab != .history else { return nil }
+        if isRefreshingLists { return "Fetching PR lists…" }
         return refreshProgress?.text(selectedTab: selectedTab)
     }
 
@@ -304,8 +305,7 @@ final class PRMonitor: ObservableObject {
         return isRefreshingLists || isLoading || isReviewRequestsLoading || refreshProgressText != nil
     }
 
-    /// Whether the refresh button runs its refresh animation: History while its page loads, and My PRs and To Review
-    /// while their pull requests preload, which is when there is a count to show. A timer tick that finds the lists
+    /// Runs the refresh animation during list fetching and preloading. A timer tick that finds the lists
     /// fresh loads nothing, so it leaves the button still.
     var isSelectedTabRefreshing: Bool {
         selectedTab == .history ? isHistoryLoading : refreshProgressText != nil

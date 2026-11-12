@@ -186,7 +186,7 @@ final class PRMonitorPrefetchTests: XCTestCase {
         XCTAssertEqual(api.detailCalls.map(\.reference.number), [1, 2])
     }
 
-    func testRefreshButtonStaysStillWhileTheListsLoad() async {
+    func testRefreshButtonShowsFetchingAndSpinsWhileTheListsLoad() async {
         let api = prefetchingAPI(rows: [row(number: 1, status: .success)])
         let requested = expectation(description: "Open list requested")
         let gate = AsyncGate()
@@ -201,14 +201,45 @@ final class PRMonitorPrefetchTests: XCTestCase {
         await fulfillment(of: [requested], timeout: 5)
 
         XCTAssertTrue(monitor.isLoading)
-        XCTAssertNil(monitor.refreshProgressText)
-        XCTAssertFalse(monitor.isSelectedTabRefreshing)
+        XCTAssertEqual(monitor.refreshProgressText, "Fetching PR lists…")
+        XCTAssertTrue(monitor.isSelectedTabRefreshing)
         XCTAssertTrue(monitor.isSelectedTabBusy)
+        monitor.selectedTab = .reviews
+        XCTAssertEqual(monitor.refreshProgressText, "Fetching PR lists…")
+        XCTAssertTrue(monitor.isSelectedTabRefreshing)
 
         await gate.open()
         await refresh.value
         await monitor.waitForPrefetch()
         XCTAssertFalse(monitor.isSelectedTabBusy)
+        XCTAssertNil(monitor.refreshProgressText)
+        XCTAssertFalse(monitor.isSelectedTabRefreshing)
+    }
+
+    func testFetchingIndicatorWaitsForReviewRequestsAndClearsAfterFailure() async {
+        let api = prefetchingAPI(rows: [])
+        let requested = expectation(description: "Review requests requested")
+        let gate = AsyncGate()
+        api.reviewRequestsHandler = { _ in
+            requested.fulfill()
+            await gate.wait()
+            throw TestError(message: "Reviews offline")
+        }
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+        let refresh = Task { await monitor.refreshNow() }
+        await fulfillment(of: [requested], timeout: 5)
+
+        XCTAssertEqual(monitor.refreshProgressText, "Fetching PR lists…")
+        XCTAssertTrue(monitor.isSelectedTabRefreshing)
+
+        await gate.open()
+        await refresh.value
+        await monitor.waitForPrefetch()
+
+        XCTAssertNil(monitor.refreshProgressText)
+        XCTAssertFalse(monitor.isSelectedTabRefreshing)
+        XCTAssertFalse(monitor.isSelectedTabBusy)
+        XCTAssertNotNil(monitor.lastReviewRequestsError)
     }
 
     func testRefreshStaysBusyFromLoadingTheListsUntilTheCountsShow() async {
