@@ -373,20 +373,26 @@ final class PRMonitor: ObservableObject {
         prefetchDetails()
     }
 
-    /// Both tabs share a queue. A refresh arriving during preloading queues another pass rather than being dropped.
+    /// Both tabs share a queue containing only their current pages. A refresh during preloading queues another pass.
     /// The queue takes the two lists' rows in turn from the top, so the rows each tab selects first load first.
     private func prefetchDetails() {
         guard loadSessionToken() != nil else { return }
+        let references = Set(prRows.map(\.reference) + reviewRequests.rows.map(\.reference))
+        pendingPrefetch = pendingPrefetch.filter { references.contains($0.key) }
         var progress = refreshProgress ?? RefreshProgress()
-        for (position, row) in (cache.open ?? []).enumerated() {
+        progress.retain(references)
+        for (position, row) in prRows.enumerated() {
             queuePrefetch(row.reference, updatedAt: row.updatedAt, position: position)
             progress.add(row.reference, to: .myPullRequests)
         }
-        for (position, row) in (cache.reviewRequests ?? .empty).rows.enumerated() {
+        for (position, row) in reviewRequests.rows.enumerated() {
             queuePrefetch(row.reference, updatedAt: row.updatedAt, position: position)
             progress.add(row.reference, to: .reviewRequests)
         }
-        guard !pendingPrefetch.isEmpty else { return }
+        guard !pendingPrefetch.isEmpty else {
+            refreshProgress = nil
+            return
+        }
         refreshProgress = progress
         guard prefetchTask == nil else { return }
         let session = credentialSession
@@ -604,8 +610,10 @@ final class PRMonitor: ObservableObject {
     }
 
     func showOpenPage(_ page: Int) {
+        let previousPage = openPage
         openPage = page
         showSavedLists()
+        if openPage != previousPage { prefetchDetails() }
     }
 
     var openPageRangeText: String {
@@ -615,7 +623,9 @@ final class PRMonitor: ObservableObject {
     }
 
     func showReviewPage(_ number: Int) {
+        let previousPage = reviewPage.page
         showReviewRequestRows(page: number)
+        if reviewPage.page != previousPage { prefetchDetails() }
     }
 
     var reviewRequestIDs: [String] {
