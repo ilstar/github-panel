@@ -239,6 +239,9 @@ extension LocalStore {
     /// Reads one list page. Details are never selected, and old History pages stay solely in SQLite.
     func openPullRequestPage(_ page: Int, size: Int) -> (rows: [PullRequestRow], page: Int, total: Int) {
         let size = max(1, size)
+        if let pagination = pullRequestListInfo(.open)?.pagination {
+            return (pullRequestLists(kinds: [.open]).open ?? [], pagination.request.page, pagination.totalCount)
+        }
         return (try? database.read { db in
             let total = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM pull_request_list_member WHERE kind = ?",
                                          arguments: [PullRequestListKind.open.key]) ?? 0
@@ -254,7 +257,14 @@ extension LocalStore {
     }
 
     func reviewRequestPage(_ requestedPage: Int, excluding hidden: Set<String>) -> ReviewRequestsPage {
-        (try? database.read { db in
+        if let pagination = pullRequestListInfo(.reviewRequests)?.pagination {
+            let requests = pullRequestLists(kinds: [.reviewRequests]).reviewRequests ?? .empty
+            let visible = requests.removing { hidden.contains($0.id) }
+            return ReviewRequestsPage(loaded: visible, page: pagination.request.page,
+                                      fromMeTotal: max(0, (pagination.fromMeTotal ?? 0) - requests.fromMe.count + visible.fromMe.count),
+                                      fromMyTeamsTotal: max(0, (pagination.fromMyTeamsTotal ?? 0) - requests.fromMyTeams.count + visible.fromMyTeams.count))
+        }
+        return (try? database.read { db in
             let hiddenIDs = Array(hidden)
             let placeholders = hiddenIDs.map { _ in "?" }.joined(separator: ",")
             let filter = hidden.isEmpty ? "" : " AND (m.repoFullName || '#' || m.number) NOT IN (\(placeholders))"

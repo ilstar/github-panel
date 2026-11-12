@@ -20,6 +20,7 @@ final class PullRequestCache {
 
     let listUpdates = PassthroughSubject<ListChange, Never>()
     let detailUpdates = PassthroughSubject<(PullRequestReference, PullRequestDetailEntry), Never>()
+    var hiddenReviewRequests: [String: HiddenReviewRequest] = [:]
     var viewerLogin: String?
     private(set) var openSSOAuthorizationURL: URL?
     var reviewRequestsSSOAuthorizationURL: URL? { store.pullRequestListInfo(.reviewRequests)?.ssoAuthorizationURL }
@@ -50,7 +51,9 @@ final class PullRequestCache {
     func state(of kind: PullRequestListKind) -> ListState {
         var state = listStates[kind] ?? ListState()
         if state.fetchedAt == nil, holds(kind) {
-            state.fetchedAt = store.syncStateNow(for: kind.key)?.fetchedAt
+            let page = store.pullRequestListInfo(kind)?.pagination?.request.page ?? 1
+            let key = page > 1 ? "\(kind.key):page:\(page)" : kind.key
+            state.fetchedAt = store.syncStateNow(for: key)?.fetchedAt
                 ?? store.pullRequestListSavedAt(kind)
         }
         state.isLoading = !(loads[kind] ?? []).isEmpty
@@ -66,7 +69,7 @@ final class PullRequestCache {
             (row.reference, PullRequestRecord(openRow: row, status: row.status(observedAt: observedAt ?? fetchedAt)))
         }, uniquingKeysWith: { first, _ in first })
         saveList(.open, members: result.rows.map { PullRequestListMember(reference: $0.reference) },
-                 info: PullRequestListInfo(ssoAuthorizationURL: result.ssoAuthorizationURL),
+                 info: pageInfo(.open, pagination: result.pagination, sso: result.ssoAuthorizationURL, ids: result.rows.map(\.id)),
                  fetchedAt: fetchedAt, records: records)
     }
 
@@ -78,8 +81,33 @@ final class PullRequestCache {
             (row.reference, PullRequestRecord(reviewRequestRow: row, status: row.status(observedAt: observedAt ?? fetchedAt)))
         }, uniquingKeysWith: { first, _ in first })
         saveList(.reviewRequests, members: members,
-                 info: PullRequestListInfo(ssoAuthorizationURL: requests.ssoAuthorizationURL),
+                 info: pageInfo(.reviewRequests, pagination: requests.pagination, sso: requests.ssoAuthorizationURL, ids: requests.rows.map(\.id)),
                  fetchedAt: fetchedAt, records: records)
+    }
+
+    func pagination(of kind: PullRequestListKind) -> PullRequestPagination? {
+        store.pullRequestListInfo(kind)?.pagination
+    }
+
+    func pageRequest(_ page: Int, in kind: PullRequestListKind) -> PullRequestPageRequest? {
+        store.pullRequestListInfo(kind)?.pageRequests?[page]
+    }
+
+    func page(containing id: String, in kind: PullRequestListKind) -> Int? {
+        store.pullRequestListInfo(kind)?.pageIDs?.first { $0.value.contains(id) }?.key
+    }
+
+    private func pageInfo(_ kind: PullRequestListKind, pagination: PullRequestPagination?, sso: URL?, ids: [String]) -> PullRequestListInfo {
+        guard let pagination else { return PullRequestListInfo(ssoAuthorizationURL: sso) }
+        // Refreshing a boundary invalidates the pages after it. Earlier boundaries remain navigable.
+        var requests = (store.pullRequestListInfo(kind)?.pageRequests ?? [:]).filter { $0.key <= pagination.request.page }
+        requests[pagination.request.page] = pagination.request
+        if let next = pagination.next { requests[next.page] = next }
+        var pageIDs = (store.pullRequestListInfo(kind)?.pageIDs ?? [:]).filter { $0.key < pagination.request.page }
+        let currentIDs = Set(ids)
+        pageIDs = pageIDs.mapValues { $0.filter { !currentIDs.contains($0) } }
+        pageIDs[pagination.request.page] = ids
+        return PullRequestListInfo(ssoAuthorizationURL: sso, pagination: pagination, pageRequests: requests, pageIDs: pageIDs)
     }
 
     func store(_ page: PullRequestHistoryPage, asPage number: Int, fetchedAt: Date) {

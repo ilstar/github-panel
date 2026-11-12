@@ -3,8 +3,11 @@ import Foundation
 protocol GitHubAPIClient {
     func fetchCurrentUser(token: String) async throws -> GitHubUser
     func fetchOpenPRs(token: String) async throws -> OpenPullRequests
+    func fetchOpenPRPage(token: String, request: PullRequestPageRequest) async throws -> OpenPullRequests
     func fetchClosedPRs(token: String, username: String, page: Int, perPage: Int) async throws -> PullRequestHistoryPage
     func fetchReviewRequests(token: String) async throws -> ReviewRequests
+    func fetchReviewRequestPage(token: String, request: PullRequestPageRequest,
+                                hidden: [String: HiddenReviewRequest]) async throws -> ReviewRequests
     func enqueuePullRequest(token: String, pullRequestID: String) async throws
     func markPullRequestReadyForReview(token: String, pullRequestID: String) async throws
     func enableAutoMerge(token: String, pullRequestID: String, mergeMethod: MergeMethod) async throws
@@ -66,9 +69,68 @@ struct GitHubUser: Decodable {
     let login: String
 }
 
+/// A cursor is the boundary before a page, rather than an offset into a changing list.
+struct PullRequestPageRequest: Hashable, Codable {
+    var page = 1
+    var after: String?
+    var teamAfter: String?
+    var directFinished = false
+    var directLoaded = 0
+    var teamLoaded = 0
+}
+
+struct PullRequestPagination: Equatable, Codable {
+    var request: PullRequestPageRequest
+    var next: PullRequestPageRequest?
+    var totalCount: Int
+    var fromMeTotal: Int? = nil
+    var fromMyTeamsTotal: Int? = nil
+    /// Only hidden requests verified to still match their saved fingerprint.
+    var hidden: [String: HiddenReviewRequest]? = nil
+}
+
 struct OpenPullRequests {
     let login: String
     let rows: [PullRequestRow]
     /// Set when some pull requests were left out because the token isn't SSO-authorized for their organization.
     var ssoAuthorizationURL: URL? = nil
+    var pagination: PullRequestPagination? = nil
+}
+
+/// In-memory providers can keep supplying complete fixtures; network providers override these operations.
+extension GitHubAPIClient {
+    func fetchOpenPRPage(token: String, request: PullRequestPageRequest) async throws -> OpenPullRequests {
+        try await fetchOpenPRs(token: token).page(request)
+    }
+
+    func fetchReviewRequestPage(token: String, request: PullRequestPageRequest,
+                                hidden: [String: HiddenReviewRequest]) async throws -> ReviewRequests {
+        try await fetchReviewRequests(token: token).page(request, hidden: hidden)
+    }
+}
+
+extension OpenPullRequests {
+    func page(_ request: PullRequestPageRequest) -> OpenPullRequests {
+        let total = rows.count
+        let page = min(max(1, request.page), max(1, (total + 49) / 50))
+        return OpenPullRequests(login: login, rows: Array(rows.dropFirst((page - 1) * 50).prefix(50)),
+                                ssoAuthorizationURL: ssoAuthorizationURL,
+                                pagination: .init(request: .init(page: page),
+                                                  next: page * 50 < total ? .init(page: page + 1) : nil,
+                                                  totalCount: total))
+    }
+}
+
+extension ReviewRequests {
+    func page(_ request: PullRequestPageRequest, hidden: [String: HiddenReviewRequest]) -> ReviewRequests {
+        let retained = hidden.filter { id, fingerprint in rows.first { $0.id == id }.map(fingerprint.hides) ?? false }
+        let visible = removing { retained[$0.id] != nil }
+        let page = ReviewRequestsPage(requests: visible, page: request.page)
+        return ReviewRequests(fromMe: page.fromMe, fromMyTeams: page.fromMyTeams,
+                              ssoAuthorizationURL: ssoAuthorizationURL,
+                              pagination: .init(request: .init(page: page.page),
+                                                next: page.canGoToNextPage ? .init(page: page.page + 1) : nil,
+                                                totalCount: page.totalCount, fromMeTotal: page.fromMeTotal,
+                                                fromMyTeamsTotal: page.fromMyTeamsTotal, hidden: retained))
+    }
 }

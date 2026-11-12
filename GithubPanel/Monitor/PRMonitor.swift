@@ -273,6 +273,7 @@ final class PRMonitor: ObservableObject {
         if priority == .userVisible { isRefreshingLists = true }
         // Ends after the rows are queued to preload, so the refresh button sees no gap before the counts.
         defer { listRefreshesInFlight -= 1 }
+        cache.hiddenReviewRequests = hiddenReviewRequests
         await engine.sendPendingChanges()
         async let reviewRequests: Void? = try? engine.request(.reviewRequests, priority: priority, maxAge: maxAge,
                                                               joinsLoadInFlight: true)
@@ -366,6 +367,7 @@ final class PRMonitor: ObservableObject {
 
     /// Refreshes To Review alone, such as after submitting a review, then preloads its rows.
     func refreshReviewRequests() async {
+        cache.hiddenReviewRequests = hiddenReviewRequests
         guard loadSessionToken() != nil else { return }
         let session = credentialSession
         _ = try? await syncEngine.request(.reviewRequests)
@@ -460,11 +462,18 @@ final class PRMonitor: ObservableObject {
             listLoadCount += 1
             let rows = cache.open ?? []
             updateNotificationsForRows(rows)
-            forgetClosedForLater(openRows: rows, isComplete: cache.openSSOAuthorizationURL == nil)
+            forgetClosedForLater(openRows: rows, isComplete: cache.openSSOAuthorizationURL == nil &&
+                                 (cache.pagination(of: .open).map { $0.totalCount == rows.count } ?? true))
             showOpenPullRequests()
         case .loaded(.reviewRequests):
             listLoadCount += 1
-            notifyAboutNewReviewRequests(cache.reviewRequests ?? .empty)
+            if let hidden = cache.pagination(of: .reviewRequests)?.hidden, hidden != hiddenReviewRequests {
+                hiddenReviewRequests = hidden
+                saveHiddenReviewRequests()
+            }
+            let pagination = cache.pagination(of: .reviewRequests)
+            notifyAboutNewReviewRequests(cache.reviewRequests ?? .empty,
+                                        isNavigation: pagination.map { $0.request.page != reviewPage.page } ?? false)
             showReviewRequests()
         case .changed(.open):
             showOpenPullRequests()
@@ -575,6 +584,9 @@ final class PRMonitor: ObservableObject {
         hiddenReviewRequests[row.id] = HiddenReviewRequest(row)
         saveHiddenReviewRequests()
         showReviewRequestRows()
+        if let page = cache.pagination(of: .reviewRequests), page.next != nil || page.request.page > 1 {
+            Task { await refreshReviewRequests() }
+        }
     }
 
     /// Shows To Review's loading state, error and refresh time. Its rows come from `showSavedLists`.
@@ -595,6 +607,7 @@ final class PRMonitor: ObservableObject {
             return
         }
         let stillHidden = hiddenReviewRequests.filter { id, hidden in
+            if cache.pagination(of: .reviewRequests) != nil { return true }
             guard let separator = id.lastIndex(of: "#"), let number = Int(id[id.index(after: separator)...]) else { return false }
             let reference = PullRequestReference(repoFullName: String(id[..<separator]), number: number)
             return store.reviewRequest(reference).map(hidden.hides) ?? false
@@ -610,10 +623,25 @@ final class PRMonitor: ObservableObject {
     }
 
     func showOpenPage(_ page: Int) {
+        if cache.pagination(of: .open) != nil {
+            guard !isLoading, page != openPage, let request = cache.pageRequest(page, in: .open) else { return }
+            pendingPrefetch = [:]
+            Task {
+                _ = try? await syncEngine.request(.openPage(request), joinsLoadInFlight: true)
+                prefetchDetails()
+            }
+            return
+        }
         let previousPage = openPage
         openPage = page
         showSavedLists()
         if openPage != previousPage { prefetchDetails() }
+    }
+
+    var canLoadPreviousOpenPage: Bool { openPage > 1 && !isLoading }
+    var canLoadNextOpenPage: Bool {
+        guard !isLoading else { return false }
+        return cache.pagination(of: .open).map { $0.next != nil } ?? (openPage * Self.openPageSize < openTotalCount)
     }
 
     var openPageRangeText: String {
@@ -623,9 +651,29 @@ final class PRMonitor: ObservableObject {
     }
 
     func showReviewPage(_ number: Int) {
+        if cache.pagination(of: .reviewRequests) != nil {
+            Task { await loadReviewPage(number) }
+            return
+        }
         let previousPage = reviewPage.page
         showReviewRequestRows(page: number)
         if reviewPage.page != previousPage { prefetchDetails() }
+    }
+
+    /// Keyboard and button navigation can select a row once the network page has arrived.
+    func loadReviewPage(_ number: Int) async {
+        guard cache.pagination(of: .reviewRequests) != nil else { return showReviewPage(number) }
+        guard !isReviewRequestsLoading, number != reviewPage.page,
+              let request = cache.pageRequest(number, in: .reviewRequests) else { return }
+        pendingPrefetch = [:]
+        cache.hiddenReviewRequests = hiddenReviewRequests
+        _ = try? await syncEngine.request(.reviewPage(request), joinsLoadInFlight: true)
+        prefetchDetails()
+    }
+
+    var reviewSearchLimitReached: Bool {
+        guard let page = cache.pagination(of: .reviewRequests), page.next == nil else { return false }
+        return (page.fromMeTotal ?? 0) > 1000 || (page.fromMyTeamsTotal ?? 0) > 1000
     }
 
     var reviewRequestIDs: [String] {
@@ -633,11 +681,18 @@ final class PRMonitor: ObservableObject {
     }
 
     func showReviewPage(containing id: String) {
+        if let page = cache.page(containing: id, in: .reviewRequests) {
+            showReviewPage(page)
+            return
+        }
         guard let index = reviewRequestIDs.firstIndex(of: id) else { return }
-        showReviewPage(index / ReviewRequestsPage.defaultSize + 1)
+        if cache.pagination(of: .reviewRequests) == nil {
+            showReviewPage(index / ReviewRequestsPage.defaultSize + 1)
+        }
     }
 
     private func saveHiddenReviewRequests() {
+        cache.hiddenReviewRequests = hiddenReviewRequests
         guard let data = try? JSONEncoder().encode(hiddenReviewRequests) else { return }
         defaults.set(String(decoding: data, as: UTF8.self), forKey: DefaultsKeys.hiddenReviewRequests)
     }
@@ -667,8 +722,10 @@ final class PRMonitor: ObservableObject {
         }
 
         // Remove states for PRs that are no longer in the list.
-        lastStates = lastStates.filter { seen.contains($0.key) }
-        lastReviewStatuses = lastReviewStatuses.filter { seen.contains($0.key) }
+        if cache.pagination(of: .open) == nil {
+            lastStates = lastStates.filter { seen.contains($0.key) }
+            lastReviewStatuses = lastReviewStatuses.filter { seen.contains($0.key) }
+        }
     }
 
     /// Posts one notification for reviewers who approved since the last refresh, and one for those who asked for changes.
@@ -688,13 +745,16 @@ final class PRMonitor: ObservableObject {
     }
 
     /// Posts a notification for each ready pull request that asks for my review since the last refresh.
-    private func notifyAboutNewReviewRequests(_ requests: ReviewRequests) {
+    private func notifyAboutNewReviewRequests(_ requests: ReviewRequests, isNavigation: Bool = false) {
         defer {
+            let previous = knownReviewRequestIDs
             knownReviewRequestIDs = Dictionary(uniqueKeysWithValues: ReviewRequestGroup.allCases.map {
-                ($0, Set(requests.rows(in: $0).map(\.id)))
+                let ids = Set(requests.rows(in: $0).map(\.id))
+                let complete = requests.pagination.map { $0.request.page == 1 && $0.next == nil } ?? true
+                return ($0, complete ? ids : ids.union(previous?[$0] ?? []))
             })
         }
-        guard let known = knownReviewRequestIDs else { return }
+        guard !isNavigation, let known = knownReviewRequestIDs else { return }
         var posted: Set<String> = []
         for group in ReviewRequestGroup.allCases {
             let enabled = group == .fromMe ? notifyReviewsFromMe : notifyReviewsFromMyTeams
@@ -854,12 +914,14 @@ extension PRMonitor {
         guard listWindowCount > 0 else { return false }
         let tab: PullRequestTab?
         let lists = store.listKinds(containing: reference)
-        if lists.contains(.open) {
+        if lists.contains(.open) || cache.page(containing: reference.id, in: .open) != nil {
+            if let page = cache.page(containing: reference.id, in: .open) { showOpenPage(page) }
             if let index = store.pullRequestIDs(in: .open).firstIndex(of: reference.id) {
-                showOpenPage(index / Self.openPageSize + 1)
+                if cache.pagination(of: .open) == nil { showOpenPage(index / Self.openPageSize + 1) }
             }
             tab = .open
-        } else if lists.contains(.reviewRequests), !hiddenReviewRequests.keys.contains(reference.id) {
+        } else if (lists.contains(.reviewRequests) || cache.page(containing: reference.id, in: .reviewRequests) != nil),
+                  !hiddenReviewRequests.keys.contains(reference.id) {
             showReviewPage(containing: reference.id)
             tab = .reviews
         } else {

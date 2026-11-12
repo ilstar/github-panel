@@ -414,6 +414,7 @@ final class PRMonitorPrefetchTests: XCTestCase {
 
         monitor.showOpenPage(2)
         monitor.showReviewPage(2)
+        await waitForPages(monitor, open: 2, review: 2)
         await monitor.waitForPrefetch()
         let pageTwo = Set(Array(51...55) + Array(111...115))
         XCTAssertTrue(pageTwo.isSubset(of: Set(api.detailCalls.map(\.reference.number))))
@@ -440,6 +441,7 @@ final class PRMonitorPrefetchTests: XCTestCase {
         await fulfillment(of: [requested], timeout: 5)
 
         monitor.showOpenPage(2)
+        await waitForPages(monitor, open: 2, review: 1)
         XCTAssertEqual(monitor.refreshProgress?.count(of: .myPullRequests).total, 5)
         await gate.open()
         await monitor.waitForPrefetch()
@@ -448,6 +450,15 @@ final class PRMonitorPrefetchTests: XCTestCase {
         XCTAssertEqual(Set(api.commentsCalls.map(\.reference.number)), Set([1] + Array(51...55)))
         XCTAssertEqual(Set(api.checksCalls.map(\.reference.number)), Set([1] + Array(51...55)))
         XCTAssertNil(monitor.refreshProgress)
+    }
+
+    private func waitForPages(_ monitor: PRMonitor, open: Int, review: Int) async {
+        for _ in 0..<500 {
+            if monitor.openPage == open && monitor.reviewPage.page == review &&
+                !monitor.isLoading && !monitor.isReviewRequestsLoading { return }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTFail("Pages did not finish loading")
     }
 
     private func prefetchingAPI(rows: [PullRequestRow]) -> FakeGitHubAPI {

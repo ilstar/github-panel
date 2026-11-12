@@ -4,6 +4,110 @@ import GRDB
 
 @MainActor
 final class PRMonitorListCacheTests: XCTestCase {
+    func testNetworkNavigationAndRefreshOnlyRequestDisplayedPages() async {
+        let api = FakeGitHubAPI()
+        api.rows = (1...120).map { row(number: $0, status: .success) }
+        api.reviewRequests = ReviewRequests(fromMe: (201...218).map { reviewRequestRow(number: $0) },
+                                           fromMyTeams: (219...225).map { reviewRequestRow(number: $0) })
+        let store = LocalStore.inMemory()
+        let clock = FakeDateProvider(now: Date(timeIntervalSince1970: 100))
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"), dateProvider: clock, store: store)
+        await monitor.refreshNow()
+        XCTAssertEqual(api.openPageRequests.map(\.page), [1])
+        XCTAssertEqual(api.reviewPageRequests.map(\.page), [1])
+        XCTAssertEqual(monitor.prRows.count, 50)
+        XCTAssertEqual(monitor.openTotalCount, 120)
+        XCTAssertEqual(monitor.reviewRequests.rows.count, 10)
+        XCTAssertEqual(monitor.reviewPage.totalCount, 25)
+        XCTAssertEqual(store.pullRequestIDs(in: .open).count, 50, "Only the fetched page is list membership")
+
+        clock.now = Date(timeIntervalSince1970: 200)
+        monitor.showOpenPage(2)
+        await monitor.loadReviewPage(2)
+        await waitForPage { monitor.openPage == 2 && monitor.reviewPage.page == 2 && !monitor.isLoading && !monitor.isReviewRequestsLoading }
+        XCTAssertEqual(monitor.prRows.map(\.number), Array(51...100))
+        XCTAssertEqual(monitor.reviewRequests.fromMe.map(\.number), Array(211...218))
+        XCTAssertEqual(monitor.reviewRequests.fromMyTeams.map(\.number), [219, 220])
+
+        clock.now = Date(timeIntervalSince1970: 300)
+        api.rows = Array(api.rows.prefix(115))
+        api.reviewRequests = ReviewRequests(fromMe: api.reviewRequests.fromMe,
+                                           fromMyTeams: Array(api.reviewRequests.fromMyTeams.prefix(4)))
+        await monitor.refreshNow()
+        XCTAssertEqual(api.openPageRequests.map(\.page), [1, 2, 2])
+        XCTAssertEqual(api.reviewPageRequests.map(\.page), [1, 2, 2])
+        XCTAssertEqual(monitor.openTotalCount, 115)
+        XCTAssertEqual(monitor.reviewPage.totalCount, 22)
+        XCTAssertEqual(monitor.openPage, 2)
+        XCTAssertEqual(monitor.reviewPage.page, 2)
+
+        let restarted = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"), store: store)
+        XCTAssertEqual(restarted.openPage, 2)
+        XCTAssertEqual(restarted.lastRefreshAt, Date(timeIntervalSince1970: 300))
+        XCTAssertEqual(restarted.lastReviewRequestsRefreshAt, Date(timeIntervalSince1970: 300))
+        XCTAssertEqual(restarted.prRows.map(\.number), Array(51...100))
+        XCTAssertEqual(restarted.openTotalCount, 115)
+        XCTAssertEqual(restarted.reviewPage.page, 2)
+        restarted.showOpenPage(1)
+        await waitForPage { restarted.openPage == 1 && !restarted.isLoading }
+        XCTAssertEqual(restarted.prRows.map(\.number), Array(1...50))
+    }
+
+    func testFailedNavigationKeepsDisplayedPageAndCanRetry() async {
+        let api = FakeGitHubAPI()
+        api.rows = (1...55).map { row(number: $0, status: .success) }
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+        await monitor.refreshNow()
+        api.openPageHandler = { _ in throw TestError(message: "page offline") }
+        monitor.showOpenPage(2)
+        await waitForPage { monitor.lastError == "page offline" && !monitor.isLoading }
+        XCTAssertEqual(monitor.openPage, 1)
+        XCTAssertEqual(monitor.prRows.count, 50)
+        XCTAssertEqual(monitor.openTotalCount, 55)
+
+        api.openPageHandler = nil
+        monitor.showOpenPage(2)
+        await waitForPage { monitor.openPage == 2 && !monitor.isLoading }
+        XCTAssertNil(monitor.lastError)
+        XCTAssertEqual(monitor.prRows.map(\.number), Array(51...55))
+    }
+
+    func testPartialOpenPageDoesNotForgetParkedOffPagePRs() async {
+        let api = FakeGitHubAPI()
+        api.rows = (1...55).map { row(number: $0, status: .success) }
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"))
+        await monitor.refreshNow()
+        monitor.moveToForLater(api.rows[0])
+        monitor.showOpenPage(2)
+        await waitForPage { monitor.openPage == 2 && !monitor.isLoading }
+        XCTAssertEqual(monitor.forLaterIDs, [api.rows[0].id])
+    }
+
+    func testVisitingReviewPagesDoesNotNotifyForPreviouslyUnloadedRows() async {
+        let api = FakeGitHubAPI()
+        api.reviewRequests = ReviewRequests(fromMe: (1...25).map { reviewRequestRow(number: $0) }, fromMyTeams: [])
+        let notifications = FakeNotificationPoster()
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "token"), notificationPoster: notifications)
+        await monitor.refreshReviewRequests()
+        monitor.showReviewPage(2)
+        await waitForPage { monitor.reviewPage.page == 2 && !monitor.isReviewRequestsLoading }
+        XCTAssertTrue(notifications.reviewPosts.isEmpty)
+        await monitor.refreshReviewRequests()
+        XCTAssertTrue(notifications.reviewPosts.isEmpty)
+        monitor.showReviewPage(1)
+        await waitForPage { monitor.reviewPage.page == 1 && !monitor.isReviewRequestsLoading }
+        await monitor.refreshReviewRequests()
+        XCTAssertTrue(notifications.reviewPosts.isEmpty)
+    }
+
+    private func waitForPage(_ condition: () -> Bool) async {
+        for _ in 0..<500 {
+            if condition() { return }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTFail("Page did not finish loading")
+    }
+
     func testUIKeepsOnlyTheCurrentDatabasePagesAndCanNavigateToOffPagePRs() {
         let store = LocalStore.inMemory()
         let access = PullRequestCache(store: store)

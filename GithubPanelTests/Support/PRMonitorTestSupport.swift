@@ -40,7 +40,9 @@ final class FakeGitHubAPI: GitHubAPIClient {
     private(set) var fetchClosedPRCalls: [(page: Int, perPage: Int)] = []
     private(set) var enqueueCalls: [String] = []
     private(set) var markReadyCalls: [String] = []
-    private(set) var enableCalls: [String] = []
+    private let enableCallsLock = NSLock()
+    private var recordedEnableCalls: [String] = []
+    var enableCalls: [String] { enableCallsLock.withLock { recordedEnableCalls } }
     private(set) var enableMergeMethods: [MergeMethod] = []
     private(set) var disableCalls: [String] = []
     private(set) var mergePullRequestCalls: [(repoFullName: String, number: Int, method: MergeMethod)] = []
@@ -99,6 +101,22 @@ final class FakeGitHubAPI: GitHubAPIClient {
         return user
     }
 
+    private(set) var openPageRequests: [PullRequestPageRequest] = []
+    private(set) var reviewPageRequests: [PullRequestPageRequest] = []
+    var openPageHandler: ((PullRequestPageRequest) async throws -> OpenPullRequests)?
+
+    func fetchOpenPRPage(token: String, request: PullRequestPageRequest) async throws -> OpenPullRequests {
+        openPageRequests.append(request)
+        if let openPageHandler { return try await openPageHandler(request) }
+        return try await fetchOpenPRs(token: token).page(request)
+    }
+
+    func fetchReviewRequestPage(token: String, request: PullRequestPageRequest,
+                                hidden: [String: HiddenReviewRequest]) async throws -> ReviewRequests {
+        reviewPageRequests.append(request)
+        return try await fetchReviewRequests(token: token).page(request, hidden: hidden)
+    }
+
     func fetchOpenPRs(token: String) async throws -> OpenPullRequests {
         fetchOpenPRTokens.append(token)
         if let openHandler { return try await openHandler(token) }
@@ -139,8 +157,10 @@ final class FakeGitHubAPI: GitHubAPIClient {
 
     func enableAutoMerge(token: String, pullRequestID: String, mergeMethod: MergeMethod) async throws {
         if let error { throw error }
-        enableCalls.append(pullRequestID)
-        enableMergeMethods.append(mergeMethod)
+        enableCallsLock.withLock {
+            recordedEnableCalls.append(pullRequestID)
+            enableMergeMethods.append(mergeMethod)
+        }
         await enableHandler?(pullRequestID)
     }
 

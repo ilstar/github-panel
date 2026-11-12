@@ -364,6 +364,48 @@ final class SyncEngineTests: XCTestCase {
 
     // MARK: - Lists
 
+    func testAnOlderPageResponseCannotOverwriteNewerNavigation() async throws {
+        let api = loadingAPI()
+        let store = LocalStore.inMemory()
+        let cache = PullRequestCache(store: store)
+        let engine = makeEngine(api: api, cache: cache, store: store)
+        let started = expectation(description: "Page two sent")
+        let gate = Gate()
+        api.openPageHandler = { request in
+            if request.page == 2 {
+                started.fulfill()
+                await gate.wait()
+            }
+            return OpenPullRequests(login: "fred", rows: [row(number: request.page, status: .success)],
+                                    pagination: .init(request: request, next: nil, totalCount: 150))
+        }
+        let old = await engine.start(.openPage(.init(page: 2, after: "page-two")))
+        await fulfillment(of: [started], timeout: 5)
+        try await engine.request(.openPage(.init(page: 3, after: "page-three")))
+        await gate.open()
+        try await old.value
+        XCTAssertEqual(cache.open?.map(\.number), [3])
+        XCTAssertEqual(cache.pagination(of: .open)?.request.page, 3)
+    }
+
+    func testRefreshClampsDisappearingLastPageUsingAnEarlierBoundary() async throws {
+        let api = loadingAPI()
+        let store = LocalStore.inMemory()
+        let cache = PullRequestCache(store: store)
+        let engine = makeEngine(api: api, cache: cache, store: store)
+        cache.store(OpenPullRequests(login: "fred", rows: [], pagination: .init(request: .init(),
+                    next: .init(page: 2, after: "page-two"), totalCount: 51)), fetchedAt: Date())
+        api.openPageHandler = { request in
+            OpenPullRequests(login: "fred", rows: request.page == 1 ? [row(number: 1, status: .success)] : [],
+                             pagination: .init(request: request, next: nil, totalCount: 1))
+        }
+        try await engine.request(.openPage(.init(page: 2, after: "page-two")))
+        XCTAssertEqual(api.openPageRequests.map(\.page), [2, 1])
+        XCTAssertEqual(cache.pagination(of: .open)?.request.page, 1)
+        XCTAssertEqual(store.openPullRequestPage(2, size: 50).total, 1)
+        XCTAssertEqual(cache.open?.map(\.number), [1])
+    }
+
     func testListsLoadIntoTheListCacheAndRecordSyncState() async throws {
         let api = loadingAPI()
         api.rows = [row(number: 1, status: .success)]
@@ -379,7 +421,8 @@ final class SyncEngineTests: XCTestCase {
 
         XCTAssertEqual(cache.open, api.rows)
         XCTAssertEqual(cache.openSSOAuthorizationURL, SAMLSSO.tokenSettingsURL)
-        XCTAssertEqual(cache.reviewRequests, api.reviewRequests)
+        XCTAssertEqual(cache.reviewRequests?.rows, api.reviewRequests.rows)
+        XCTAssertEqual(cache.pagination(of: .reviewRequests)?.totalCount, 1)
         XCTAssertEqual(cache.state(of: .open), PullRequestCache.ListState(fetchedAt: clock.now))
         XCTAssertEqual(PullRequestCache(store: store).open, api.rows, "Restored after a restart")
         let state = await store.syncState(for: PullRequestListKind.reviewRequests.key)

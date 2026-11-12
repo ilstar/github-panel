@@ -9,6 +9,8 @@ struct ReviewRequests: Equatable, Codable {
     /// Set when some requests were left out because the token isn't SSO-authorized for their organization.
     let ssoAuthorizationURL: URL?
 
+    var pagination: PullRequestPagination? = nil
+
     static let empty = ReviewRequests(fromMe: [], fromMyTeams: [])
 
     /// GitHub's `review-requested:@me` matches both direct and team requests, while
@@ -19,7 +21,9 @@ struct ReviewRequests: Equatable, Codable {
                   ssoAuthorizationURL: ssoAuthorizationURL)
     }
 
-    init(fromMe: [ReviewRequestRow], fromMyTeams: [ReviewRequestRow], ssoAuthorizationURL: URL? = nil) {
+    init(fromMe: [ReviewRequestRow], fromMyTeams: [ReviewRequestRow], ssoAuthorizationURL: URL? = nil,
+         pagination: PullRequestPagination? = nil) {
+        self.pagination = pagination
         self.fromMe = fromMe
         self.fromMyTeams = fromMyTeams
         self.ssoAuthorizationURL = ssoAuthorizationURL
@@ -41,7 +45,7 @@ struct ReviewRequests: Equatable, Codable {
     func removing(where isHidden: (ReviewRequestRow) -> Bool) -> ReviewRequests {
         ReviewRequests(fromMe: fromMe.filter { !isHidden($0) },
                        fromMyTeams: fromMyTeams.filter { !isHidden($0) },
-                       ssoAuthorizationURL: ssoAuthorizationURL)
+                       ssoAuthorizationURL: ssoAuthorizationURL, pagination: pagination)
     }
 }
 
@@ -139,6 +143,7 @@ struct ReviewRequestsPage: Equatable {
     let fromMe: [ReviewRequestRow]
     let fromMyTeams: [ReviewRequestRow]
     private let start: Int
+    private var hasNextPage: Bool? = nil
 
     /// `page` is clamped, so a page past the end shows the last one after rows go away.
     init(requests: ReviewRequests, page: Int, size: Int = ReviewRequestsPage.defaultSize) {
@@ -165,6 +170,7 @@ struct ReviewRequestsPage: Equatable {
         start = (self.page - 1) * Self.defaultSize
         fromMe = loaded.fromMe
         fromMyTeams = loaded.fromMyTeams
+        if let pagination = loaded.pagination { hasNextPage = pagination.next != nil }
     }
 
     func total(in group: ReviewRequestGroup) -> Int {
@@ -208,7 +214,7 @@ struct ReviewRequestsPage: Equatable {
 
     var hasMultiplePages: Bool { pageCount > 1 }
     var canGoToPreviousPage: Bool { page > 1 }
-    var canGoToNextPage: Bool { page < pageCount }
+    var canGoToNextPage: Bool { hasNextPage ?? (page < pageCount) }
 
     var rangeText: String {
         guard totalCount > 0 else { return "No review requests" }
