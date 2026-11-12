@@ -744,14 +744,14 @@ final class GitHubAPITests: XCTestCase {
           "author":{"login":"octocat"},
           "reviewDecision":"REVIEW_REQUIRED",
           "latestReviews":{"nodes":[
-            {"state":"APPROVED","author":{"login":"hubot"},"onBehalfOf":{"nodes":[{"combinedSlug":"acme/ios"}]}},
+            {"state":"APPROVED","author":{"login":"hubot","name":"Hubot Person"},"onBehalfOf":{"nodes":[{"combinedSlug":"acme/ios"}]}},
             {"state":"CHANGES_REQUESTED","author":{"login":"monalisa"},"onBehalfOf":{"nodes":[]}},
             {"state":"COMMENTED","author":{"login":"octocat"},"onBehalfOf":{"nodes":[]}},
             {"state":"APPROVED","author":null,"onBehalfOf":{"nodes":[]}}
           ]},
           "reviewRequests":{"nodes":[
             {"asCodeOwner":true,"requestedReviewer":{"combinedSlug":"acme/web"}},
-            {"asCodeOwner":false,"requestedReviewer":{"login":"monalisa"}},
+            {"asCodeOwner":false,"requestedReviewer":{"login":"monalisa","name":"Mona Lisa"}},
             {"asCodeOwner":false,"requestedReviewer":null}
           ]}
         }}}}
@@ -762,13 +762,15 @@ final class GitHubAPITests: XCTestCase {
 
         XCTAssertEqual(content.detail.reviewers, PullRequestReviewers(decision: .reviewRequired, reviewers: [
             PullRequestReviewer(name: "acme/web", kind: .team, state: .pending, isCodeOwner: true),
-            PullRequestReviewer(name: "hubot", kind: .user, state: .approved, onBehalfOf: ["acme/ios"]),
-            PullRequestReviewer(name: "monalisa", kind: .user, state: .pending, previousState: .changesRequested)
+            PullRequestReviewer(name: "hubot", kind: .user, state: .approved, onBehalfOf: ["acme/ios"], fullName: "Hubot Person"),
+            PullRequestReviewer(name: "monalisa", kind: .user, state: .pending, previousState: .changesRequested, fullName: "Mona Lisa")
         ]))
         let index = try XCTUnwrap(transport.requests.firstIndex { $0.url?.path == "/graphql" })
         let query = try transport.graphQLBody(at: index).query
         XCTAssertTrue(query.contains("latestReviews(first: 100)"))
         XCTAssertTrue(query.contains("onBehalfOf(first: 10) { nodes { combinedSlug } }"))
+        XCTAssertTrue(query.contains("author { login ... on User { name } }"))
+        XCTAssertTrue(query.contains("... on User { login name }"))
         XCTAssertTrue(query.contains("asCodeOwner"))
         XCTAssertTrue(query.contains("... on Team { combinedSlug }"))
     }
@@ -1274,7 +1276,9 @@ final class GitHubAPITests: XCTestCase {
 
     func testFetchPullRequestCommentsDecodesCommentsAndThreads() async throws {
         let transport = MockHTTPTransport()
-        transport.enqueue(json: commentsResponse)
+        transport.enqueue(json: commentsResponse.replacingOccurrences(of: #""login": "octocat""#,
+            with: #""login": "octocat", "name": "Mona Lisa""#).replacingOccurrences(of: #""login": "hubot""#,
+            with: #""login": "hubot", "name": "Hubot Person""#))
         let reference = PullRequestReference(repoFullName: "acme/widgets", number: 7)
 
         let comments = try await GitHubAPI(transport: transport).fetchPullRequestComments(token: "token", reference: reference)
@@ -1282,7 +1286,7 @@ final class GitHubAPITests: XCTestCase {
         let date = ISO8601DateFormatter().date(from: "2026-04-10T08:00:00Z")!
         XCTAssertEqual(comments.comments, [
             PullRequestComment(id: "IC_1", databaseID: 11, authorLogin: "octocat", body: "Nice work",
-                               createdAt: date, htmlURL: URL(string: "https://github.com/acme/widgets/pull/7#issuecomment-11")),
+                               createdAt: date, htmlURL: URL(string: "https://github.com/acme/widgets/pull/7#issuecomment-11"), authorName: "Mona Lisa"),
             PullRequestComment(id: "IC_2", databaseID: 12, authorLogin: "ghost", body: "Deleted user",
                                createdAt: date, htmlURL: nil)
         ])
@@ -1290,7 +1294,7 @@ final class GitHubAPITests: XCTestCase {
             ReviewThread(id: "RT_1", path: "Sources/New.swift", line: 3, startLine: 1, side: .left,
                          isResolved: true, isOutdated: false,
                          comments: [PullRequestComment(id: "RC_1", databaseID: 21, authorLogin: "hubot", body: "Why?",
-                                                       createdAt: date, htmlURL: nil)]),
+                                                       createdAt: date, htmlURL: nil, authorName: "Hubot Person")]),
             ReviewThread(id: "RT_2", path: "Sources/New.swift", line: nil, startLine: nil, side: .right,
                          isResolved: false, isOutdated: true, comments: [])
         ])
@@ -1499,7 +1503,8 @@ final class GitHubAPITests: XCTestCase {
 
     func testFetchPullRequestCommentsLoadsSubmittedReviewsForTheActivityList() async throws {
         let transport = MockHTTPTransport()
-        transport.enqueue(json: submittedReviewsResponse)
+        transport.enqueue(json: submittedReviewsResponse.replacingOccurrences(of: #""login": "hubot""#,
+            with: #""login": "hubot", "name": "Hubot Person""#))
 
         let comments = try await GitHubAPI(transport: transport)
             .fetchPullRequestComments(token: "token", reference: PullRequestReference(repoFullName: "acme/widgets", number: 7))
@@ -1508,6 +1513,7 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertEqual(comments.reviews.map(\.databaseID), [80, 81])
         XCTAssertEqual(comments.reviews.map(\.reviewState), [.approved, .changesRequested])
         XCTAssertEqual(comments.reviews.map(\.authorLogin), ["hubot", "ghost"])
+        XCTAssertEqual(comments.reviews.first?.authorDisplayName, "Hubot Person")
         XCTAssertEqual(comments.reviews.first?.body, "Ship it")
         let body = try transport.graphQLBody(at: 0)
         XCTAssertTrue(body.query.contains("submittedReviews: reviews(last: 50, states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED])"))

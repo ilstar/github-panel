@@ -98,7 +98,7 @@ struct PullRequestReviewerRow: View {
             avatar
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {
-                    Text(reviewer.name)
+                    Text(reviewer.displayName)
                         .prFont(.callout, weight: .semibold)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -132,7 +132,7 @@ struct PullRequestReviewerRow: View {
                 }
                 .buttonStyle(.plain)
                 .help("Re-request review")
-                .accessibilityLabel("Re-request review from \(reviewer.name)")
+                .accessibilityLabel("Re-request review from \(reviewer.displayName)")
             }
             statusIcon
                 .accessibilityLabel(reviewer.helpText)

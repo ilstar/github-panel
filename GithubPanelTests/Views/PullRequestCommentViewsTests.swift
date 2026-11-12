@@ -3,6 +3,28 @@ import XCTest
 @testable import GithubPanel
 
 final class PullRequestCommentViewsTests: XCTestCase {
+    func testCommentAuthorUsesProfileNameWithLoginAndViewerFallbacks() throws {
+        var comment = PullRequestComment(id: "c", databaseID: 1, authorLogin: "octocat", body: "Hi",
+                                         createdAt: Date(timeIntervalSince1970: 0), htmlURL: nil)
+        for name: String? in [nil, "", " \n "] {
+            comment.authorName = name
+            XCTAssertEqual(PullRequestCommentView.authorName(comment), "octocat")
+        }
+        comment.authorName = " Mona Lisa "
+        XCTAssertEqual(PullRequestCommentView.authorName(comment), "Mona Lisa")
+        XCTAssertEqual(comment.authorLogin, "octocat")
+        let namedThread = thread(line: 1, startLine: nil).replacingComments([comment])
+        XCTAssertEqual(ReviewThreadView.summary(namedThread), "Mona Lisa · 1 comment")
+        XCTAssertEqual(try JSONDecoder().decode(PullRequestComment.self,
+            from: JSONEncoder().encode(comment)), comment)
+        comment.authorName = nil
+        XCTAssertEqual(try JSONDecoder().decode(PullRequestComment.self,
+            from: JSONEncoder().encode(comment)).authorDisplayName, "octocat")
+        let unsent = PullRequestComment(id: "c", databaseID: 0, authorLogin: "", body: "Hi",
+                                       createdAt: Date(), htmlURL: nil)
+        XCTAssertEqual(PullRequestCommentView.authorName(unsent), "You")
+    }
+
     func testThreadTitleNamesTheFileAndLines() {
         XCTAssertEqual(ReviewThreadView.title(thread(line: 12, startLine: nil)), "Widget.swift line 12")
         XCTAssertEqual(ReviewThreadView.title(thread(line: 12, startLine: 10)), "Widget.swift lines 10–12")

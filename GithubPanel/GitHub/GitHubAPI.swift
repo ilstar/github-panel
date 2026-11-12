@@ -600,7 +600,7 @@ final class GitHubAPI: GitHubAPIClient {
           id
           body
           createdAt
-          author { login }
+          author { login ... on User { name } }
           ... on IssueComment { databaseId url }
           ... on PullRequestReviewComment { databaseId url state }
         }
@@ -613,7 +613,7 @@ final class GitHubAPI: GitHubAPIClient {
               comments(last: \(commentPageSize)) { totalCount \(earlierPageInfo) nodes { ...CommentFields } }
               reviews(states: PENDING, first: 1) { nodes { id viewerDidAuthor } }
               submittedReviews: reviews(last: \(Self.submittedReviewLimit), states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED]) {
-                nodes { id databaseId body state submittedAt url author { login } }
+                nodes { id databaseId body state submittedAt url author { login ... on User { name } } }
               }
               reviewThreads(first: \(threadPageSize)) {
                 totalCount
@@ -956,7 +956,7 @@ final class GitHubAPI: GitHubAPIClient {
               author { login }
               reviewDecision
               latestReviews(first: 100) {
-                nodes { state author { login } onBehalfOf(first: 10) { nodes { combinedSlug } } }
+                nodes { state author { login ... on User { name } } onBehalfOf(first: 10) { nodes { combinedSlug } } }
               }
               viewerReviews: reviews(last: 100, states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED]) {
                 nodes { viewerDidAuthor commit { oid } }
@@ -965,7 +965,7 @@ final class GitHubAPI: GitHubAPIClient {
                 nodes {
                   asCodeOwner
                   requestedReviewer {
-                    ... on User { login }
+                    ... on User { login name }
                     ... on Bot { login }
                     ... on Mannequin { login }
                     ... on Team { combinedSlug }
@@ -1316,7 +1316,7 @@ private struct ViewerStateResponse: Decodable {
                 reviews: (latestReviews?.nodes ?? []).compactMap { review in
                     review.author.map {
                         PullRequestReviewers.Review(author: $0.login, state: review.state,
-                                                    onBehalfOf: (review.onBehalfOf?.nodes ?? []).map(\.combinedSlug))
+                                                    onBehalfOf: (review.onBehalfOf?.nodes ?? []).map(\.combinedSlug), fullName: $0.name)
                     }
                 },
                 requests: (reviewRequests?.nodes ?? []).compactMap { request in
@@ -1325,7 +1325,7 @@ private struct ViewerStateResponse: Decodable {
                         return PullRequestReviewers.Request(name: slug, kind: .team, asCodeOwner: request.asCodeOwner ?? false)
                     }
                     return reviewer.login.map {
-                        PullRequestReviewers.Request(name: $0, kind: .user, asCodeOwner: request.asCodeOwner ?? false)
+                        PullRequestReviewers.Request(name: $0, kind: .user, asCodeOwner: request.asCodeOwner ?? false, fullName: reviewer.name)
                     }
                 },
                 authorLogin: author?.login ?? "")
@@ -1333,7 +1333,7 @@ private struct ViewerStateResponse: Decodable {
     }
     struct BaseRepository: Decodable { let allowUpdateBranch: Bool? }
     struct Connection<Node: Decodable>: Decodable { let nodes: [Node] }
-    struct Login: Decodable { let login: String }
+    struct Login: Decodable { let login: String; let name: String? }
     struct Team: Decodable { let combinedSlug: String }
     struct Review: Decodable {
         let state: String
@@ -1350,6 +1350,7 @@ private struct ViewerStateResponse: Decodable {
     struct ReviewRequest: Decodable {
         struct Reviewer: Decodable {
             let login: String?
+            let name: String?
             let combinedSlug: String?
         }
         let asCodeOwner: Bool?
@@ -1392,7 +1393,7 @@ private struct CommentsResponse: Decodable {
             default: reviewState = .commented
             }
             return PullRequestComment(id: id, databaseID: databaseId, authorLogin: author?.login ?? "ghost", body: body,
-                                      createdAt: submittedAt, htmlURL: url, reviewState: reviewState)
+                                      createdAt: submittedAt, htmlURL: url, reviewState: reviewState, authorName: author?.name)
         }
     }
     struct Review: Decodable {
@@ -1411,7 +1412,7 @@ private struct CommentsResponse: Decodable {
         var comments: GraphQLPage<Comment>
     }
     struct Comment: Decodable {
-        struct Author: Decodable { let login: String }
+        struct Author: Decodable { let login: String; let name: String? }
 
         let id: String
         let databaseId: Int
@@ -1430,7 +1431,7 @@ private struct CommentsResponse: Decodable {
                                body: body,
                                createdAt: createdAt,
                                htmlURL: url,
-                               isPending: state == "PENDING")
+                               isPending: state == "PENDING", authorName: author?.name)
         }
     }
 
