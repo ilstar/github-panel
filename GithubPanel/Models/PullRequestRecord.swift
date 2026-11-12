@@ -86,7 +86,7 @@ enum PullRequestListRows {
             members.filter { $0.reviewGroup == group }.compactMap { records[$0.reference]?.shownReviewRequestRow }
         }
         return ReviewRequests(fromMe: rows(in: .fromMe), fromMyTeams: rows(in: .fromMyTeams),
-                              ssoAuthorizationURL: info?.ssoAuthorizationURL)
+                              ssoAuthorizationURL: info?.ssoAuthorizationURL, pagination: info?.pagination)
     }
 
     static func historyPage(_ page: Int, members: [PullRequestListMember]?, info: PullRequestListInfo?,
@@ -104,6 +104,9 @@ struct PullRequestListInfo: Equatable, Codable {
     var page: Int?
     var perPage: Int?
     var totalCount: Int?
+    var pagination: PullRequestPagination?
+    var pageRequests: [Int: PullRequestPageRequest]?
+    var pageIDs: [Int: [String]]?
 }
 
 extension PullRequestRow {

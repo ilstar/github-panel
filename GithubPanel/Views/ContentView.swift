@@ -409,8 +409,8 @@ struct ContentView: View {
             }
             if monitor.openTotalCount > PRMonitor.openPageSize {
                 pagination(rangeText: monitor.openPageRangeText,
-                           canGoToPreviousPage: monitor.openPage > 1,
-                           canGoToNextPage: monitor.openPage * PRMonitor.openPageSize < monitor.openTotalCount,
+                           canGoToPreviousPage: monitor.canLoadPreviousOpenPage,
+                           canGoToNextPage: monitor.canLoadNextOpenPage,
                            previous: { monitor.showOpenPage(monitor.openPage - 1) },
                            next: { monitor.showOpenPage(monitor.openPage + 1) })
             }
@@ -623,10 +623,15 @@ struct ContentView: View {
                 }
             }
 
+            if monitor.reviewSearchLimitReached {
+                Text("GitHub search returns at most 1,000 requests per group.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             if page.hasMultiplePages {
                 pagination(rangeText: page.rangeText,
-                           canGoToPreviousPage: page.canGoToPreviousPage,
-                           canGoToNextPage: page.canGoToNextPage,
+                           canGoToPreviousPage: page.canGoToPreviousPage && !monitor.isReviewRequestsLoading,
+                           canGoToNextPage: page.canGoToNextPage && !monitor.isReviewRequestsLoading,
                            previous: { showReviewPage(page.page - 1) },
                            next: { showReviewPage(page.page + 1) })
             }
@@ -635,8 +640,10 @@ struct ContentView: View {
 
     /// Turns to a To Review page and selects its first row.
     private func showReviewPage(_ number: Int) {
-        monitor.showReviewPage(number)
-        selectedReviewID = monitor.reviewRequests.rows.first?.id
+        Task {
+            await monitor.loadReviewPage(number)
+            selectedReviewID = monitor.reviewRequests.rows.first?.id
+        }
     }
 
     @ViewBuilder
@@ -949,7 +956,17 @@ struct ContentView: View {
         case .open:
             selectedPRID = ListNavigation.neighbor(of: selectedPRID, in: visibleRowIDs, offset: delta)
         case .reviews:
-            selectedReviewID = ListNavigation.neighbor(of: selectedReviewID, in: visibleRowIDs, offset: delta)
+            let page = monitor.reviewPage
+            let atNextPage = delta > 0 && selectedReviewID == visibleRowIDs.last && page.canGoToNextPage
+            let atPreviousPage = delta < 0 && selectedReviewID == visibleRowIDs.first && page.canGoToPreviousPage
+            if (atNextPage || atPreviousPage) && !monitor.isReviewRequestsLoading {
+                Task {
+                    await monitor.loadReviewPage(page.page + (atNextPage ? 1 : -1))
+                    selectedReviewID = atNextPage ? monitor.reviewRequests.rows.first?.id : monitor.reviewRequests.rows.last?.id
+                }
+            } else {
+                selectedReviewID = ListNavigation.neighbor(of: selectedReviewID, in: visibleRowIDs, offset: delta)
+            }
         case .history:
             selectedHistoryID = ListNavigation.neighbor(of: selectedHistoryID, in: visibleRowIDs, offset: delta)
         }

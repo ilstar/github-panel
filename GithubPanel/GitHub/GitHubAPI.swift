@@ -11,15 +11,17 @@ final class GitHubAPI: GitHubAPIClient {
         return try await decode(GitHubUser.self, request: request)
     }
 
-    /// Open pull requests load in pages of 50, up to this many pages.
-    static let maxOpenPullRequestPages = 10
-
     func fetchOpenPRs(token: String) async throws -> OpenPullRequests {
+        try await fetchOpenPRPage(token: token, request: .init())
+    }
+
+    func fetchOpenPRPage(token: String, request: PullRequestPageRequest) async throws -> OpenPullRequests {
         let query = """
         query($after: String) {
           viewer {
             login
             pullRequests(first: 50, after: $after, states: [OPEN], orderBy: {field: UPDATED_AT, direction: DESC}) {
+              totalCount
               pageInfo { hasNextPage endCursor }
               nodes {
                 id
@@ -66,25 +68,14 @@ final class GitHubAPI: GitHubAPIClient {
           }
         }
         """
-        var login = ""
-        var nodes: [PullRequestNode] = []
-        var cursor: String?
-        var ssoAuthorizationURL: URL?
-        for _ in 0..<Self.maxOpenPullRequestPages {
-            let variables: [String: Any] = cursor.map { ["after": $0] } ?? [:]
-            let result = try await graphQLKeepingSSOBlockedData(OpenPullRequestsResponse.self,
-                                                                query: query, variables: variables, token: token)
-            let response = result.value
-            ssoAuthorizationURL = ssoAuthorizationURL ?? result.ssoAuthorizationURL
-            login = response.viewer.login
-            // Pull requests in an organization the token isn't SSO-authorized for come back as null.
-            nodes += response.viewer.pullRequests.nodes.compactMap { $0 }
-            guard let pageInfo = response.viewer.pullRequests.pageInfo,
-                  pageInfo.hasNextPage,
-                  let next = pageInfo.endCursor else { break }
-            cursor = next
-        }
-        // A pull request updated between two pages can come back on both; keep its first, newer copy.
+        let variables: [String: Any] = request.after.map { ["after": $0] } ?? [:]
+        let result = try await graphQLKeepingSSOBlockedData(OpenPullRequestsResponse.self,
+                                                            query: query, variables: variables, token: token)
+        let connection = result.value.viewer.pullRequests
+        let login = result.value.viewer.login
+        let nodes = connection.nodes.compactMap { $0 }
+        let ssoAuthorizationURL = result.ssoAuthorizationURL
+        // Keep the first copy if GitHub repeats a node within this page.
         var seen: Set<String> = []
         let rows = nodes.filter { seen.insert($0.id).inserted }.map { pr in
             PullRequestRow(id: "\(pr.repository.nameWithOwner)#\(pr.number)",
@@ -109,7 +100,12 @@ final class GitHubAPI: GitHubAPIClient {
                            baseRefName: pr.baseRefName,
                            headRefName: pr.isCrossRepository == true ? nil : pr.headRefName)
         }
-        return OpenPullRequests(login: login, rows: rows, ssoAuthorizationURL: ssoAuthorizationURL)
+        let next = connection.pageInfo.flatMap { info in
+            info.hasNextPage ? info.endCursor.map { PullRequestPageRequest(page: request.page + 1, after: $0) } : nil
+        }
+        return OpenPullRequests(login: login, rows: rows, ssoAuthorizationURL: ssoAuthorizationURL,
+                                pagination: .init(request: request, next: next,
+                                                  totalCount: connection.totalCount ?? rows.count))
     }
 
     func fetchClosedPRs(token: String, username: String, page: Int, perPage: Int) async throws -> PullRequestHistoryPage {
@@ -137,65 +133,132 @@ final class GitHubAPI: GitHubAPIClient {
     }
 
     func fetchReviewRequests(token: String) async throws -> ReviewRequests {
-        let directSearch = "is:pr is:open archived:false user-review-requested:@me sort:updated-desc"
-        let allSearch = "is:pr is:open archived:false review-requested:@me sort:updated-desc"
-        // Both groups' first pages load together; later pages are loaded below. Each pull request carries its
-        // checks and review-request events, so big pages make GitHub time out with a 502; small ones keep it fast.
-        let pageSize = Self.reviewRequestPageSize
-        let query = """
-        query {
-          viewer { login }
-          direct: search(query: "\(directSearch)", type: ISSUE, first: \(pageSize)) {
-            pageInfo { hasNextPage endCursor }
-            nodes { ...ReviewRequestFields }
-          }
-          all: search(query: "\(allSearch)", type: ISSUE, first: \(pageSize)) {
-            pageInfo { hasNextPage endCursor }
-            nodes { ...ReviewRequestFields }
-          }
-        }
-
-        \(Self.reviewRequestFields)
-        """
-        let result = try await graphQLKeepingSSOBlockedData(ReviewRequestsResponse.self,
-                                                            query: query, variables: [:], token: token)
-        var response = result.value
-        var ssoAuthorizationURL = result.ssoAuthorizationURL
-        func remainingPages(of search: ReviewRequestsResponse.Search, query: String) async throws -> ReviewRequestsResponse.Search {
-            let pageQuery = """
-            query($query: String!, $after: String!) {
-              page: search(query: $query, type: ISSUE, first: \(pageSize), after: $after) {
-                pageInfo { hasNextPage endCursor }
-                nodes { ...ReviewRequestFields }
-              }
-            }
-
-            \(Self.reviewRequestFields)
-            """
-            struct Response: Decodable { let page: GraphQLPage<ReviewRequestsResponse.Node?> }
-            var search = search
-            search.nodes = try await allNodes(GraphQLPage(pageInfo: search.pageInfo, nodes: search.nodes),
-                                              maxPages: Self.maxReviewRequestPages) { cursor in
-                let result = try await graphQLKeepingSSOBlockedData(Response.self, query: pageQuery,
-                                                                    variables: ["query": query, "after": cursor], token: token)
-                ssoAuthorizationURL = ssoAuthorizationURL ?? result.ssoAuthorizationURL
-                return result.value.page
-            }
-            return search
-        }
-        response.direct = try await remainingPages(of: response.direct, query: directSearch)
-        response.all = try await remainingPages(of: response.all, query: allSearch)
-        let login = response.viewer?.login
-        // A direct request's wait starts when I was asked; a team request's when a team was.
-        return ReviewRequests(direct: response.direct.rows { $0.typename == "User" && (login == nil || $0.login == login) },
-                              all: response.all.rows { $0.typename == "Team" },
-                              ssoAuthorizationURL: ssoAuthorizationURL)
+        try await fetchReviewRequestPage(token: token, request: .init(), hidden: [:])
     }
 
-    /// Pull requests per To Review search page.
+    private static let directReviewSearch = "is:pr is:open archived:false user-review-requested:@me sort:updated-desc"
+    // Disjoint searches prevent direct requests reappearing on later team pages.
+    private static let teamReviewSearch = "is:pr is:open archived:false review-requested:@me -user-review-requested:@me sort:updated-desc"
     static let reviewRequestPageSize = 10
-    /// Enough To Review pages for the 1,000 results GitHub's search returns at most.
-    static let maxReviewRequestPages = 1000 / reviewRequestPageSize
+
+    func fetchReviewRequestPage(token: String, request: PullRequestPageRequest,
+                                hidden: [String: HiddenReviewRequest]) async throws -> ReviewRequests {
+        let query = """
+        query($after: String, $directSize: Int!) {
+          viewer { login }
+          direct: search(query: "\(Self.directReviewSearch)", type: ISSUE, first: $directSize, after: $after) {
+            issueCount
+            pageInfo { hasNextPage endCursor }
+            nodes { ...ReviewRequestFields }
+          }
+          all: search(query: "\(Self.teamReviewSearch)", type: ISSUE, first: 0) {
+            issueCount
+            pageInfo { hasNextPage endCursor }
+            nodes { ...ReviewRequestFields }
+          }
+        }
+        \(Self.reviewRequestFields)
+        """
+        var variables: [String: Any] = ["directSize": request.directFinished ? 0 : min(Self.reviewRequestPageSize, max(0, 1000 - request.directLoaded))]
+        if let after = request.after { variables["after"] = after }
+        let result = try await graphQLKeepingSSOBlockedData(ReviewRequestsResponse.self,
+                                                            query: query, variables: variables, token: token)
+        let response = result.value
+        let login = response.viewer?.login
+        var sso = result.ssoAuthorizationURL
+        var retained: [String: HiddenReviewRequest] = [:]
+        var hiddenDirect = 0
+        var hiddenTeams = 0
+        // A numeric search in a repository includes that PR's number. Filter exact identities as the same
+        // number can also occur in other PRs' text. Only hidden PRs are probed, never the whole review list.
+        for (id, fingerprint) in hidden.sorted(by: { $0.key < $1.key }) {
+            guard let split = id.lastIndex(of: "#"), let number = Int(id[id.index(after: split)...]) else { continue }
+            let repo = String(id[..<split])
+            var foundRequest = false
+            for (group, base) in [(ReviewRequestGroup.fromMe, Self.directReviewSearch), (.fromMyTeams, Self.teamReviewSearch)] {
+                var after: String?
+                repeat {
+                    let found = try await reviewSearch("\(base.replacingOccurrences(of: " sort:updated-desc", with: "")) repo:\(repo) \(number)", after: after, size: 10, token: token)
+                    sso = sso ?? found.sso
+                    let rows = found.search.rows { group == .fromMe ? $0.typename == "User" && (login == nil || $0.login == login) : $0.typename == "Team" }
+                    if let row = rows.first(where: { $0.id == id }) {
+                        foundRequest = true
+                        if fingerprint.hides(row) {
+                            retained[id] = fingerprint
+                            if group == .fromMe { hiddenDirect += 1 } else { hiddenTeams += 1 }
+                        }
+                        break
+                    }
+                    after = found.search.pageInfo?.hasNextPage == true ? found.search.pageInfo?.endCursor : nil
+                } while after != nil
+                if foundRequest { break }
+            }
+        }
+        var direct: [ReviewRequestRow] = []
+        var teams: [ReviewRequestRow] = []
+        var cursor = request
+        var seen: Set<String> = []
+        func append(_ search: ReviewRequestsResponse.Search, team: Bool) {
+            let rows = search.rows { team ? $0.typename == "Team" : $0.typename == "User" && (login == nil || $0.login == login) }
+            let visible = rows.filter { retained[$0.id] == nil && seen.insert($0.id).inserted }
+            if team { teams += visible } else { direct += visible }
+        }
+        if !cursor.directFinished {
+            append(response.direct, team: false)
+            cursor.after = response.direct.pageInfo?.endCursor
+            cursor.directLoaded += response.direct.nodes.count
+            cursor.directFinished = response.direct.pageInfo?.hasNextPage != true || cursor.directLoaded >= 1000
+        }
+        var teamFinished = response.all.issueCount == 0 || cursor.teamLoaded >= 1000
+        while direct.count + teams.count < Self.reviewRequestPageSize && !(cursor.directFinished && teamFinished) {
+            let team = cursor.directFinished
+            let found = try await reviewSearch(team ? Self.teamReviewSearch : Self.directReviewSearch,
+                                               after: team ? cursor.teamAfter : cursor.after,
+                                               size: min(Self.reviewRequestPageSize - direct.count - teams.count,
+                                                         1000 - (team ? cursor.teamLoaded : cursor.directLoaded)), token: token)
+            sso = sso ?? found.sso
+            append(found.search, team: team)
+            if team { cursor.teamLoaded += found.search.nodes.count }
+            else { cursor.directLoaded += found.search.nodes.count }
+            let loaded = team ? cursor.teamLoaded : cursor.directLoaded
+            let next = found.search.pageInfo?.hasNextPage == true && loaded < 1000 ? found.search.pageInfo?.endCursor : nil
+            if team {
+                cursor.teamAfter = next
+                if next == nil { teamFinished = true; break }
+            } else {
+                cursor.after = next
+                cursor.directFinished = next == nil
+            }
+        }
+        // Search returns at most 1,000 entries per group. Counts retain GitHub's actual total.
+        let directTotal = max(0, (response.direct.issueCount ?? direct.count) - hiddenDirect)
+        let teamTotal = max(0, (response.all.issueCount ?? teams.count) - hiddenTeams)
+        let hasMore = !cursor.directFinished || !teamFinished
+        cursor.page = request.page + 1
+        return ReviewRequests(fromMe: direct, fromMyTeams: teams, ssoAuthorizationURL: sso,
+                              pagination: .init(request: request, next: hasMore ? cursor : nil,
+                                                totalCount: directTotal + teamTotal,
+                                                fromMeTotal: directTotal, fromMyTeamsTotal: teamTotal, hidden: retained))
+    }
+
+    private func reviewSearch(_ search: String, after: String?, size: Int, token: String) async throws
+        -> (search: ReviewRequestsResponse.Search, sso: URL?) {
+        let query = """
+        query($query: String!, $after: String, $size: Int!) {
+          page: search(query: $query, type: ISSUE, first: $size, after: $after) {
+            issueCount
+            pageInfo { hasNextPage endCursor }
+            nodes { ...ReviewRequestFields }
+          }
+        }
+        \(Self.reviewRequestFields)
+        """
+        struct Response: Decodable { let page: ReviewRequestsResponse.Search }
+        var variables: [String: Any] = ["query": search, "size": size]
+        if let after { variables["after"] = after }
+        let result = try await graphQLKeepingSSOBlockedData(Response.self, query: query, variables: variables, token: token)
+        return (result.value.page, result.ssoAuthorizationURL)
+    }
 
     private static let reviewRequestFields = """
         fragment ReviewRequestFields on PullRequest {
@@ -1538,6 +1601,7 @@ private struct OpenPullRequestsResponse: Decodable {
     }
 
     struct Connection: Decodable {
+        let totalCount: Int?
         let pageInfo: PageInfo?
         let nodes: [PullRequestNode?]
     }
@@ -1632,6 +1696,7 @@ private struct ReviewRequestsResponse: Decodable {
     var all: Search
 
     struct Search: Decodable {
+        var issueCount: Int?
         var pageInfo: GraphQLPageInfo?
         /// A pull request in an organization the token isn't SSO-authorized for comes back as null.
         var nodes: [Node?]

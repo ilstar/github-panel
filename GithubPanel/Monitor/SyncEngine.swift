@@ -13,10 +13,12 @@ actor SyncEngine {
         case changedFiles(PullRequestReference, base: String, head: String)
         /// My PRs.
         case openList
+        case openPage(PullRequestPageRequest)
         /// A page of my closed and merged pull requests.
         case history(page: Int)
         /// To Review.
         case reviewRequests
+        case reviewPage(PullRequestPageRequest)
         /// The token's login, which History searches by. My PRs also returns it.
         case currentUser
 
@@ -26,22 +28,24 @@ actor SyncEngine {
             case .detail(let reference), .comments(let reference, _), .checks(let reference),
                  .changedFiles(let reference, _, _):
                 return reference
-            case .openList, .history, .reviewRequests, .currentUser:
+            case .openList, .openPage, .history, .reviewRequests, .reviewPage, .currentUser:
                 return nil
             }
         }
 
         var list: PullRequestListKind? {
             switch self {
-            case .openList: return .open
+            case .openList, .openPage: return .open
             case .history(let page): return .history(page: page)
-            case .reviewRequests: return .reviewRequests
+            case .reviewRequests, .reviewPage: return .reviewRequests
             case .detail, .comments, .checks, .changedFiles, .currentUser: return nil
             }
         }
 
         /// The `sync_state` key. Lists use their `pull_request_list` key.
         var key: String {
+            if case .openPage(let request) = self { return request.page == 1 ? "open" : "open:page:\(request.page)" }
+            if case .reviewPage(let request) = self { return request.page == 1 ? "reviewRequests" : "reviewRequests:page:\(request.page)" }
             if let list { return list.key }
             switch self {
             case .detail(let reference): return "detail:\(reference.id)"
@@ -50,7 +54,7 @@ actor SyncEngine {
             case .checks(let reference): return "checks:\(reference.id)"
             case .changedFiles(let reference, let base, let head): return "changedFiles:\(reference.id):\(base)...\(head)"
             case .currentUser: return "currentUser"
-            case .openList, .history, .reviewRequests: preconditionFailure("Lists use their list key")
+            case .openList, .openPage, .history, .reviewRequests, .reviewPage: preconditionFailure("Lists use their list key")
             }
         }
     }
@@ -180,6 +184,20 @@ actor SyncEngine {
     /// start the detail first, so comments and checks that arrive before it still find it to attach to.
     func start(_ resource: Resource, priority: Priority = .userVisible,
                maxAge: TimeInterval = 0, joinsLoadInFlight: Bool = false) async -> Task<Void, Error> {
+        // Legacy list requests (refreshes after writes and timer ticks) follow the displayed or loading page.
+        // Normalize them to the same resource as navigation, so a refresh joins that page's load.
+        var resource = resource
+        switch resource {
+        case .openList:
+            let loading = inFlight.values.first { $0.resource.list == .open && !$0.isSuperseded && $0.task?.isCancelled == false }
+            if let loading { resource = loading.resource }
+            else { resource = .openPage(await cache.pagination(of: .open)?.request ?? .init()) }
+        case .reviewRequests:
+            let loading = inFlight.values.first { $0.resource.list == .reviewRequests && !$0.isSuperseded && $0.task?.isCancelled == false }
+            if let loading { resource = loading.resource }
+            else { resource = .reviewPage(await cache.pagination(of: .reviewRequests)?.request ?? .init()) }
+        default: break
+        }
         var fetchedAt: Date?
         if maxAge > 0, let last = await store.syncState(for: resource.key)?.fetchedAt,
            now().timeIntervalSince(last) < maxAge {
@@ -204,7 +222,9 @@ actor SyncEngine {
             return Task { throw error }
         }
         if let running, priority > running.priority { promote(running) }
-        if let running, resource.list != nil { running.isSuperseded = true }
+        if let list = resource.list {
+            for existing in inFlight.values where existing.resource.list == list { existing.isSuperseded = true }
+        }
         let job = Job(resource: resource, credential: credential, priority: priority, previous: running)
         let task = Task { try await run(job) }
         job.task = task
@@ -306,16 +326,47 @@ actor SyncEngine {
                                                                  baseSHA: base, headSHA: head),
                                  base: base, head: head)
         case .openList:
-            return .openList(try await api.fetchOpenPRs(token: token))
+            let request = await cache.pagination(of: .open)?.request ?? .init()
+            return .openList(try await fetchOpenPage(token: token, request: request))
+        case .openPage(let request):
+            return .openList(try await fetchOpenPage(token: token, request: request))
         case .history(let page):
             let login = try await login(for: session)
             return .history(try await api.fetchClosedPRs(token: token, username: login, page: page,
                                                          perPage: Self.historyPageSize))
         case .reviewRequests:
-            return .reviewRequests(try await api.fetchReviewRequests(token: token))
+            let request = await cache.pagination(of: .reviewRequests)?.request ?? .init()
+            let hidden = await cache.hiddenReviewRequests
+            return .reviewRequests(try await fetchReviewPage(token: token, request: request, hidden: hidden))
+        case .reviewPage(let request):
+            let hidden = await cache.hiddenReviewRequests
+            return .reviewRequests(try await fetchReviewPage(token: token, request: request, hidden: hidden))
         case .currentUser:
             return .currentUser(try await api.fetchCurrentUser(token: token).login)
         }
+    }
+
+    /// If the last page disappeared, reload an earlier known boundary rather than displaying an empty page
+    /// beyond the new count. No intermediate rows need to be fetched.
+    private func fetchOpenPage(token: String, request: PullRequestPageRequest) async throws -> OpenPullRequests {
+        var result = try await api.fetchOpenPRPage(token: token, request: request)
+        while let page = result.pagination, page.request.page > max(1, (page.totalCount + 49) / 50) {
+            let number = max(1, (page.totalCount + 49) / 50)
+            let earlier = await cache.pageRequest(number, in: .open) ?? .init()
+            result = try await api.fetchOpenPRPage(token: token, request: earlier)
+        }
+        return result
+    }
+
+    private func fetchReviewPage(token: String, request: PullRequestPageRequest,
+                                 hidden: [String: HiddenReviewRequest]) async throws -> ReviewRequests {
+        var result = try await api.fetchReviewRequestPage(token: token, request: request, hidden: hidden)
+        while let page = result.pagination, page.request.page > max(1, (page.totalCount + 9) / 10) {
+            let number = max(1, (page.totalCount + 9) / 10)
+            let earlier = await cache.pageRequest(number, in: .reviewRequests) ?? .init()
+            result = try await api.fetchReviewRequestPage(token: token, request: earlier, hidden: hidden)
+        }
+        return result
     }
 
     static let historyPageSize = 10
@@ -386,7 +437,13 @@ actor SyncEngine {
 
     @MainActor
     private static func cacheHolds(_ resource: Resource, cache: PullRequestCache) -> Bool {
-        if let list = resource.list { return cache.holds(list) }
+        if let list = resource.list {
+            switch resource {
+            case .openPage(let request), .reviewPage(let request):
+                return cache.holds(list) && cache.pagination(of: list)?.request == request
+            default: return cache.holds(list)
+            }
+        }
         guard let reference = resource.reference else { return true }
         guard let entry = cache.entry(for: reference) else { return false }
         switch resource {
@@ -396,7 +453,7 @@ actor SyncEngine {
         case .changedFiles(_, let base, let head):
             return entry.filesSinceLastReview != nil && entry.content.detail.lastReviewedSHA == base
                 && entry.content.detail.headSHA == head
-        case .openList, .history, .reviewRequests, .currentUser:
+        case .openList, .openPage, .history, .reviewRequests, .reviewPage, .currentUser:
             return false
         }
     }

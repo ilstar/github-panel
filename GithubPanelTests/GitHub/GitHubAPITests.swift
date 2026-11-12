@@ -106,30 +106,30 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertTrue(pr.canMergeImmediately)
     }
 
-    func testFetchOpenPRsFollowsPagesAndSkipsRepeatedPullRequests() async throws {
+    func testFetchOpenPRsOnlyLoadsRequestedPageAndCount() async throws {
         let transport = MockHTTPTransport()
-        transport.enqueue(json: openPRPage(numbers: [9, 8], hasNextPage: true, endCursor: "cursor-1"))
-        // 8 was updated between the two requests, so it comes back on the second page too.
-        transport.enqueue(json: openPRPage(numbers: [8, 5], hasNextPage: false, endCursor: nil))
+        transport.enqueue(json: openPRPage(numbers: [9, 8, 8], hasNextPage: true, endCursor: "cursor-1")
+            .replacingOccurrences(of: "\"pageInfo\":", with: "\"totalCount\":123,\"pageInfo\":"))
+        transport.enqueue(json: openPRPage(numbers: [5], hasNextPage: false, endCursor: nil)
+            .replacingOccurrences(of: "\"pageInfo\":", with: "\"totalCount\":51,\"pageInfo\":"))
+        let api = GitHubAPI(transport: transport)
 
-        let result = try await GitHubAPI(transport: transport).fetchOpenPRs(token: "token")
+        let first = try await api.fetchOpenPRPage(token: "token", request: .init())
 
-        XCTAssertEqual(result.rows.map(\.number), [9, 8, 5])
+        XCTAssertEqual(first.rows.map(\.number), [9, 8])
+        XCTAssertEqual(first.pagination?.totalCount, 123)
+        XCTAssertEqual(transport.requests.count, 1, "Loading page one must not follow its next cursor")
+        let next = try XCTUnwrap(first.pagination?.next)
+        XCTAssertEqual(next, .init(page: 2, after: "cursor-1"))
+
+        let second = try await api.fetchOpenPRPage(token: "token", request: next)
+
+        XCTAssertEqual(second.rows.map(\.number), [5])
+        XCTAssertEqual(second.pagination?.totalCount, 51)
+        XCTAssertNil(second.pagination?.next)
         XCTAssertEqual(transport.requests.count, 2)
-        XCTAssertNil(try transport.graphQLBody(at: 0).variables["after"])
         XCTAssertEqual(try transport.graphQLBody(at: 1).variables["after"] as? String, "cursor-1")
-    }
-
-    func testFetchOpenPRsStopsAfterThePageLimit() async throws {
-        let transport = MockHTTPTransport()
-        for page in 1...(GitHubAPI.maxOpenPullRequestPages + 1) {
-            transport.enqueue(json: openPRPage(numbers: [page], hasNextPage: true, endCursor: "cursor-\(page)"))
-        }
-
-        let result = try await GitHubAPI(transport: transport).fetchOpenPRs(token: "token")
-
-        XCTAssertEqual(result.rows.count, GitHubAPI.maxOpenPullRequestPages)
-        XCTAssertEqual(transport.requests.count, GitHubAPI.maxOpenPullRequestPages)
+        XCTAssertTrue(try transport.graphQLBody(at: 1).query.contains("totalCount"))
     }
 
     func testFetchOpenPRsAllowsEmptyResults() async throws {
@@ -191,9 +191,9 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertTrue(request.url?.query?.contains("per_page=10") == true)
     }
 
-    func testFetchReviewRequestsSplitsDirectAndTeamRequestsInOneRequest() async throws {
+    func testFetchReviewRequestsSplitsDirectAndTeamRequestsOnDemand() async throws {
         let transport = MockHTTPTransport()
-        transport.enqueue(json: """
+        try enqueueReviewPage(transport, json: """
         {"data":{
           "direct":{"nodes":[
             {"id":"PR_a","title":"Direct","number":4,"url":"https://github.com/acme/widgets/pull/4",
@@ -226,44 +226,137 @@ final class GitHubAPITests: XCTestCase {
         XCTAssertNil(team.authorLogin)
         XCTAssertNil(team.headSHA)
         XCTAssertTrue(team.isDraft)
-        XCTAssertEqual(transport.requests.count, 1)
+        XCTAssertEqual(transport.requests.count, 2)
         XCTAssertEqual(transport.requests.first?.url?.path, "/graphql")
         let body = try transport.graphQLBody(at: 0)
         XCTAssertTrue(body.query.contains("user-review-requested:@me"))
         XCTAssertTrue(body.query.contains(" review-requested:@me"))
         XCTAssertTrue(body.query.contains("is:pr is:open archived:false"))
         XCTAssertTrue(body.query.contains("headRefOid"))
-        XCTAssertTrue(body.query.contains("type: ISSUE, first: 10)"))
+        XCTAssertTrue(body.query.contains("type: ISSUE, first: $directSize"))
         XCTAssertFalse(body.query.contains("first: 50"))
     }
 
-    func testFetchReviewRequestsFollowsEachGroupsPages() async throws {
+    func testReviewPagesLoadDirectFirstThenOnlyNeededTeamRows() async throws {
+        let transport = MockHTTPTransport()
+        let direct = (1...7).map(reviewRequestJSON).joined(separator: ",")
+        transport.enqueue(json: """
+        {"data":{"viewer":{"login":"fred"},
+          "direct":{"issueCount":7,"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[\(direct)]},
+          "all":{"issueCount":14,"nodes":[]}}}
+        """)
+        transport.enqueue(json: """
+        {"data":{"page":{"issueCount":14,"pageInfo":{"hasNextPage":true,"endCursor":"team-3"},
+          "nodes":[\([8,10,12].map(reviewRequestJSON).joined(separator: ","))]}}}
+        """)
+        let api = GitHubAPI(transport: transport)
+        let first = try await api.fetchReviewRequestPage(token: "token", request: .init(), hidden: [:])
+
+        XCTAssertEqual(first.fromMe.count, 7)
+        XCTAssertEqual(first.fromMyTeams.map(\.number), [8, 10, 12])
+        XCTAssertEqual(first.pagination?.totalCount, 21)
+        XCTAssertEqual(first.pagination?.fromMyTeamsTotal, 14)
+        XCTAssertEqual(transport.requests.count, 2)
+        XCTAssertTrue(try transport.graphQLBody(at: 0).query.contains("first: 0"))
+        XCTAssertEqual(try transport.graphQLBody(at: 1).variables["size"] as? Int, 3)
+        XCTAssertTrue((try transport.graphQLBody(at: 1).variables["query"] as? String)?.contains("-user-review-requested:@me") == true)
+
+        transport.enqueue(json: """
+        {"data":{"viewer":{"login":"fred"},"direct":{"issueCount":7,"nodes":[]},"all":{"issueCount":14,"nodes":[]}}}
+        """)
+        transport.enqueue(json: """
+        {"data":{"page":{"issueCount":14,"pageInfo":{"hasNextPage":true,"endCursor":"team-13"},
+          "nodes":[\((20...29).map(reviewRequestJSON).joined(separator: ","))]}}}
+        """)
+        let next = try XCTUnwrap(first.pagination?.next)
+        let second = try await api.fetchReviewRequestPage(token: "token", request: next, hidden: [:])
+        XCTAssertTrue(second.fromMe.isEmpty)
+        XCTAssertEqual(second.fromMyTeams.count, 10)
+        XCTAssertEqual(try transport.graphQLBody(at: 2).variables["directSize"] as? Int, 0)
+        XCTAssertEqual(try transport.graphQLBody(at: 3).variables["after"] as? String, "team-3")
+        XCTAssertEqual(transport.requests.count, 4, "No remaining pages are traversed")
+    }
+
+    func testFullDirectPageDoesNotFetchTeamRows() async throws {
         let transport = MockHTTPTransport()
         transport.enqueue(json: """
         {"data":{"viewer":{"login":"fred"},
-          "direct":{"pageInfo":{"hasNextPage":true,"endCursor":"direct-1"},"nodes":[\(reviewRequestJSON(1))]},
-          "all":{"pageInfo":{"hasNextPage":true,"endCursor":"all-1"},"nodes":[\(reviewRequestJSON(2))]}}}
+          "direct":{"issueCount":30,"pageInfo":{"hasNextPage":true,"endCursor":"direct-10"},
+                    "nodes":[\((1...10).map(reviewRequestJSON).joined(separator: ","))]},
+          "all":{"issueCount":80,"nodes":[]}}}
+        """)
+        let result = try await GitHubAPI(transport: transport).fetchReviewRequestPage(token: "token", request: .init(), hidden: [:])
+        XCTAssertEqual(result.fromMe.count, 10)
+        XCTAssertTrue(result.fromMyTeams.isEmpty)
+        XCTAssertEqual(result.pagination?.totalCount, 110)
+        XCTAssertEqual(result.pagination?.next?.after, "direct-10")
+        XCTAssertEqual(transport.requests.count, 1)
+    }
+
+    func testReviewSearchStopsAtGitHubsLimitButKeepsTheActualTotal() async throws {
+        let transport = MockHTTPTransport()
+        transport.enqueue(json: """
+        {"data":{"viewer":{"login":"fred"},
+          "direct":{"issueCount":1500,"pageInfo":{"hasNextPage":true,"endCursor":"direct-1000"},
+                    "nodes":[\((991...1000).map(reviewRequestJSON).joined(separator: ","))]},
+          "all":{"issueCount":0,"nodes":[]}}}
+        """)
+        let result = try await GitHubAPI(transport: transport).fetchReviewRequestPage(
+            token: "token", request: .init(page: 100, after: "direct-990", directLoaded: 990), hidden: [:])
+        XCTAssertEqual(result.pagination?.totalCount, 1500)
+        XCTAssertNil(result.pagination?.next)
+        let page = ReviewRequestsPage(loaded: result, page: 100, fromMeTotal: 1500, fromMyTeamsTotal: 0)
+        XCTAssertFalse(page.canGoToNextPage)
+        XCTAssertEqual(transport.requests.count, 1)
+    }
+
+    func testChangedHiddenFingerprintIsRemovedWithoutHidingTheNewRequest() async throws {
+        let transport = MockHTTPTransport()
+        var old = reviewRequestRow(number: 1)
+        old.headSHA = "old-sha"
+        transport.enqueue(json: """
+        {"data":{"viewer":{"login":"fred"},
+          "direct":{"issueCount":1,"nodes":[\(reviewRequestJSON(1))]},
+          "all":{"issueCount":0,"nodes":[]}}}
         """)
         transport.enqueue(json: """
-        {"data":{"page":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[\(reviewRequestJSON(3)),null]}}}
+        {"data":{"page":{"issueCount":1,"nodes":[\(reviewRequestJSON(1))]}}}
+        """)
+        let result = try await GitHubAPI(transport: transport).fetchReviewRequestPage(
+            token: "token", request: .init(), hidden: ["acme/widgets#1": HiddenReviewRequest(old)])
+        XCTAssertEqual(result.fromMe.map(\.number), [1])
+        XCTAssertEqual(result.pagination?.totalCount, 1)
+        XCTAssertEqual(result.pagination?.hidden, [:])
+        XCTAssertEqual(transport.requests.count, 2)
+    }
+
+    func testHiddenReviewIsVerifiedExcludedFromCountAndReplacedOnPage() async throws {
+        let transport = MockHTTPTransport()
+        let hidden = reviewRequestRow(number: 1)
+        // Match the fixture's repository, missing SHA and request date exactly.
+        let fingerprint = HiddenReviewRequest(ReviewRequestRow(id: "acme/widgets#1", title: hidden.title, number: 1,
+            repoFullName: "acme/widgets", htmlURL: hidden.htmlURL, authorLogin: nil, isDraft: false,
+            updatedAt: hidden.updatedAt, requestedAt: ISO8601DateFormatter().date(from: "2026-04-01T10:00:00Z")))
+        transport.enqueue(json: """
+        {"data":{"viewer":{"login":"fred"},
+          "direct":{"issueCount":11,"pageInfo":{"hasNextPage":true,"endCursor":"direct-10"},
+                    "nodes":[\((1...10).map(reviewRequestJSON).joined(separator: ","))]},
+          "all":{"issueCount":0,"nodes":[]}}}
         """)
         transport.enqueue(json: """
-        {"data":{"page":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[\(reviewRequestJSON(4))]}}}
+        {"data":{"page":{"issueCount":1,"nodes":[\(reviewRequestJSON(1))]}}}
         """)
-
-        let requests = try await GitHubAPI(transport: transport).fetchReviewRequests(token: "token")
-
-        XCTAssertEqual(requests.fromMe.map(\.number), [1, 3])
-        XCTAssertEqual(requests.fromMyTeams.map(\.number), [2, 4])
-        XCTAssertEqual(transport.requests.count, 3)
-        let directPage = try transport.graphQLBody(at: 1)
-        XCTAssertTrue(directPage.query.contains("page: search(query: $query, type: ISSUE, first: 10, after: $after)"))
-        XCTAssertTrue(directPage.query.contains("fragment ReviewRequestFields on PullRequest"))
-        XCTAssertEqual(directPage.variables["query"] as? String, "is:pr is:open archived:false user-review-requested:@me sort:updated-desc")
-        XCTAssertEqual(directPage.variables["after"] as? String, "direct-1")
-        let allPage = try transport.graphQLBody(at: 2)
-        XCTAssertEqual(allPage.variables["query"] as? String, "is:pr is:open archived:false review-requested:@me sort:updated-desc")
-        XCTAssertEqual(allPage.variables["after"] as? String, "all-1")
+        transport.enqueue(json: """
+        {"data":{"page":{"issueCount":11,"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[\(reviewRequestJSON(11))]}}}
+        """)
+        let result = try await GitHubAPI(transport: transport).fetchReviewRequestPage(
+            token: "token", request: .init(), hidden: ["acme/widgets#1": fingerprint])
+        XCTAssertEqual(result.fromMe.map(\.number), Array(2...11))
+        XCTAssertEqual(result.pagination?.totalCount, 10)
+        XCTAssertNil(result.pagination?.next)
+        XCTAssertEqual(try transport.graphQLBody(at: 1).variables["query"] as? String,
+                       "is:pr is:open archived:false user-review-requested:@me repo:acme/widgets 1")
+        XCTAssertEqual(try transport.graphQLBody(at: 2).variables["size"] as? Int, 1)
     }
 
     func testFetchReviewRequestsDecodesChecksSizeAndWhenIWasAsked() async throws {
@@ -289,7 +382,7 @@ final class GitHubAPITests: XCTestCase {
          "repository":{"nameWithOwner":"acme/gears"},"author":{"login":"hubot"},
          "additions":1,"deletions":0,"statusCheckRollup":null,\(asked)}
         """
-        transport.enqueue(json: """
+        try enqueueReviewPage(transport, json: """
         {"data":{"viewer":{"login":"fred"},"direct":{"nodes":[\(direct)]},"all":{"nodes":[\(team),\(direct)]}}}
         """)
 
@@ -334,7 +427,7 @@ final class GitHubAPITests: XCTestCase {
 
     func testFetchReviewRequestsKeepsRowsGitHubCouldSendWhenSAMLSSOBlocksSome() async throws {
         let transport = MockHTTPTransport()
-        transport.enqueue(json: """
+        try enqueueReviewPage(transport, json: """
         {"data":{
           "viewer":{"login":"fred"},
           "direct":{"nodes":[null]},
@@ -1889,6 +1982,31 @@ private func threadJSON(_ id: String, comments: [String], hasMoreComments: Bool)
 }
 
 /// A pull request asking for review from me directly when `number` is odd, or from my team when it is even.
+/// Convert complete decoding fixtures into a count/first-direct response followed by the needed team slice.
+private func enqueueReviewPage(_ transport: MockHTTPTransport, json: String, headers: [String: String] = [:]) throws {
+    var response = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+    var data = try XCTUnwrap(response["data"] as? [String: Any])
+    var direct = try XCTUnwrap(data["direct"] as? [String: Any])
+    var teams = try XCTUnwrap(data["all"] as? [String: Any])
+    let directNodes = direct["nodes"] as? [[String: Any]] ?? []
+    let directIDs = Set(directNodes.compactMap { $0["id"] as? String })
+    let teamNodes = (teams["nodes"] as? [Any] ?? []).filter {
+        guard let node = $0 as? [String: Any], let id = node["id"] as? String else { return false }
+        return !directIDs.contains(id)
+    }
+    direct["issueCount"] = directNodes.count
+    teams["issueCount"] = teamNodes.count
+    teams["nodes"] = []
+    data["direct"] = direct
+    data["all"] = teams
+    response["data"] = data
+    transport.enqueue(json: String(decoding: try JSONSerialization.data(withJSONObject: response), as: UTF8.self), headers: headers)
+    if !teamNodes.isEmpty {
+        teams["nodes"] = teamNodes
+        transport.enqueue(json: String(decoding: try JSONSerialization.data(withJSONObject: ["data": ["page": teams]]), as: UTF8.self))
+    }
+}
+
 private func reviewRequestJSON(_ number: Int) -> String {
     let reviewer = number % 2 == 1 ? #"{"__typename":"User","login":"fred"}"# : #"{"__typename":"Team"}"#
     return """
