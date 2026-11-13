@@ -16,6 +16,14 @@ enum AppDefaults {
 
 extension ProcessInfo {
     var isRunningTests: Bool {
-        environment["XCTestConfigurationFilePath"] != nil
+        Self.isRunningTests(environment: environment)
+    }
+
+    static func isRunningTests(environment: [String: String]) -> Bool {
+        // The scheme flag is available before the test bundle loads. Xcode's own
+        // markers cover test launches that don't use the shared scheme settings.
+        environment["GITHUB_PANEL_RUNNING_TESTS"] == "1"
+            || environment["XCTestConfigurationFilePath"] != nil
+            || environment["XCTestBundlePath"] != nil
     }
 }
