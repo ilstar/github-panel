@@ -68,7 +68,7 @@ final class MyPRSelectionTests: XCTestCase {
                     start = nil
                 }
             }
-            XCTAssertEqual(bands.count, 1, "Exactly one card must look selected, grouped: \(grouped), For Later: \(forLater)")
+            XCTAssertEqual(bands.count, 1, "Exactly one card must look selected, PR \(expectedNumber), grouped: \(grouped), For Later: \(forLater)")
             XCTAssertTrue(window.title.contains("#\(expectedNumber)"), window.title)
             let band = try XCTUnwrap(bands.first)
             return CGFloat(band.lowerBound + band.upperBound) / 2 / scale
@@ -101,5 +101,20 @@ final class MyPRSelectionTests: XCTestCase {
             try key("j")
             _ = try await selectedRowCenter(expectedNumber: number)
         }
+
+        // Refresh can reorder rows, move the selected PR between groups and dissolve its stack.
+        // Keep selection on the same ID and verify that no old card keeps its highlight.
+        api.rows = [row(number: 4, status: .failure), row(number: 2, status: .success),
+                    row(number: 1, status: .success), row(number: 3, status: .success)]
+        await monitor.refreshNow()
+        _ = try await selectedRowCenter(expectedNumber: 4)
+        try key("j")
+        let next = forLater ? 4 : 2
+        _ = try await selectedRowCenter(expectedNumber: next)
+
+        // When refresh removes the selection, choose one surviving neighbor, with one highlight.
+        api.rows.removeAll { $0.number == next }
+        await monitor.refreshNow()
+        _ = try await selectedRowCenter(expectedNumber: forLater ? 3 : 1)
     }
 }

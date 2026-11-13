@@ -477,7 +477,7 @@ struct ContentView: View {
             stackPosition: sections.stackPositions[pr.id],
             status: groupsByStatus ? sections.statuses[pr.id] : nil,
             botReviewer: BotReviewer.normalized(botReviewerLogin),
-            isSelected: selectedPRID == pr.id,
+            selectedPRID: $selectedPRID,
             relativeFormatter: relativeFormatter,
             now: now,
             selectionDiagnosticWindowID: selectionDiagnosticWindowID

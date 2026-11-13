@@ -7,7 +7,9 @@ struct PRRow: View {
     var status: MyPullRequestStatus?
     /// The review bot's login from Settings, normalized. Nil hides the bot chip.
     var botReviewer: String?
-    let isSelected: Bool
+    // Observe selection here so a row moved between groups on refresh cannot retain a stale snapshot.
+    @Binding var selectedPRID: String?
+    private var isSelected: Bool { selectedPRID == pr.id }
     let relativeFormatter: RelativeDateTimeFormatter
     let now: Date
     var selectionDiagnosticWindowID: UUID?
