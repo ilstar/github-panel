@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#MISE description="Dry-run the release tasks and check the commands they would run"
+#MISE description="Dry-run build and release tasks and check their commands"
 source "$MISE_PROJECT_ROOT/scripts/lib.sh"
 
 out_dir="$ROOT/build/test"
@@ -26,4 +26,12 @@ if DRY_RUN=1 BUILD_VERSION=3 BASE_BUILD_VERSION=3 "$ROOT/mise-tasks/dmg" >/dev/n
   fail "dmg should reject a BUILD_VERSION that is not greater than BASE_BUILD_VERSION"
 fi
 
-echo "Release task dry runs look good."
+# Personal signing settings must apply to builds, but never to test builds.
+GITHUB_PANEL_DEVELOPMENT_TEAM=TESTTEAM GITHUB_PANEL_CODE_SIGN_IDENTITY="Apple Development: Test" \
+  dry_run_task test 'DEVELOPMENT_TEAM= CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual'
+GITHUB_PANEL_DEVELOPMENT_TEAM=TESTTEAM GITHUB_PANEL_CODE_SIGN_IDENTITY="Apple Development: Test" \
+  dry_run_task test-performance 'DEVELOPMENT_TEAM= CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual'
+GITHUB_PANEL_DEVELOPMENT_TEAM=TESTTEAM GITHUB_PANEL_CODE_SIGN_IDENTITY="Apple Development: Test" \
+  dry_run_task build 'DEVELOPMENT_TEAM=TESTTEAM CODE_SIGN_IDENTITY=Apple Development: Test CODE_SIGN_STYLE=Automatic'
+
+echo "Build and release task dry runs look good."
