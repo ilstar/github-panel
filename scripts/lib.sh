@@ -66,7 +66,10 @@ xcodebuild_app() {
     MARKETING_VERSION="$VERSION"
     CURRENT_PROJECT_VERSION="$BUILD_VERSION"
   )
-  if [[ -n "${GITHUB_PANEL_DEVELOPMENT_TEAM:-}" ]]; then
+  if [[ "$2" == test || "$2" == build-for-testing ]]; then
+    # Hosted unit tests do not need a developer certificate or its Keychain key.
+    args+=(DEVELOPMENT_TEAM= CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual)
+  elif [[ -n "${GITHUB_PANEL_DEVELOPMENT_TEAM:-}" ]]; then
     args+=(
       DEVELOPMENT_TEAM="$GITHUB_PANEL_DEVELOPMENT_TEAM"
       CODE_SIGN_IDENTITY="${GITHUB_PANEL_CODE_SIGN_IDENTITY:-}"
