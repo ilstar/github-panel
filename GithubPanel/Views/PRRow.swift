@@ -12,7 +12,6 @@ struct PRRow: View {
     private var isSelected: Bool { selectedPRID == pr.id }
     let relativeFormatter: RelativeDateTimeFormatter
     let now: Date
-    var selectionDiagnosticWindowID: UUID?
 
     @State private var isHovering = false
 
@@ -26,15 +25,6 @@ struct PRRow: View {
         .padding(.vertical, 4)
         .padding(.horizontal, 2)
         .listRowBackground(isSelected: isSelected, isHovering: isHovering, isCard: true)
-        .background {
-            if PRSelectionDiagnostics.shared.isEnabled, let windowID = selectionDiagnosticWindowID {
-                PRSelectionDiagnosticProbe(windowID: windowID, rowID: pr.id,
-                                           isSelected: isSelected, isHovering: isHovering)
-                    .frame(width: 0, height: 0)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
-            }
-        }
         .onHover { hovering in
             isHovering = hovering
         }
