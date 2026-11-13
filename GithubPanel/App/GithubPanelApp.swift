@@ -37,6 +37,11 @@ struct GithubPanelApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .background {
+                    if ProcessInfo.processInfo.isRunningTests {
+                        TestHostWindowHidingView()
+                    }
+                }
                 .environmentObject(monitor)
         }
         .defaultSize(ListPaneLayout.defaultWindowSize)
