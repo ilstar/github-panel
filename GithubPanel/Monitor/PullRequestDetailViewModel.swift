@@ -76,6 +76,8 @@ final class PullRequestDetailViewModel: ObservableObject {
     private var presentations: [PresentationKey: DiffPresentation] = [:]
     /// The last request for the engine to send this pull request's changes.
     private var sendTask: Task<Void, Never>?
+    /// The panel load to finish before refreshing after a branch update.
+    private var loadTask: Task<Void, Never>?
 
     private struct PresentationKey: Hashable {
         let filename: String
@@ -164,7 +166,18 @@ final class PullRequestDetailViewModel: ObservableObject {
     func load(maxAge: TimeInterval = 0) async {
         guard !isLoading else { return }
         isLoading = true
-        defer { isLoading = false }
+        let task = Task {
+            defer {
+                isLoading = false
+                loadTask = nil
+            }
+            await loadResources(maxAge: maxAge)
+        }
+        loadTask = task
+        await task.value
+    }
+
+    private func loadResources(maxAge: TimeInterval) async {
         // The comments and checks load alongside the diff, which shows as soon as it arrives.
         // The detail starts first, so the comments and checks can attach to it.
         let detail = await engine.start(.detail(reference), maxAge: maxAge)
@@ -551,6 +564,9 @@ final class PullRequestDetailViewModel: ObservableObject {
             errorMessage = error.localizedDescription
             return
         }
+        // An earlier panel load may still be showing data fetched before the update.
+        // Finish it first so `load` cannot skip the refresh or let the older result win.
+        while let loadTask { await loadTask.value }
         setCanUpdateBranch(false)
         errorMessage = nil
         await load()

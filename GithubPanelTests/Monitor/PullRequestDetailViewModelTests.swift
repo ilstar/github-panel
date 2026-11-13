@@ -1063,6 +1063,58 @@ final class PullRequestDetailViewModelTests: XCTestCase {
         XCTAssertNil(viewModel.errorMessage)
     }
 
+    func testUpdateBranchRefreshesAfterAnExistingPanelLoadFinishes() async {
+        let loadingChecks = Gate()
+        let finishChecks = Gate()
+        let updated = Gate()
+        let cache = PullRequestCache()
+        cache.store(detailContent(title: "Before", canUpdateBranch: true))
+        await cache.saveNow()
+        var didUpdate = false
+        var fetchCount = 0
+        var checksCount = 0
+        let viewModel = PullRequestDetailViewModel(reference: reference,
+            fetch: { [self] _ in
+                fetchCount += 1
+                return detailContent(title: didUpdate ? "After" : "Before",
+                                     files: [file(didUpdate ? "new.swift" : "old.swift")],
+                                     canUpdateBranch: !didUpdate,
+                                     headSHA: didUpdate ? "new-head" : "abc123")
+            },
+            updateBranch: { _, _ in
+                didUpdate = true
+                await updated.open()
+            },
+            fetchChecks: { [self] _ in
+                checksCount += 1
+                let checks = PullRequestChecks(checks: [check("ci", didUpdate ? .pending : .failure)])
+                if checksCount == 1 {
+                    await loadingChecks.open()
+                    await finishChecks.wait()
+                }
+                return checks
+            }, cache: cache)
+        let load = Task { await viewModel.load() }
+        await loadingChecks.wait()
+        XCTAssertTrue(viewModel.isLoading)
+
+        let update = Task { await viewModel.updateBranch() }
+        await updated.wait()
+        await finishChecks.open()
+        await load.value
+        await update.value
+
+        XCTAssertEqual(fetchCount, 2)
+        XCTAssertEqual(checksCount, 2)
+        XCTAssertEqual(viewModel.content?.detail.title, "After")
+        XCTAssertEqual(viewModel.content?.detail.headSHA, "new-head")
+        XCTAssertEqual(viewModel.content?.files.map(\.filename), ["new.swift"])
+        XCTAssertEqual(viewModel.checks?.checks.map(\.outcome), [.pending])
+        XCTAssertFalse(viewModel.isLoading)
+        XCTAssertFalse(viewModel.isUpdatingBranch)
+        XCTAssertNil(viewModel.errorMessage)
+    }
+
     func testUpdateBranchSkipsOtherAuthorsEvenWithWritePermission() async {
         var updateCount = 0
         let viewModel = PullRequestDetailViewModel(reference: reference,
