@@ -1,5 +1,19 @@
 import SwiftUI
 
+/// Lazy stacks can retain a row's content closure when its identity moves between groups. Observe the source
+/// here and resolve the current row by ID, so both the card and its actions use the latest data.
+struct ObservedPullRequestRow<Content: View>: View {
+    @ObservedObject var monitor: PRMonitor
+    let id: String
+    @ViewBuilder var content: (PullRequestRow) -> Content
+
+    var body: some View {
+        if let pr = monitor.prRows.first(where: { $0.id == id }) {
+            content(pr)
+        }
+    }
+}
+
 struct PRRow: View {
     let pr: PullRequestRow
     var stackPosition: PullRequestStackPosition?
