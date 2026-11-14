@@ -17,6 +17,77 @@ final class MyPRSelectionTests: XCTestCase {
         try await checkSelection(grouped: true, forLater: true)
     }
 
+    func testRowContentRefreshesWhenDraftBecomesReadyAndStatusesChange() async throws {
+        let settings: [String: Any] = [MyPullRequestSections.groupsByStatusDefaultsKey: true,
+                                      CollapsedGroupsStorage.defaultsKey: "",
+                                      ListPaneLayout.widthDefaultsKey: 400,
+                                      DetailPaneMode.defaultsKey: DetailPaneMode.native.rawValue]
+        let saved = settings.keys.map { ($0, AppDefaults.store.object(forKey: $0)) }
+        for (key, value) in settings { AppDefaults.store.set(value, forKey: key) }
+        defer { for (key, value) in saved { AppDefaults.store.set(value, forKey: key) } }
+
+        let api = FakeGitHubAPI()
+        api.rows = [row(number: 1, status: .success, isDraft: true),
+                    row(number: 2, status: .success, isDraft: true)]
+        let monitor = makeMonitor(api: api, tokenStore: FakeTokenStore(token: "test"))
+        func content() -> AnyView {
+            AnyView(ContentView().environmentObject(monitor)
+                .accentColor(.blue).environment(\.colorScheme, .light))
+        }
+        let host = NSHostingView(rootView: content())
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800),
+                              styleMask: [.titled, .closable, .fullSizeContentView],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        defer {
+            window.orderOut(nil)
+            window.contentView = nil
+        }
+        func snapshot() async throws -> NSBitmapImageRep {
+            try await Task.sleep(for: .milliseconds(300))
+            host.layoutSubtreeIfNeeded()
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            return bitmap
+        }
+        await monitor.refreshNow()
+        _ = try await snapshot()
+        let transitions: [(PullRequestRow, MyPullRequestGroup)] = [
+            (row(number: 1, status: .success), .readyToMerge),
+            (row(number: 1, status: .pending), .building),
+            (row(number: 1, status: .failure), .needsYou),
+            (row(number: 1, status: .success, autoMerge: true), .merging),
+            (row(number: 1, status: .success, inMergeQueue: true), .merging)
+        ]
+        for (updated, group) in transitions {
+            api.rows = [updated, row(number: 2, status: .success, isDraft: true)]
+            await monitor.refreshNow()
+            XCTAssertEqual(monitor.myPullRequests.group(containing: updated.id), group)
+            XCTAssertEqual(monitor.prRows, api.rows)
+            let refreshed = try await snapshot()
+            // Recreate the view, as restarting the app would. All card content must already match,
+            // including the state icon, reason and check/review chips. PR 1 stays selected in both views.
+            host.rootView = AnyView(content().id(UUID()))
+            let recreated = try await snapshot()
+            let scale = CGFloat(refreshed.pixelsWide) / host.bounds.width
+            var differences = 0
+            for y in stride(from: Int(150 * scale), to: Int(355 * scale), by: 2) {
+                for x in stride(from: Int(18 * scale), to: Int(380 * scale), by: 2) {
+                    let before = try XCTUnwrap(refreshed.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
+                    let after = try XCTUnwrap(recreated.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
+                    if max(abs(before.redComponent - after.redComponent),
+                           abs(before.greenComponent - after.greenComponent),
+                           abs(before.blueComponent - after.blueComponent)) > 0.05 {
+                        differences += 1
+                    }
+                }
+            }
+            XCTAssertLessThan(differences, 10, "Refreshed cards must match recreated cards: \(group), \(PullRequestState(updated))")
+        }
+    }
+
     private func checkSelection(grouped: Bool, forLater: Bool = false) async throws {
         let settings: [String: Any] = [MyPullRequestSections.groupsByStatusDefaultsKey: grouped,
                                       CollapsedGroupsStorage.defaultsKey: "",

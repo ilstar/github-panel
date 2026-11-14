@@ -370,7 +370,7 @@ struct ContentView: View {
                                 groupedPullRequests(sections)
                             } else {
                                 ForEach(sections.listEntries) { entry in
-                                    openPullRequestEntry(entry, isForLater: false, sections: sections)
+                                    openPullRequestEntry(entry)
                                 }
                             }
                             if !sections.forLater.isEmpty {
@@ -383,7 +383,7 @@ struct ContentView: View {
                                 .padding(.top, sections.active.isEmpty ? 4 : 12)
                                 if isForLaterExpanded {
                                     ForEach(sections.forLaterEntries) { entry in
-                                        openPullRequestEntry(entry, isForLater: true, sections: sections)
+                                        openPullRequestEntry(entry)
                                     }
                                 }
                             }
@@ -433,7 +433,7 @@ struct ContentView: View {
             .padding(.top, index == 0 ? 4 : 12)
             if isExpanded {
                 ForEach(group.entries) { entry in
-                    openPullRequestEntry(entry, isForLater: false, sections: sections)
+                    openPullRequestEntry(entry)
                 }
             }
         }
@@ -441,16 +441,14 @@ struct ContentView: View {
 
     /// A single row, or a stack's rows indented together beside a rail that ties them into one stack.
     @ViewBuilder
-    private func openPullRequestEntry(_ entry: MyPullRequestEntry,
-                                      isForLater: Bool,
-                                      sections: MyPullRequestSections) -> some View {
+    private func openPullRequestEntry(_ entry: MyPullRequestEntry) -> some View {
         switch entry {
         case .single(let pr):
-            openPullRequestRow(pr, isForLater: isForLater, sections: sections)
+            openPullRequestRow(pr)
         case .stack(let rows):
             VStack(spacing: 6) {
                 ForEach(rows) { pr in
-                    openPullRequestRow(pr, isForLater: isForLater, sections: sections)
+                    openPullRequestRow(pr)
                 }
             }
             .padding(.leading, 12)
@@ -465,34 +463,37 @@ struct ContentView: View {
         }
     }
 
-    private func openPullRequestRow(_ pr: PullRequestRow, isForLater: Bool, sections: MyPullRequestSections) -> some View {
-        PRRow(
-            pr: pr,
-            stackPosition: sections.stackPositions[pr.id],
-            status: groupsByStatus ? sections.statuses[pr.id] : nil,
-            botReviewer: BotReviewer.normalized(botReviewerLogin),
-            selectedPRID: $selectedPRID,
-            relativeFormatter: relativeFormatter,
-            now: now
-        )
-        .id(pr.id)
-        .onTapGesture {
-            selectedPRID = pr.id
-            didClickRow(pr.htmlURL)
-        }
-        .contextMenu {
-            let action = mergeAction(for: pr).primaryAction
-            Button(action.title, action: action.perform)
-                .disabled(!action.isEnabled)
-            Divider()
-            if isForLater {
-                Button("Move Back to My PRs") { monitor.moveOutOfForLater(pr) }
-            } else {
-                Button("Move to \(MyPullRequestSections.forLaterTitle)") { monitor.moveToForLater(pr) }
+    private func openPullRequestRow(_ pr: PullRequestRow) -> some View {
+        ObservedPullRequestRow(monitor: monitor, id: pr.id) { pr in
+            let sections = myPullRequests
+            PRRow(
+                pr: pr,
+                stackPosition: sections.stackPositions[pr.id],
+                status: groupsByStatus ? sections.statuses[pr.id] : nil,
+                botReviewer: BotReviewer.normalized(botReviewerLogin),
+                selectedPRID: $selectedPRID,
+                relativeFormatter: relativeFormatter,
+                now: now
+            )
+            .id(pr.id)
+            .onTapGesture {
+                selectedPRID = pr.id
+                didClickRow(pr.htmlURL)
             }
-            Divider()
-            pullRequestContextMenu(pr.reference, htmlURL: pr.htmlURL)
-            mergeMethodMenu(for: pr)
+            .contextMenu {
+                let action = mergeAction(for: pr).primaryAction
+                Button(action.title, action: action.perform)
+                    .disabled(!action.isEnabled)
+                Divider()
+                if monitor.forLaterIDs.contains(pr.id) {
+                    Button("Move Back to My PRs") { monitor.moveOutOfForLater(pr) }
+                } else {
+                    Button("Move to \(MyPullRequestSections.forLaterTitle)") { monitor.moveToForLater(pr) }
+                }
+                Divider()
+                pullRequestContextMenu(pr.reference, htmlURL: pr.htmlURL)
+                mergeMethodMenu(for: pr)
+            }
         }
     }
 
