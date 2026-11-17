@@ -5,7 +5,6 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     case general
     case account
     case notifications
-    case extensions
     case hooks
 
     static let defaultsKey = "GithubPanel.settingsTab"
@@ -17,7 +16,6 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .general: return "General"
         case .account: return "Account"
         case .notifications: return "Notifications"
-        case .extensions: return "Extensions"
         case .hooks: return "Hooks"
         }
     }
@@ -28,7 +26,6 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .general: return "gearshape"
         case .account: return "person.crop.circle"
         case .notifications: return "bell.badge"
-        case .extensions: return "puzzlepiece.extension"
         case .hooks: return "terminal"
         }
     }

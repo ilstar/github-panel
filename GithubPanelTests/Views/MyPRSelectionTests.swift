@@ -21,7 +21,7 @@ final class MyPRSelectionTests: XCTestCase {
         let settings: [String: Any] = [MyPullRequestSections.groupsByStatusDefaultsKey: true,
                                       CollapsedGroupsStorage.defaultsKey: "",
                                       ListPaneLayout.widthDefaultsKey: 400,
-                                      DetailPaneMode.defaultsKey: "web"]
+                                      "GithubPanel.detailPaneMode": "web"]
         let saved = settings.keys.map { ($0, AppDefaults.store.object(forKey: $0)) }
         for (key, value) in settings { AppDefaults.store.set(value, forKey: key) }
         defer { for (key, value) in saved { AppDefaults.store.set(value, forKey: key) } }
@@ -93,7 +93,7 @@ final class MyPRSelectionTests: XCTestCase {
                                       CollapsedGroupsStorage.defaultsKey: "",
                                       ContentView.forLaterExpandedDefaultsKey: true,
                                       ListPaneLayout.widthDefaultsKey: 400,
-                                      DetailPaneMode.defaultsKey: "web"]
+                                      "GithubPanel.detailPaneMode": "web"]
         let saved = settings.keys.map { ($0, AppDefaults.store.object(forKey: $0)) }
         for (key, value) in settings { AppDefaults.store.set(value, forKey: key) }
         defer { for (key, value) in saved { AppDefaults.store.set(value, forKey: key) } }

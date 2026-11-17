@@ -85,12 +85,12 @@ final class MenuShortcutTests: XCTestCase {
         XCTAssertFalse(window.isVisible, "Escape should dismiss the Keyboard Shortcuts window")
     }
 
-    /// Find sits in Edit, like Safari's. Until a github.com page is showing, ⌘F stays with Filter Files.
-    func testEditMenuHasFind() async throws {
+    /// Page find is gone; ⌘F belongs to the native file filter.
+    func testNativeFilterKeepsCommandFWithoutPageFind() async throws {
         let titles = try await submenuTitles("Edit")
-        XCTAssertTrue(titles.contains("Find…"))
-        XCTAssertTrue(titles.contains("Find Next"))
-        XCTAssertTrue(titles.contains("Find Previous"))
+        XCTAssertFalse(titles.contains("Find…"))
+        XCTAssertFalse(titles.contains("Find Next"))
+        XCTAssertFalse(titles.contains("Find Previous"))
 
         let menu = try await mainMenu()
         let diff = try XCTUnwrap(menu.item(withTitle: "Diff")?.submenu)
@@ -127,8 +127,7 @@ final class MenuShortcutTests: XCTestCase {
         let appTitles = Set(PullRequestTab.allCases.map(\.title) + ["Refresh"])
         let menu = try await mainMenu()
         let view = (menu.item(withTitle: "View")?.submenu?.items ?? []).filter { appTitles.contains($0.title) }
-        let find = (menu.item(withTitle: "Edit")?.submenu?.items ?? []).filter { $0.title.hasPrefix("Find") }
-        return view + find + menu.items
+        return view + menu.items
             .filter { ["Pull Request", "Diff", "Help"].contains($0.title) }
             .flatMap { $0.submenu?.items ?? [] }
     }

@@ -34,8 +34,6 @@ final class AppShortcutTests: XCTestCase {
         XCTAssertEqual(AppShortcut.nextDetailTab.symbols, "⇧⌘]")
         XCTAssertEqual(AppShortcut.toggleWhitespace.symbols, "⌃⌘W")
         XCTAssertEqual(AppShortcut.showShortcuts.symbols, "⌘/")
-        XCTAssertEqual(AppShortcut.findNext.symbols, "⌘G")
-        XCTAssertEqual(AppShortcut.findPrevious.symbols, "⇧⌘G")
     }
 
     func testShortcutsWindowListsEveryMenuShortcut() {
@@ -50,7 +48,7 @@ final class AppShortcutTests: XCTestCase {
         for key in ["J", "K", "Space", "⇧Space", "↩", "V", "?"] {
             XCTAssertTrue(listed.contains(key), key)
         }
-        XCTAssertEqual(ShortcutHelp.sections.count, 5)
+        XCTAssertEqual(ShortcutHelp.sections.map(\.title), ["Pull request list", "Selected pull request", "Files changed", "Help"])
     }
 
     func testPullRequestTabsUseCommandNumbers() {
