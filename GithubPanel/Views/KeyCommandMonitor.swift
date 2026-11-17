@@ -1,6 +1,5 @@
 import SwiftUI
 import AppKit
-import WebKit
 
 /// The single keys that work while nothing is being typed: J, K, Space, V and so on.
 enum KeyCommand: Equatable {
@@ -36,22 +35,9 @@ enum KeyCommand: Equatable {
         }
     }
 
-    /// True while the window's focus is in a text box or a web page, where every key goes to what has focus.
+    /// True while the window's focus is in an editable text box.
     static func isTyping(in window: NSWindow?) -> Bool {
-        if let textView = window?.firstResponder as? NSTextView {
-            return textView.isEditable
-        }
-        return isInWebView(window?.firstResponder)
-    }
-
-    /// True for a web view or any view inside one, where the page handles its own keys and text boxes.
-    private static func isInWebView(_ responder: NSResponder?) -> Bool {
-        var view = responder as? NSView
-        while let current = view {
-            if current is WKWebView { return true }
-            view = current.superview
-        }
-        return false
+        (window?.firstResponder as? NSTextView)?.isEditable == true
     }
 }
 

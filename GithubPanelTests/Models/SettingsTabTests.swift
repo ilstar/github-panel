@@ -5,7 +5,7 @@ final class SettingsTabTests: XCTestCase {
     func testTabsAppearInToolbarOrder() {
         XCTAssertEqual(
             SettingsTab.allCases.map(\.title),
-            ["General", "Account", "Notifications", "Extensions", "Hooks"]
+            ["General", "Account", "Notifications", "Hooks"]
         )
     }
 
@@ -23,6 +23,12 @@ final class SettingsTabTests: XCTestCase {
         let defaults = FakeDefaults()
         defaults.set("hooks", forKey: SettingsTab.defaultsKey)
         XCTAssertEqual(SettingsTab.stored(in: defaults), .hooks)
+    }
+
+    func testRemovedExtensionsTabFallsBackToGeneral() {
+        let defaults = FakeDefaults()
+        defaults.set("extensions", forKey: SettingsTab.defaultsKey)
+        XCTAssertEqual(SettingsTab.stored(in: defaults), .general)
     }
 
     func testFallsBackToGeneralForAnUnknownValue() {
