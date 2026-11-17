@@ -2,18 +2,18 @@ import XCTest
 @testable import GithubPanel
 
 final class DetailPaneModeTests: XCTestCase {
-    func testSettingsOffersNativeThenGitHub() {
-        XCTAssertEqual(DetailPaneMode.allCases.map(\.title), ["Native", "GitHub.com"])
+    func testOnlyNativeModeIsSupported() {
+        XCTAssertEqual(DetailPaneMode.allCases.map(\.title), ["Native"])
     }
 
     func testDefaultsToNativeWhenNothingIsSaved() {
         XCTAssertEqual(DetailPaneMode.stored(in: FakeDefaults()), .native)
     }
 
-    func testReadsTheSavedChoice() {
+    func testLegacyGitHubChoiceFallsBackToNative() {
         let defaults = FakeDefaults()
         defaults.set("web", forKey: DetailPaneMode.defaultsKey)
-        XCTAssertEqual(DetailPaneMode.stored(in: defaults), .web)
+        XCTAssertEqual(DetailPaneMode.stored(in: defaults), .native)
     }
 
     func testFallsBackToNativeForAnUnknownValue() {

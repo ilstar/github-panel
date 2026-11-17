@@ -21,7 +21,7 @@ final class MyPRSelectionTests: XCTestCase {
         let settings: [String: Any] = [MyPullRequestSections.groupsByStatusDefaultsKey: true,
                                       CollapsedGroupsStorage.defaultsKey: "",
                                       ListPaneLayout.widthDefaultsKey: 400,
-                                      DetailPaneMode.defaultsKey: DetailPaneMode.native.rawValue]
+                                      DetailPaneMode.defaultsKey: "web"]
         let saved = settings.keys.map { ($0, AppDefaults.store.object(forKey: $0)) }
         for (key, value) in settings { AppDefaults.store.set(value, forKey: key) }
         defer { for (key, value) in saved { AppDefaults.store.set(value, forKey: key) } }
@@ -93,7 +93,7 @@ final class MyPRSelectionTests: XCTestCase {
                                       CollapsedGroupsStorage.defaultsKey: "",
                                       ContentView.forLaterExpandedDefaultsKey: true,
                                       ListPaneLayout.widthDefaultsKey: 400,
-                                      DetailPaneMode.defaultsKey: DetailPaneMode.native.rawValue]
+                                      DetailPaneMode.defaultsKey: "web"]
         let saved = settings.keys.map { ($0, AppDefaults.store.object(forKey: $0)) }
         for (key, value) in settings { AppDefaults.store.set(value, forKey: key) }
         defer { for (key, value) in saved { AppDefaults.store.set(value, forKey: key) } }
@@ -140,6 +140,7 @@ final class MyPRSelectionTests: XCTestCase {
                 }
             }
             XCTAssertEqual(bands.count, 1, "Exactly one card must look selected, PR \(expectedNumber), grouped: \(grouped), For Later: \(forLater)")
+            // A legacy GitHub.com preference must still show the native detail view and update its title.
             XCTAssertTrue(window.title.contains("#\(expectedNumber)"), window.title)
             let band = try XCTUnwrap(bands.first)
             return CGFloat(band.lowerBound + band.upperBound) / 2 / scale

@@ -47,13 +47,10 @@ struct ContentView: View {
     @State private var mergeInFlight: Set<String> = []
     @State private var pageScroller = PageScroller()
     @AppStorage(ListPaneLayout.widthDefaultsKey, store: AppDefaults.store) private var listPaneWidth: Double = ListPaneLayout.defaultWidth
-    @AppStorage(DetailPaneMode.defaultsKey, store: AppDefaults.store) private var detailPaneMode: DetailPaneMode = .native
     @AppStorage(BotReviewer.defaultsKey, store: AppDefaults.store) private var botReviewerLogin = ""
     @AppStorage(Self.forLaterExpandedDefaultsKey, store: AppDefaults.store) private var isForLaterExpanded = true
     @AppStorage(CollapsedGroupsStorage.defaultsKey, store: AppDefaults.store) private var collapsedGroupsValue = ""
     @AppStorage(MyPullRequestSections.groupsByStatusDefaultsKey, store: AppDefaults.store) private var groupsByStatus = true
-    /// Made on first use of the GitHub pane, then kept so switching pull requests reuses one web view.
-    @StateObject private var webSession = LazyWebSession()
     private let minuteTicker = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
     private let relativeFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
@@ -177,9 +174,7 @@ struct ContentView: View {
 
     @ViewBuilder
     private var detailPane: some View {
-        if let reference = selectedReference, detailPaneMode == .web {
-            PullRequestWebPane(reference: reference, session: webSession.session)
-        } else if let reference = selectedReference {
+        if let reference = selectedReference {
             PullRequestDetailView(viewModel: PullRequestDetailViewModel(reference: reference, monitor: monitor),
                                   mergeAction: mergeAction)
             .id(reference)

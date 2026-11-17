@@ -1,10 +1,8 @@
 import Foundation
 
-/// How the pane on the right shows the selected pull request: the app's own views, or github.com in a web view.
-/// Chosen in Settings.
+/// Reads the legacy pane preference. Pull requests now always use the native pane.
 enum DetailPaneMode: String, CaseIterable, Identifiable {
     case native
-    case web
 
     static let defaultsKey = "GithubPanel.detailPaneMode"
 
@@ -13,7 +11,6 @@ enum DetailPaneMode: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .native: return "Native"
-        case .web: return "GitHub.com"
         }
     }
 
